@@ -213,25 +213,41 @@ router.put('/integrations/google-form', requireStaff('settings'), (req, res) => 
 });
 
 // 貼到 Google 表單「擴充功能 → Apps Script」的程式碼；設定「表單提交時」觸發器即可。
+// onFormSubmit 只有被觸發器呼叫時才拿得到 e（表單提交事件）；在編輯器裡按「執行」
+// 是沒有 e 的，所以這裡把它導去補送最新一筆，而不是拋 e.response 的錯。
 function appsScript(endpoint, secret) {
-  return `// 織心｜Google 表單 → 諮商所後台同步
+  return `// 織心｜Google 表單 → 治療所後台同步
 // 1. 在表單畫面右上「⋮ → 指令碼編輯器」貼上本段程式碼並儲存
 // 2. 左側「觸發條件 → 新增觸發條件」：執行函式 onFormSubmit、事件來源「來自表單」、
 //    事件類型「表單提交時」，儲存並授權
 // 3. 之後每筆回應都會即時寫入後台的「線上預約申請」
+//
+// 想手動試一次：在編輯器上方的函式選單挑 syncLatest（補送最新一筆）或
+// backfill（補送全部歷史回應）再按執行，不要直接執行 onFormSubmit——
+// 手動執行沒有表單提交事件，Google 不會傳 e 進來。
 
 const ENDPOINT = '${endpoint}';
 const SECRET = '${secret}';
 
 function onFormSubmit(e) {
+  // 在編輯器裡手動按「執行」時 e 是 undefined，導去補送最新一筆，避免報錯
+  if (!e || !e.response) {
+    console.log('沒有表單提交事件（多半是在編輯器裡手動執行），改為補送最新一筆回應。');
+    return syncLatest();
+  }
+  return send_(e.response);
+}
+
+// 把一筆回應送到後台。回傳後台的回應內容，方便在執行紀錄裡看結果。
+function send_(response) {
   const answers = {};
-  e.response.getItemResponses().forEach(function (r) {
+  response.getItemResponses().forEach(function (r) {
     answers[r.getItem().getTitle()] = r.getResponse();
   });
   const payload = {
     secret: SECRET,
-    response_id: e.response.getId(),
-    submitted_at: e.response.getTimestamp().toISOString(),
+    response_id: response.getId(),
+    submitted_at: response.getTimestamp().toISOString(),
     answers: answers
   };
   const res = UrlFetchApp.fetch(ENDPOINT, {
@@ -240,16 +256,31 @@ function onFormSubmit(e) {
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   });
+  const body = res.getContentText();
   if (res.getResponseCode() >= 300) {
-    console.error('同步失敗：' + res.getResponseCode() + ' ' + res.getContentText());
+    console.error('同步失敗：' + res.getResponseCode() + ' ' + body);
+  } else {
+    console.log('已同步：' + body);
   }
+  return body;
+}
+
+// 手動補送最新一筆回應（用來測試設定是否正確）
+function syncLatest() {
+  const all = FormApp.getActiveForm().getResponses();
+  if (!all.length) {
+    console.log('這份表單目前還沒有任何回應。');
+    return;
+  }
+  return send_(all[all.length - 1]);
 }
 
 // 補送歷史回應：在編輯器選這個函式執行一次即可（重複送不會產生第二筆）
 function backfill() {
-  FormApp.getActiveForm().getResponses().forEach(function (response) {
-    onFormSubmit({ response: response });
-  });
+  const all = FormApp.getActiveForm().getResponses();
+  console.log('共 ' + all.length + ' 筆回應要補送');
+  all.forEach(function (response) { send_(response); });
+  console.log('補送完成');
 }`;
 }
 
