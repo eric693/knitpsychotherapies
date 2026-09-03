@@ -260,24 +260,35 @@ App.page('supervision', {
           <td>${UI.esc(TW.sup_type[r.type] || r.type)}</td><td>${r.hours}</td>
           <td>${UI.esc(r.client_code || '-')}</td>
           <td><button class="btn tiny secondary" data-v="${r.id}">內容</button>
+            <button class="btn tiny secondary" data-e="${r.id}">編輯</button>
             <button class="btn tiny danger" data-d="${r.id}">刪除</button></td></tr>`), '尚無督導紀錄')}</div>`;
-    el.querySelector('#add').onclick = async () => {
+    // 新增與編輯共用同一張表單：時數或內容打錯直接改，不必刪掉重登
+    const supDialog = async r => {
       const clients = await App.clientOptions(true);
       UI.modal({
-        title: '新增督導紀錄', wide: true,
+        title: r ? '編輯督導紀錄' : '新增督導紀錄', wide: true,
         body: `<div class="form-grid">
-          ${UI.select('counselor_id', '受督者', App.counselorOptions(), { value: App.me.id })}
-          ${UI.select('supervisor_id', '所內督導', [['', '外聘督導']].concat(App.counselorOptions()))}
-          ${UI.input('supervisor_name', '外聘督導姓名', { placeholder: '所內督導請留空' })}
-          ${UI.input('date', '日期', { type: 'date', value: UI.today() })}
-          ${UI.input('hours', '時數', { type: 'number', step: '0.5', value: 1 })}
-          ${UI.select('type', '型式', App.enumOptions('sup_type'), { value: 'individual' })}
-          ${UI.select('client_id', '討論個案（選填）', clients)}
-          ${UI.textarea('content', '討論內容')}
-          ${UI.textarea('suggestion', '督導建議')}</div>`,
-        onSubmit: async e => { await POST('/supervisions', UI.formData(e)); UI.toast('已儲存'); App.go('supervision'); }
+          ${UI.select('counselor_id', '受督者', App.counselorOptions(), { value: r ? r.counselor_id : App.me.id })}
+          ${UI.select('supervisor_id', '所內督導', [['', '外聘督導']].concat(App.counselorOptions()),
+    { value: r ? (r.supervisor_id || '') : '' })}
+          ${UI.input('supervisor_name', '外聘督導姓名', { placeholder: '所內督導請留空', value: r ? r.supervisor_name : '' })}
+          ${UI.input('date', '日期', { type: 'date', value: r ? r.date : UI.today() })}
+          ${UI.input('hours', '時數', { type: 'number', step: '0.5', value: r ? r.hours : 1 })}
+          ${UI.select('type', '型式', App.enumOptions('sup_type'), { value: r ? r.type : 'individual' })}
+          ${UI.select('client_id', '討論個案（選填）', clients, { value: r ? (r.client_id || '') : '' })}
+          ${UI.textarea('content', '討論內容', { value: r ? r.content : '' })}
+          ${UI.textarea('suggestion', '督導建議', { value: r ? r.suggestion : '' })}</div>`,
+        onSubmit: async e => {
+          const d = UI.formData(e);
+          if (r) await PUT(`/supervisions/${r.id}`, d); else await POST('/supervisions', d);
+          UI.toast('已儲存'); App.go('supervision');
+        }
       });
     };
+    el.querySelector('#add').onclick = () => supDialog(null);
+    el.querySelectorAll('[data-e]').forEach(b => {
+      b.onclick = () => supDialog(rows.find(x => x.id === Number(b.dataset.e)));
+    });
     el.querySelectorAll('[data-v]').forEach(b => {
       b.onclick = () => {
         const r = rows.find(x => x.id === Number(b.dataset.v));

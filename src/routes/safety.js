@@ -93,6 +93,23 @@ router.put('/safety-plans/:id', requireStaff('risk'), (req, res) => {
   res.json({ ok: true });
 });
 
+// 刪除：安全計畫屬紀錄，原則上以「新版本」取代舊版；
+// 但誤建的空計畫還是要刪得掉，因此只允許刪自己所屬個案的、且未被後續版本取代者。
+router.delete('/safety-plans/:id', requireStaff('risk'), (req, res) => {
+  const p = db.prepare('SELECT * FROM safety_plans WHERE id = ?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: '找不到此安全計畫' });
+  const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(p.client_id);
+  if (!canViewClientNotes(req.user, client)) {
+    return res.status(403).json({ error: '安全計畫僅限主責心理師、督導與管理者存取' });
+  }
+  const newer = db.prepare('SELECT COUNT(*) n FROM safety_plans WHERE client_id = ? AND version > ?')
+    .get(p.client_id, p.version).n;
+  if (newer) return res.status(400).json({ error: '已有更新版本，舊版本保留供查閱，不可刪除' });
+  db.prepare('DELETE FROM safety_plans WHERE id = ?').run(p.id);
+  audit('staff', req.user.id, req.user.name, '刪除安全計畫', String(p.client_id), { plan_id: p.id });
+  res.json({ ok: true });
+});
+
 // 列印用（抬頭帶所別資訊）：安全計畫要印一份給個案帶走，這是它跟其他紀錄最大的不同
 router.get('/safety-plans/:id/print', requireStaff('risk'), (req, res) => {
   const p = db.prepare(`SELECT s.*, u.name AS counselor_name, u.license_type, u.license_no,

@@ -1932,6 +1932,34 @@ function startServer() {
     await admin.ok('DELETE', `/api/payouts/${made.id}`);
   });
 
+  section('各模組的新增／編輯／刪除');
+  await test('督導紀錄可編輯，且只能改自己的', async () => {
+    const made = await admin.ok('POST', '/api/supervisions',
+      { counselor_id: (await admin.ok('GET', '/api/me')).id, date: ymd(new Date()), hours: 1, type: 'individual', content: '原內容' });
+    await admin.ok('PUT', `/api/supervisions/${made.id}`, { hours: 2, content: '改過的內容', type: 'group' });
+    const row = (await admin.ok('GET', '/api/supervisions')).find(r => r.id === made.id);
+    equal(row.hours, 2, '時數已改');
+    equal(row.content, '改過的內容', '內容已改');
+    equal(row.type, 'group', '型式已改');
+    await lin.fails('PUT', `/api/supervisions/${made.id}`, { hours: 9 }, '僅能修改自己');
+    await admin.ok('DELETE', `/api/supervisions/${made.id}`);
+  });
+  await test('安全計畫可刪除，但有新版本的舊版不可刪', async () => {
+    const p1 = await admin.ok('POST', `/api/clients/${clientId}/safety-plans`,
+      { date: ymd(new Date()), warning_signs: '第一版', coping_strategies: '深呼吸' });
+    const p2 = await admin.ok('POST', `/api/clients/${clientId}/safety-plans`,
+      { date: ymd(new Date()), warning_signs: '第二版', coping_strategies: '散步' });
+    assert(p2.version > p1.version, '應為新版本');
+    await admin.fails('DELETE', `/api/safety-plans/${p1.id}`, undefined, '已有更新版本');
+    await admin.ok('DELETE', `/api/safety-plans/${p2.id}`);
+    await admin.ok('DELETE', `/api/safety-plans/${p1.id}`);
+  });
+  await test('個案訊息可由所方主動發起', async () => {
+    await admin.ok('POST', '/api/messages', { client_id: clientId, content: '提醒您本週的晤談時間' });
+    const list = await admin.ok('GET', '/api/messages');
+    assert(list.some(m => m.client_id === clientId), '對話清單應出現這位個案');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

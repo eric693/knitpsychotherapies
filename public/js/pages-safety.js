@@ -169,13 +169,21 @@ App.page('safety', {
           <td>${r.review_date ? (r.state === 'due'
     ? `<span style="color:var(--danger);font-weight:600">${r.review_date}</span>` : r.review_date) : '-'}</td>
           <td><a class="btn tiny secondary" href="#client/${r.client_id}">開啟個案</a>
-            ${r.plan_id ? `<button class="btn tiny secondary" data-p="${r.plan_id}">列印</button>` : ''}</td></tr>`),
+            ${r.plan_id ? `<button class="btn tiny secondary" data-p="${r.plan_id}">列印</button>
+              <button class="btn tiny danger" data-dp="${r.plan_id}">刪除</button>` : ''}</td></tr>`),
     '目前沒有需要列管的個案')}
         <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
           列出風險等級為中／高的服務中個案，以及任何已建立安全計畫的個案。
           安全計畫內容請於個案頁的「安全計畫」分頁編輯（僅主責心理師、督導與管理者可讀）。</div>
       </div>`;
     el.querySelectorAll('[data-p]').forEach(b => { b.onclick = () => safetyPlanPrint(Number(b.dataset.p)); });
+    // 誤建的空計畫要刪得掉；已有新版本的舊版由後端擋下，維持版本歷程完整
+    el.querySelectorAll('[data-dp]').forEach(b => {
+      b.onclick = async () => {
+        if (!await UI.confirm('刪除這份安全計畫？內容有異動請改用「另存新版本」保留歷程。')) return;
+        try { await DEL(`/safety-plans/${b.dataset.dp}`); UI.toast('已刪除'); App.go('safety'); } catch (e) { UI.err(e); }
+      };
+    });
   }
 });
 

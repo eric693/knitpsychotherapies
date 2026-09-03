@@ -379,6 +379,23 @@ router.post('/supervisions', requireStaff('supervision'), (req, res) => {
   res.json({ id: info.lastInsertRowid });
 });
 
+// 修改：時數、型式、內容打錯可直接改，不必刪掉重登（與刪除同一道權限）
+router.put('/supervisions/:id', requireStaff('supervision'), (req, res) => {
+  const s = db.prepare('SELECT * FROM supervisions WHERE id = ?').get(req.params.id);
+  if (!s) return res.status(404).json({ error: '找不到此紀錄' });
+  if (req.user.role !== 'admin' && s.counselor_id !== req.user.id) {
+    return res.status(403).json({ error: '僅能修改自己的督導紀錄' });
+  }
+  const b = { ...s, ...(req.body || {}) };
+  db.prepare(`UPDATE supervisions SET supervisor_id = ?, supervisor_name = ?, date = ?, hours = ?,
+      type = ?, client_id = ?, content = ?, suggestion = ? WHERE id = ?`).run(
+    Number(b.supervisor_id) || null, String(b.supervisor_name || ''), b.date || s.date,
+    Number(b.hours) || s.hours, b.type || s.type, Number(b.client_id) || null,
+    String(b.content || ''), String(b.suggestion || ''), s.id);
+  audit('staff', req.user.id, req.user.name, '修改督導紀錄', String(s.id));
+  res.json({ ok: true });
+});
+
 router.delete('/supervisions/:id', requireStaff('supervision'), (req, res) => {
   const s = db.prepare('SELECT * FROM supervisions WHERE id = ?').get(req.params.id);
   if (!s) return res.status(404).json({ error: '找不到此紀錄' });
