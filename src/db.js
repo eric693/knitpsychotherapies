@@ -330,6 +330,13 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     cert_referral_statement: '',
     // 所內自用的轉介單（轉介到身心科／診所），一式三聯並附醫師回覆欄
     cert_referral_clinic_title: '轉介單',
+    cert_profile_minor_title: '未成年個案基本資料表',
+    cert_profile_minor_statement: '',
+    cert_early_intervention_title: '早期療育補助療育紀錄',
+    // 早療補助（如臺中市發展遲緩兒童交通及療育補助）送件時的提醒文字
+    cert_early_intervention_statement: '本表為本所開立之療育紀錄，供家長辦理早期療育補助之用；'
+      + '申請時請依主管機關規定併附收據正本與相關證明文件，並由療育單位及療育人員蓋章。',
+    early_intervention_item: '心理治療',   // 療育項目（早療紀錄卡的填法）
     cert_referral_clinic_statement: '',
     referral_clinic_copies: '第一聯　本所存根聯,第二聯　醫療端留存聯,第三聯　醫療端回覆聯',
     referral_clinic_targets: '蕭芸嶙身心診所　電話 04-23939203　411 臺中市太平區樹孝路 501 號\n'
@@ -591,6 +598,48 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 五、{center}（合作機構）及主管衛生局針對上開本人各項資料，應妥為保管，以供日後相關單位查核服務執行狀況。
 
 衛生福利部　關心您！`
+    },
+    {
+      key: 'child_guardian', title: '個別心理治療家長（監護人、主要照顧者）同意書',
+      sort: 10, required: 0, allow_decline: 0, minor_only: 1,
+      copy_labels: '家長留存聯,{center}留存聯',
+      sign_block: `※ 本人已經詳細閱讀前述文字並了解其內容，謹同意下列事項：
+□ 同意本人子女＿＿＿＿＿＿＿＿＿＿接受{center}的心理治療服務。
+
+家長（監護人、主要照顧者）簽名：＿＿＿＿＿＿＿＿＿＿　與孩子關係：＿＿＿＿＿＿
+孩子／個案簽名：＿＿＿＿＿＿＿＿＿＿
+諮商／臨床心理師簽名：＿＿＿＿＿＿＿＿＿＿（諮／臨 心字＿＿＿＿＿號）
+
+中華民國　＿＿＿　年　＿＿　月　＿＿　日`,
+      body: `親愛的家長您好！由於貴子女＿＿＿＿＿＿＿＿（身分證字號：＿＿＿＿＿＿＿＿＿＿）至本所接受心理治療，為了增進您對本服務的瞭解，以下做簡略介紹：
+
+一、心理治療／諮商
+　所謂「心理治療／諮商」是指孩子因注意力問題、人際與社交問題、情緒困擾、行為問題等影響適應功能表現，故由專業臨床工作者進行轉介。將以心理學方法為基礎，透過與孩子對話互動，引導孩子調整不適應的認知行為模式，如提升對個人狀態的覺察、學習適當的情緒表達與調控方式、增進壓力因應及問題解決知能，或建立合宜的人際互動技巧等，協助其自我調節、成長與適應。另外，亦透過與家長晤談，引導家長理解並貼近孩子的處境，進而調整教養及互動方式，以將療效延展到家中及其他情境。
+　另外，心理師不等同於醫師，不會提供藥物治療，但若發現孩子需要更進一步醫療需求，也會協助您取得相關資源。
+
+二、保密協定
+　除了專業督導及團隊人員外，我們絕對不會在未經您的同意下揭露治療相關內容。但若有以下情形：（1）貴子女有立即且明顯危害自己或他人生命、自由、財產及安全之情況時；（2）貴子女治療之內容涉及相關法律時（例如受虐待或性侵害），為維護貴子女的最佳權益，我們有責任必須採取對孩子最佳的保護措施，將會主動通報相關單位尋求協助。
+
+三、治療時間、出席及請假規定
+　在您簽署同意書後，將開始進行心理治療，心理師會安排孩子進行心理治療的時間，每次治療時間為 50 分鐘。請務必準時，遲到恕不補課。若孩子生病或有事無法來上課，請務必至少在治療當天來電請假；為維護治療品質，無特殊狀況請勿連續請假。治療之結束應由心理師及家長共同討論決議。`
+    },
+    {
+      key: 'recording_child', title: '諮商／治療錄音錄影同意書（兒少）',
+      sort: 11, required: 0, allow_decline: 1, minor_only: 0,
+      copy_labels: '個案留存聯,{center}留存聯',
+      sign_block: `※ 本人已經詳細閱讀前述文字並了解其內容，有疑問時可洽詢{center}。
+
+本人／法定代理人：＿＿＿＿＿＿＿＿＿＿　（與孩子關係：＿＿＿＿＿＿）
+臨床心理師簽名：＿＿＿＿＿＿＿＿＿＿（心字＿＿＿＿＿號）
+
+中華民國　＿＿＿　年　＿＿　月　＿＿　日`,
+      body: `本人＿＿＿＿＿＿＿＿（貴子女＿＿＿＿＿＿＿＿）同意接受{center}提供的服務與以下說明：
+
+一、已簽署心理諮商／治療同意書，並了解相關保密、司法通報、請假及收費事項。
+
+二、心理諮商／治療時，若須錄音錄影，心理師會於事前取得我的同意，我可以不同意心理師錄音錄影，我也不會錄音錄影。
+
+三、因心理師個人督導、記錄整理之需要，我同意進行諮商／治療過程之錄音錄影。`
     }
   ];
   const hasT = db.prepare('SELECT 1 FROM consent_templates WHERE key = ?');
@@ -602,7 +651,8 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
   for (const t of CONSENT_DEFAULTS) {
     if (!hasT.get(t.key)) {
       insT.run(t.key, t.title, t.body.replace(/\{center\}/g, center), t.required, t.allow_decline,
-        t.minor_only, t.sort, (t.sign_block || '').replace(/\{center\}/g, center), t.copy_labels || '');
+        t.minor_only, t.sort, (t.sign_block || '').replace(/\{center\}/g, center),
+        (t.copy_labels || '').replace(/\{center\}/g, center));
     }
   }
 }
@@ -974,7 +1024,10 @@ ensureColumns('clients', {
   education: "TEXT NOT NULL DEFAULT ''",             // 教育程度（預約表單有問，建檔時一併帶入）
   // 指定案／派案：年報表的類別代碼要分這兩種（自費 指定 0／派案 1、機構 指定 30／派案 31）。
   // 線上預約時個案自己點名心理師的，建檔時記為指定；其餘為派案，之後仍可在個案資料改。
-  assign_type: "TEXT NOT NULL DEFAULT ''"            // '' 未註記 / designated 指定 / assigned 派案
+  assign_type: "TEXT NOT NULL DEFAULT ''",           // '' 未註記 / designated 指定 / assigned 派案
+  // 兒少個案的就學資料：未成年個案基本資料表與早療補助表單都要填
+  school: "TEXT NOT NULL DEFAULT ''",
+  grade: "TEXT NOT NULL DEFAULT ''"
 });
 
 // LINE 一次性預約連結：個案在官方帳號輸入「預約」即取得專屬網址，

@@ -17,6 +17,8 @@ async function clientDialog(c, onDone) {
       ${UI.input('education', '教育程度', { value: d.education || '' })}
       ${UI.inputList('source', '轉介來源', App.meta.source_options || [], { value: d.source || '' })}
       ${UI.input('referrer', '轉介單位／人', { value: d.referrer || '' })}
+      ${UI.input('school', '就讀學校（兒少）', { value: d.school || '' })}
+      ${UI.input('grade', '年級', { value: d.grade || '' })}
       ${UI.select('assign_type', '指定／派案（年報表類別代碼用）',
     [['', '未註記'], ['designated', '指定案'], ['assigned', '派案']], { value: d.assign_type || '' })}
       ${UI.select('partner_id', '合作單位（費用由單位支付時填）', [['', '無（自費）']].concat((App.meta.partners || []).map(p => [p.id, p.name])), { value: d.partner_id || '' })}

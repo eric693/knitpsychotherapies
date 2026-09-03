@@ -9,7 +9,9 @@ const CERT_KINDS = [
   ['profile', '基本資料表'],
   ['plan_detail', '方案服務明細（附表）'],
   ['referral', '方案轉介單'],
-  ['referral_clinic', '轉介單（一式三聯）']
+  ['referral_clinic', '轉介單（一式三聯）'],
+  ['profile_minor', '未成年個案基本資料表'],
+  ['early_intervention', '早療補助療育紀錄']
 ];
 
 function certRowsEditor(id, label, rows, hint) {
@@ -123,6 +125,8 @@ App.page('certificates', {
     '「方案服務明細（附表）」會把該個案在補助方案下已完成的晤談逐次列出（次數、日期、服務人員、面對面或通訊），民眾簽名與同意書檔名留白現場填。',
     '「轉介單（一式三聯）」用於轉介身心科／診所：一次印出本所存根聯、醫療端留存聯與醫療端回覆聯，回覆欄留給醫師勾選與簽名。',
     '「方案轉介單」會帶入機構代碼、個案基本資料與最近一次 BSRS-5 的分數，轉介原因與建議轉介機構的預設文字在系統設定改。',
+    '「未成年個案基本資料表」多了就讀學校、年級、主要照顧者、醫院評估與療育課程，背面是上課日期／時間／家長簽名／收費的空白表。',
+    '「早療補助療育紀錄」會列出該童指定月份已完成的療程（日期、療育項目、單位、人員、自費金額與收據號碼），供家長辦理早療補助時併附收據送件。',
     '「基本資料表」會帶入個案已建檔的資料，沒填的欄位印成待填的圈選或底線，背面另附可自訂欄位與列數的空白簽到表。',
     '在職／離職證明的資料取自帳號（性別、生日、到職與離職日在「帳號權限」編輯帳號時填）；治療證明的來談日期與次數由已完成的晤談自動算出。',
     '開立後可「列印／PDF」或「匯出 Word」，Word 檔可再自行排版。',
@@ -195,6 +199,7 @@ App.page('certificates', {
           ${UI.select('kind', '類別', CERT_KINDS, { value: 'employment' })}
           <div class="form-row full" id="pick"></div>
           ${UI.input('purpose', '用途（治療證明的「提供＿＿使用」）', { value: '', full: true })}
+          ${UI.input('month', '月份（早療補助療育紀錄；留空為全部）', { type: 'month', value: '' })}
         </div>`,
       onOpen: async e2 => {
         const users = await GET('/certificates/staff-options').catch(() => []);
@@ -203,7 +208,7 @@ App.page('certificates', {
         const kind = e2.querySelector('[name=kind]');
         const pick = e2.querySelector('#pick');
         const render = () => {
-          pick.innerHTML = ['treatment', 'profile'].includes(kind.value)
+          pick.innerHTML = kind.value !== 'employment' && kind.value !== 'resignation'
             ? UI.select('subject_id', '個案', [['', '不指定（自行填寫）']]
               .concat(list.map(c => [c.id, `${c.code || ''} ${c.name}`.trim()])), { full: true })
             : UI.select('subject_id', '員工', [['', '不指定（自行填寫）']]
@@ -215,7 +220,7 @@ App.page('certificates', {
       onSubmit: async e2 => {
         const f = UI.formData(e2);
         const tpl = await GET(`/certificates/template?kind=${f.kind}&subject_id=${f.subject_id || 0}`
-          + `&purpose=${encodeURIComponent(f.purpose || '')}`);
+          + `&purpose=${encodeURIComponent(f.purpose || '')}&month=${f.month || ''}`);
         certDialog({ ...tpl, issue_date: UI.today() }, draw);
       }
     });

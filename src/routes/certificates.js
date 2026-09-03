@@ -20,7 +20,10 @@ const KINDS = {
   plan_detail: { label: '方案服務明細', module: 'clients', subject: 'client' },
   referral: { label: '方案轉介單', module: 'clients', subject: 'client' },
   // 所內轉介到身心科／診所用的轉介單，一式三聯並附醫師回覆欄
-  referral_clinic: { label: '轉介單（一式三聯）', module: 'clients', subject: 'client' }
+  referral_clinic: { label: '轉介單（一式三聯）', module: 'clients', subject: 'client' },
+  // 兒少：未成年個案的基本資料表，以及家長申請早療補助要附的療育紀錄
+  profile_minor: { label: '未成年個案基本資料表', module: 'clients', subject: 'client' },
+  early_intervention: { label: '早療補助療育紀錄', module: 'clients', subject: 'client' }
 };
 
 // 流水編號：前綴 + 西元年月 + 四碼序號，如 KC2026090001。
@@ -140,6 +143,41 @@ function subjectRows(kind, subject, extra = {}) {
       { label: '轉介日期', value: `中華民國 ＿＿＿ 年 ＿＿ 月 ＿＿ 日` }
     ];
   }
+  if (kind === 'profile_minor') {
+    const pick = (v, opts) => (v ? String(v) : opts);
+    return [
+      { label: '姓名', value: u.name || '' },
+      { label: '生日', value: rocText(u.birth_date) || '民國＿＿＿年＿＿＿月＿＿＿日' },
+      { label: '身分證號碼', value: u.id_no || '' },
+      { label: '性別', value: pick(GENDER[u.gender], '男 ／ 女（請圈選）') },
+      { label: '電話', value: u.phone || '' },
+      { label: '就讀學校', value: u.school || '' },
+      { label: '年級', value: u.grade || '' },
+      { label: '主要照顧者（監護人）', value: u.guardian_name
+        ? `${u.guardian_name}（${u.guardian_relationship || ''}）${u.guardian_phone || ''}` : '' },
+      { label: '地址', value: u.address || '' },
+      { label: '家中同住成員', value: '' },
+      { label: '醫院評估', value: '是，在＿＿＿＿＿＿醫院；否（＿＿＿＿＿＿）' },
+      { label: '綜合報告書', value: '有：語言 ／ 心理 ／ 職能 ／ 物理（請圈選）；無' },
+      { label: '目前療育課程', value: '語言 ／ 心理 ／ 職能 ／ 物理（請圈選）' },
+      { label: '重大醫療史', value: u.history || '' },
+      { label: '壓力或創傷事件', value: '' },
+      { label: '主要困擾', value: u.main_issue || '' },
+      { label: '其他想讓心理師知道的事', value: '' }
+    ];
+  }
+  if (kind === 'early_intervention') {
+    return [
+      { label: '兒童姓名', value: u.name || '' },
+      { label: '出生日期', value: rocText(u.birth_date) },
+      { label: '身分證字號', value: u.id_no || '' },
+      { label: '主要照顧者（監護人）', value: u.guardian_name || '' },
+      { label: '療育單位', value: getSetting('center_name', '') },
+      { label: '單位地址／電話', value: `${getSetting('center_address', '')}　${getSetting('center_phone', '')}` },
+      { label: '療育項目', value: getSetting('early_intervention_item', '心理治療') },
+      { label: '申請月份', value: extra.month || '' }
+    ];
+  }
   if (kind === 'profile') {
     const pick = (v, opts) => (v ? String(v) : opts);
     return [
@@ -175,9 +213,21 @@ function subjectRows(kind, subject, extra = {}) {
 }
 
 // 附在表單後面的表格：基本資料表是空白簽到表，方案服務明細則直接把已完成的晤談填進去
-function gridFor(kind, subject) {
+function gridFor(kind, subject, opts = {}) {
   if (kind === 'profile') {
     return { label: '晤談紀錄（每次晤談由櫃檯填寫）', headers: ['日期', '時間', '簽名', '收費'], rows: 12 };
+  }
+  if (kind === 'profile_minor') {
+    return { label: '上課紀錄（每次上課由家長簽名）', headers: ['上課日期', '時間', '家長簽名', '收費'], rows: 12 };
+  }
+  if (kind === 'early_intervention') {
+    const data = subject ? earlyInterventionRows(subject.id, opts.month) : [];
+    return {
+      label: '療育紀錄（申請補助時請併附收據正本，並由療育單位及療育人員蓋章）',
+      headers: ['療育日期', '療育項目', '療育單位', '療育人員（蓋章）', '自費金額', '收據號碼'],
+      rows: Math.max(4, data.length),
+      data
+    };
   }
   if (kind === 'plan_detail') {
     const data = subject ? planSessionRows(subject.id, 'subsidy') : [];
@@ -193,7 +243,13 @@ function gridFor(kind, subject) {
 }
 
 function signatureRows(kind) {
-  if (kind === 'profile') return [];
+  if (kind === 'profile' || kind === 'profile_minor') return [];
+  if (kind === 'early_intervention') {
+    return [
+      { label: '療育人員（蓋章）', value: '' },
+      { label: '療育單位（蓋章）', value: '' }
+    ];
+  }
   if (kind === 'plan_detail') return [{ label: '合作機構核章', value: '' }];
   if (kind === 'referral' || kind === 'referral_clinic') {
     return [
@@ -243,6 +299,25 @@ function reasonChecklist() {
   }).join('\n');
 }
 
+// 早療補助的療育紀錄：某月（未指定則整年）已完成的晤談，
+// 逐次列出日期、療育人員與自費金額，並附上該次的收據號碼（家長要貼收據正本）。
+function earlyInterventionRows(clientId, month) {
+  const like = month ? `${month}-%` : '%';
+  const item = getSetting('early_intervention_item', '心理治療');
+  const center = getSetting('center_name', '');
+  const rows = db.prepare(`SELECT a.date, a.fee, u.name AS counselor_name,
+      (SELECT GROUP_CONCAT(rc.receipt_no, '、') FROM receipts rc
+        JOIN invoices i ON i.id = rc.invoice_id
+        WHERE i.appointment_id = a.id AND rc.status = 'valid') AS receipt_nos
+    FROM appointments a LEFT JOIN users u ON u.id = a.counselor_id
+    WHERE a.client_id = ? AND a.status = 'done' AND a.date LIKE ?
+    ORDER BY a.date`).all(clientId, like);
+  return rows.map(r => [
+    r.date ? `${Number(r.date.slice(0, 4)) - 1911}/${r.date.slice(5, 7)}/${r.date.slice(8, 10)}` : '',
+    item, center, r.counselor_name || '', String(r.fee || 0), r.receipt_nos || ''
+  ]);
+}
+
 // 最近一次 BSRS-5：轉介單的「個案狀況」要據此勾選
 function latestBsrs(clientId) {
   return db.prepare(`SELECT date, total, alert FROM assessments
@@ -265,7 +340,7 @@ function treatmentFacts(clientId) {
 }
 
 // 套版：帶出這一張證明書的預設內容，前端再逐欄修改
-function buildTemplate(kind, subjectId, purpose = '') {
+function buildTemplate(kind, subjectId, purpose = '', month = '') {
   const def = KINDS[kind];
   const statementRaw = getSetting(`cert_${kind}_statement`, '');
   let subject = null, extra = {};
@@ -275,6 +350,7 @@ function buildTemplate(kind, subjectId, purpose = '') {
     subject = db.prepare('SELECT * FROM clients WHERE id = ?').get(subjectId) || null;
     if (subject && kind === 'treatment') extra = treatmentFacts(subject.id);
     if (subject && kind === 'referral') extra = { bsrs: latestBsrs(subject.id) };
+    if (kind === 'early_intervention') extra = { month };
   }
   return {
     kind,
@@ -290,7 +366,7 @@ function buildTemplate(kind, subjectId, purpose = '') {
       org: orgBlock(kind),
       signatures: signatureRows(kind),
       // 基本資料表背面的簽到欄：空白格數可自行增減，欄位名稱也能改
-      grid: gridFor(kind, subject),
+      grid: gridFor(kind, subject, { month }),
       // 聯別：一式數聯的表單，每一聯各印一頁並在頁尾標明是哪一聯
       copies: kind === 'referral_clinic'
         ? listSetting('referral_clinic_copies').filter(Boolean)
@@ -322,7 +398,8 @@ router.get('/certificates/staff-options', requireStaff('hr'), (req, res) => {
 router.get('/certificates/template', requireStaff(), (req, res) => {
   const kind = KINDS[req.query.kind] ? req.query.kind : 'employment';
   if (!checkAccess(req, res, kind)) return;
-  res.json(buildTemplate(kind, Number(req.query.subject_id) || 0, String(req.query.purpose || '')));
+  res.json(buildTemplate(kind, Number(req.query.subject_id) || 0, String(req.query.purpose || ''),
+    String(req.query.month || '')));
 });
 
 router.get('/certificates', requireStaff(), (req, res) => {

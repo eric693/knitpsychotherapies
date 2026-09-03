@@ -16,7 +16,9 @@ const CLIENT_FIELDS = [
   'emergency_name', 'emergency_relationship', 'emergency_phone', 'note',
   'intake_date', 'close_date', 'close_reason', 'portal_enabled',
   // 指定案／派案：年報表類別代碼要分這兩種（自費 0／1、機構 30／31）
-  'assign_type'
+  'assign_type',
+  // 兒少個案的就學資料（未成年基本資料表、早療補助表單會用到）
+  'school', 'grade'
 ];
 
 function pick(body) {

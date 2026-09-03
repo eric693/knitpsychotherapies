@@ -1737,6 +1737,64 @@ function startServer() {
     equal(one.data.copies.length, 0, '治療證明不分聯');
   });
 
+  section('兒童青少年表單');
+  await test('家長同意書與兒少錄音錄影同意書：兩聯、含孩子與家長簽名欄', async () => {
+    const tpls = await admin.ok('GET', '/api/consent-templates');
+    const g = tpls.find(t => t.key === 'child_guardian');
+    const r = tpls.find(t => t.key === 'recording_child');
+    assert(g && g.minor_only, '家長同意書應限未成年個案');
+    assert(g.body.includes('心理師不等同於醫師') && g.body.includes('遲到恕不補課'), '應含治療說明與請假規定');
+    assert(g.sign_block.includes('與孩子關係') && g.sign_block.includes('孩子／個案簽名'), '簽署欄');
+    assert(g.copy_labels.includes('家長留存聯'), '聯別為家長留存聯');
+    const html = await admin.get('/api/consent-templates/child_guardian/print');
+    assert(html.text.includes('家長留存聯') && html.text.includes('留存聯］'), '應印兩聯');
+    assert(r && r.body.includes('錄音錄影') && r.allow_decline, '錄音錄影同意書可選擇不同意');
+  });
+  await test('未成年個案基本資料表帶入就學資料與主要照顧者', async () => {
+    await admin.ok('PUT', `/api/clients/${clientId}`, {
+      school: '太平國小', grade: '三年級', guardian_name: '測試家長',
+      guardian_relationship: '母', guardian_phone: '0912000111'
+    });
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=profile_minor&subject_id=${clientId}`);
+    equal(tpl.data.rows.find(r => r.label === '就讀學校').value, '太平國小', '就讀學校');
+    equal(tpl.data.rows.find(r => r.label === '年級').value, '三年級', '年級');
+    assert(tpl.data.rows.find(r => r.label === '主要照顧者（監護人）').value.includes('測試家長'), '主要照顧者');
+    assert(tpl.data.rows.find(r => r.label === '目前療育課程'), '應有療育課程欄');
+    equal(tpl.data.grid.headers.join(','), '上課日期,時間,家長簽名,收費', '背面上課紀錄表');
+    const cert = await admin.ok('POST', '/api/certificates', {
+      kind: 'profile_minor', subject_id: clientId, subject_name: tpl.subject_name, data: tpl.data
+    });
+    const html = await admin.get(`/api/certificates/${cert.id}/print`);
+    assert(html.text.includes('太平國小') && html.text.includes('家長簽名'), '列印頁');
+  });
+  await test('早療補助療育紀錄列出該月療程、費用與收據號碼', async () => {
+    const me = await admin.ok('GET', '/api/me');
+    const date = nextWeekday(2, 230);
+    const appt = await admin.ok('POST', '/api/appointments', {
+      client_id: clientId, counselor_id: me.id, date, start_time: '07:00', fee: 2000, override: true
+    });
+    await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'done' });
+    const inv = (await admin.ok('GET', '/api/invoices')).rows.find(i => i.appointment_id === appt.id);
+    await admin.ok('POST', `/api/invoices/${inv.id}/pay`, { method: '現金' });
+    const rec = await admin.ok('POST', '/api/receipts', { invoice_id: inv.id });
+    const month = date.slice(0, 7);
+    const tpl = await admin.ok('GET',
+      `/api/certificates/template?kind=early_intervention&subject_id=${clientId}&month=${month}`);
+    equal(tpl.data.rows.find(r => r.label === '療育項目').value, '心理治療', '療育項目');
+    equal(tpl.data.rows.find(r => r.label === '申請月份').value, month, '申請月份');
+    const row = tpl.data.grid.data[0];
+    assert(row && row[4] === '2000', '應帶出自費金額：' + JSON.stringify(tpl.data.grid.data));
+    equal(row[5], rec.receipt_no, '應帶出收據號碼');
+    const cert = await admin.ok('POST', '/api/certificates', {
+      kind: 'early_intervention', subject_id: clientId, subject_name: tpl.subject_name, data: tpl.data
+    });
+    const html = await admin.get(`/api/certificates/${cert.id}/print`);
+    assert(html.text.includes('療育紀錄') && html.text.includes(rec.receipt_no), '列印頁應含收據號碼');
+    const doc = await admin.get(`/api/certificates/${cert.id}/print?format=doc`);
+    equal(doc.status, 200, 'Word 匯出');
+    await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'cancelled' });
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {
