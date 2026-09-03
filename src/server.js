@@ -97,6 +97,7 @@ app.use('/api', require('./routes/attachments'));
 app.use('/api', require('./routes/imports'));
 app.use('/api', require('./routes/plans'));
 app.use('/api', require('./routes/receipts'));
+app.use('/api', require('./routes/certificates'));
 app.use('/api', require('./routes/booking'));
 app.use('/api', require('./routes/line'));
 app.use('/api', require('./routes/integrations'));

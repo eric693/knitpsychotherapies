@@ -314,6 +314,7 @@ router.get('/users', requireStaff('users'), (req, res) => {
       portal_bookable, online_only, intro,
       id_no, passport_no, residency, household_address, mailing_address,
       bank_name, bank_account, bank_holder,
+      gender, birth_date, hire_date, resign_date, work_place,
       (SELECT name FROM users s WHERE s.id = users.supervisor_id) AS supervisor_name
     FROM users ORDER BY active DESC, id`)
     .all().map(u => ({ ...u, permissions: parsePermissions(u.permissions) })));
@@ -325,7 +326,9 @@ const USER_FIELDS = ['name', 'role', 'title', 'license_type', 'license_no', 'lic
   'portal_bookable', 'online_only', 'intro',
   // 勞務報酬單／扣繳憑單需載明的領款人資料
   'id_no', 'passport_no', 'residency', 'household_address', 'mailing_address',
-  'bank_name', 'bank_account', 'bank_holder'];
+  'bank_name', 'bank_account', 'bank_holder',
+  // 在職／離職證明書需載明的人事資料
+  'gender', 'birth_date', 'hire_date', 'resign_date', 'work_place'];
 
 router.post('/users', requireStaff('users'), (req, res) => {
   const b = req.body || {};

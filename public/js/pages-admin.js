@@ -964,6 +964,12 @@ App.page('users', {
   })}
         ${UI.input('phone', '電話', { value: u ? u.phone : '' })}
         ${UI.input('email', 'Email', { value: u ? u.email : '' })}
+        <div class="form-row full" style="margin-top:4px"><label>人事資料（在職／離職證明書用）</label></div>
+        ${UI.select('gender', '性別', [['', '未填'], ['male', '男'], ['female', '女']], { value: u ? (u.gender || '') : '' })}
+        ${UI.input('birth_date', '出生日期', { type: 'date', value: u ? (u.birth_date || '') : '' })}
+        ${UI.input('hire_date', '到職日期', { type: 'date', value: u ? (u.hire_date || '') : '' })}
+        ${UI.input('resign_date', '離職日期', { type: 'date', value: u ? (u.resign_date || '') : '' })}
+        ${UI.input('work_place', '服務地點（留空用機構地址）', { value: u ? (u.work_place || '') : '', full: true })}
         <div class="form-row full" style="margin-top:4px"><label>領款人資料（列印勞務報酬單、申報扣繳憑單用）</label></div>
         ${UI.input('id_no', '身分證字號', { value: u ? (u.id_no || '') : '' })}
         ${UI.input('passport_no', '居留證／護照號碼', { value: u ? (u.passport_no || '') : '' })}
@@ -1117,6 +1123,11 @@ App.page('settings', {
         ['nhi_supplement_rate', '二代健保補充保費費率（0-1）'], ['nhi_supplement_min', '補充保費起扣金額'],
         ['payout_split_max', '拆單每筆上限（低於起扣門檻）'], ['payout_split_interval_days', '拆單每筆間隔天數'],
         ['payout_slip_service', '勞務報酬單的勞務內容'], ['payout_slip_handler', '勞務報酬單經手人（留空用操作者）']]],
+      ['證明書', [['cert_prefix', '證明書編號前綴'], ['center_director_license', '負責心理師證書字號（如 心理字1923號）'],
+        ['cert_employment_title', '在職證明書 標題'], ['cert_employment_statement', '在職證明書 聲明文字'],
+        ['cert_resignation_title', '離職證明書 標題'], ['cert_resignation_statement', '離職證明書 聲明文字'],
+        ['cert_treatment_title', '治療證明 標題'],
+        ['cert_treatment_statement', '治療證明 聲明文字（{purpose} 會代入用途）']]],
       ['提醒發送通道', [['notify_webhook_url', 'Webhook 網址（留空則僅人工發送）'],
         ['notify_webhook_token', 'Webhook 驗證權杖']]],
       ['提醒訊息', [['reminder_template', '晤談提醒範本（{client}{counselor}{date}{weekday}{time}{center}{cancel_hours}{phone}{meeting}）'],

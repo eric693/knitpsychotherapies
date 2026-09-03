@@ -49,6 +49,14 @@ ensureColumns('users', {
   is_intern: 'INTEGER NOT NULL DEFAULT 0',
   supervisor_id: 'INTEGER REFERENCES users(id)'
 });
+// 在職／離職證明書會用到的人事欄位（性別、生日、到職與離職日）
+ensureColumns('users', {
+  gender: "TEXT NOT NULL DEFAULT ''",
+  birth_date: "TEXT NOT NULL DEFAULT ''",
+  hire_date: "TEXT NOT NULL DEFAULT ''",
+  resign_date: "TEXT NOT NULL DEFAULT ''",
+  work_place: "TEXT NOT NULL DEFAULT ''"                 // 服務地點（預設為機構地址）
+});
 // 勞務報酬單需載明的領款人資料（扣繳憑單、匯款用；非必填）
 ensureColumns('users', {
   id_no: "TEXT NOT NULL DEFAULT ''",                 // 身分證字號／居留證號
@@ -296,6 +304,17 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     payout_split_interval_days: '0',
     payout_slip_service: '心理治療（55 心理師）',   // 勞務報酬單的勞務內容欄
     payout_slip_handler: '',                        // 經手人（留空時印製表當下的操作者）
+    // ---- 證明書（在職、離職、治療證明）----
+    // 標題與聲明文字都可改；開立時仍可逐張再改，這裡只是預設值。
+    cert_prefix: 'KC',                  // 證明書流水編號前綴
+    center_director_license: '',        // 負責心理師證書字號（如 心理字1923號）
+    cert_employment_title: '在職證明書',
+    cert_employment_statement: '上列各項確實。特此證明。',
+    cert_resignation_title: '離職證明書',
+    cert_resignation_statement: '以上各項確實，特此證明。',
+    cert_treatment_title: '治療證明',
+    cert_treatment_statement: '此份文件提供 {purpose} 做為接受本所心理治療證明之用，不改做其他用途，'
+      + '案主需自負保管及保密責任。',
     // 對外提醒發送：填入 webhook 後由系統送出，留空則僅產生訊息供人工發送
     notify_webhook_url: '',
     notify_webhook_token: '',
@@ -681,6 +700,29 @@ db.exec(`CREATE TABLE IF NOT EXISTS receipts (
 );
 CREATE INDEX IF NOT EXISTS idx_receipt_client ON receipts(client_id, date);
 CREATE INDEX IF NOT EXISTS idx_receipt_no ON receipts(receipt_no);`);
+
+// ---- 證明書（在職、離職、治療證明）----
+// 版面與文字都存在 data（JSON）裡：標題、每一列的欄位名與內容、聲明段落、
+// 機構抬頭與核章欄位皆可逐張改寫，套版只提供預設值，不限制所方怎麼寫。
+db.exec(`CREATE TABLE IF NOT EXISTS certificates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cert_no TEXT NOT NULL UNIQUE,                -- 流水編號，如 KC2026090001
+  kind TEXT NOT NULL DEFAULT 'employment',     -- employment 在職 / resignation 離職 / treatment 治療證明
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,     -- 在職／離職證明的當事人
+  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL, -- 治療證明的個案
+  subject_name TEXT NOT NULL DEFAULT '',       -- 當事人姓名（快照，帳號或個案改名不影響已開立的證明）
+  issue_date TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT '',            -- 用途（治療證明的「提供＿＿使用」）
+  data TEXT NOT NULL DEFAULT '{}',             -- 版面與文字（JSON）
+  status TEXT NOT NULL DEFAULT 'valid',        -- valid 有效 / void 已作廢
+  void_reason TEXT NOT NULL DEFAULT '',
+  print_count INTEGER NOT NULL DEFAULT 0,
+  last_printed_at TEXT NOT NULL DEFAULT '',
+  issued_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_cert_kind ON certificates(kind, issue_date);
+CREATE INDEX IF NOT EXISTS idx_cert_subject ON certificates(user_id, client_id);`);
 
 // 線上預約申請：個案從公開表單（或 LINE）送出的預約需求。
 // 個案看不到諮商室配置，只選方案、主題、心理師與時段；諮商室由櫃檯／系統指派。

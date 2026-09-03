@@ -150,6 +150,7 @@ function sameYearMondays(count, minDaysAhead = 60) {
   return Array.from({ length: count }, (_, i) => addDays(start, i * 7));
 }
 
+let certIdEmployment = 0, certIdTreatment = 0;
 let server;
 function startServer() {
   return new Promise((resolve, reject) => {
@@ -1465,6 +1466,80 @@ function startServer() {
       assert(!d.can_see_summary, '看別人的年報表不應顯示摘要');
       assert(d.rows.every(r => !r.summary || r.summary.includes('＊')), '摘要應遮蔽');
     }
+  });
+
+  section('證明書（在職、離職、治療證明）');
+  await test('在職證明套版帶出帳號資料，文字可逐欄改寫後開立', async () => {
+    const lin2 = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    await admin.ok('PUT', `/api/users/${lin2.id}`, {
+      gender: 'female', birth_date: '1988-03-05', hire_date: '2021-09-01', id_no: 'B223456789'
+    });
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=employment&subject_id=${lin2.id}`);
+    equal(tpl.data.title, '在職證明書', '預設標題');
+    const birth = tpl.data.rows.find(r => r.label === '出生年月日');
+    equal(birth.value, '民國 77 年 3 月 5 日', '生日轉民國');
+    equal(tpl.data.rows.find(r => r.label === '到職日期').value, '民國 110 年 9 月 1 日', '到職日');
+    // 每一欄都能改：改欄位名、改內容、加一列
+    const rows = tpl.data.rows.map(r => (r.label === '職稱' ? { label: '職務', value: '臨床心理師（專任）' } : r));
+    rows.push({ label: '每週工作時數', value: '40 小時' });
+    const made = await admin.ok('POST', '/api/certificates', {
+      kind: 'employment', subject_id: lin2.id, subject_name: tpl.subject_name,
+      issue_date: '2026-09-01', purpose: '申請貸款',
+      data: { ...tpl.data, rows, statement: '上列各項確實，特此證明。（本所另行用印）' }
+    });
+    assert(/^KC\d{6}\d{4}$/.test(made.cert_no), '應產生流水編號：' + made.cert_no);
+    const got = await admin.ok('GET', `/api/certificates/${made.id}`);
+    assert(got.data.rows.some(r => r.label === '職務' && r.value.includes('專任')), '改過的欄位名與內容應存下來');
+    assert(got.data.rows.some(r => r.label === '每週工作時數'), '自行加的列應存下來');
+    const html = await admin.get(`/api/certificates/${made.id}/print`);
+    equal(html.status, 200, '列印頁');
+    assert(html.text.includes('在職證明書') && html.text.includes('每週工作時數')
+      && html.text.includes(made.cert_no), '列印頁應含標題、自訂欄位與編號');
+    const doc = await admin.get(`/api/certificates/${made.id}/print?format=doc`);
+    equal(doc.status, 200, 'Word 匯出');
+    certIdEmployment = made.id;
+  });
+  await test('離職證明帶出任職與離職日期', async () => {
+    const lin2 = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    await admin.ok('PUT', `/api/users/${lin2.id}`, { resign_date: '2026-08-31' });
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=resignation&subject_id=${lin2.id}`);
+    equal(tpl.data.title, '離職證明書', '標題');
+    equal(tpl.data.rows.find(r => r.label === '離職日期').value, '民國 115 年 8 月 31 日', '離職日');
+    assert(tpl.data.rows.find(r => r.label === '服務地點').value, '服務地點預設帶機構地址');
+  });
+  await test('治療證明自動算出來談期間、次數與心理師，用途代入聲明', async () => {
+    const clients = await admin.ok('GET', '/api/clients');
+    const c = clients.find(x => x.id === clientId) || clients[0];
+    const tpl = await admin.ok('GET',
+      `/api/certificates/template?kind=treatment&subject_id=${c.id}&purpose=學校請假`);
+    equal(tpl.data.title, '治療證明', '標題');
+    assert(tpl.data.statement.includes('學校請假'), '用途應代入聲明文字');
+    const sessions = tpl.data.rows.find(r => r.label === '晤談次數').value;
+    const done = (await admin.ok('GET', `/api/appointments?client_id=${c.id}`))
+      .filter(a => a.status === 'done').length;
+    equal(sessions, done ? `${done} 次` : '', '晤談次數應等於已完成場次');
+    const made = await admin.ok('POST', '/api/certificates', {
+      kind: 'treatment', subject_id: c.id, subject_name: tpl.subject_name,
+      purpose: '學校請假', data: tpl.data
+    });
+    const html = await admin.get(`/api/certificates/${made.id}/print`);
+    assert(html.text.includes('治療證明') && html.text.includes('學校請假'), '列印頁應含聲明用途');
+    certIdTreatment = made.id;
+  });
+  await test('作廢後不可修改，作廢前不可刪除', async () => {
+    await admin.fails('DELETE', `/api/certificates/${certIdTreatment}`, undefined, '請先作廢');
+    await admin.fails('POST', `/api/certificates/${certIdTreatment}/void`, { reason: '' }, '作廢原因');
+    await admin.ok('POST', `/api/certificates/${certIdTreatment}/void`, { reason: '個案要求重開' });
+    await admin.fails('PUT', `/api/certificates/${certIdTreatment}`, { data: { title: 'X' } }, '已作廢');
+    const html = await admin.get(`/api/certificates/${certIdTreatment}/print`);
+    assert(html.text.includes('已作廢'), '作廢的證明書列印時應標示');
+    await admin.ok('DELETE', `/api/certificates/${certIdTreatment}`);
+  });
+  await test('沒有人事權限者看不到在職／離職證明', async () => {
+    const list = await office.ok('GET', '/api/certificates');
+    assert(list.rows.every(r => r.kind === 'treatment'), '行政（無 hr 權限）不應看到在職／離職證明');
+    await office.fails('GET', '/api/certificates/template?kind=employment', undefined, '無權限');
+    await office.fails('GET', `/api/certificates/${certIdEmployment}`, undefined, '無權限');
   });
 
   section('Google 表單同步與 LINE 預約入口');

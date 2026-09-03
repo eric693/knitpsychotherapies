@@ -109,7 +109,7 @@ const App = {
   navGroups: [
     { label: '每日作業', keys: ['dashboard', 'my', 'calendar', 'schedule', 'room-board', 'bookings', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review', 'messages'] },
     { label: '個案服務', keys: ['intake', 'intake-forms', 'clients', 'groups', 'assessments', 'risk', 'safety', 'follow-ups', 'consents'] },
-    { label: '專業與營運', keys: ['supervision', 'hr', 'payouts', 'billing', 'receipts', 'overdue', 'packages', 'partners', 'plan-board', 'income', 'annual', 'announcements', 'reports'] },
+    { label: '專業與營運', keys: ['supervision', 'hr', 'payouts', 'billing', 'receipts', 'certificates', 'overdue', 'packages', 'partners', 'plan-board', 'income', 'annual', 'announcements', 'reports'] },
     { label: '系統', keys: ['users', 'plans', 'line', 'gform', 'settings', 'imports', 'retention', 'audit'] }
   ],
 
