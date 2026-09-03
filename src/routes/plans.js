@@ -518,11 +518,21 @@ function caseCodeMap(clientIds) {
   return { codes, firstDates };
 }
 
+// 年報表的「類別」：方案上填的是指定案代碼（自費 0、機構 30），
+// 派案則是該代碼 +1（1、31）——這是所方年報表原本的編法。
+// 個案沒註記指定／派案時（舊資料），就照方案填的代碼原樣印出。
+function reportCategory(planCode, assignType) {
+  const code = String(planCode || '');
+  if (!code || assignType !== 'assigned') return code;
+  return /^\d+$/.test(code) ? String(Number(code) + 1) : code;
+}
+
 function annualReport(counselorId, year, canSeeSummary) {
   const u = db.prepare('SELECT id, name, title, license_type FROM users WHERE id = ?').get(counselorId);
   if (!u) return null;
   const like = `${year}-%`;
   const appts = db.prepare(`SELECT a.*, c.code AS client_code, c.name AS client_name,
+      c.assign_type,
       p.name AS plan_name, p.kind AS plan_kind,
       COALESCE(NULLIF(t.report_code, ''), p.report_code, '') AS report_code,
       t.name AS topic_name
@@ -574,7 +584,8 @@ function annualReport(counselorId, year, canSeeSummary) {
       fee: gross,
       self_pay: clientPay,
       subsidy,
-      category: a.report_code || '',
+      category: reportCategory(a.report_code, a.assign_type),
+      assign_type: a.assign_type || '',
       center: gross - share,
       share,
       plan_id: a.plan_id || 0,

@@ -356,8 +356,8 @@ router.post('/bookings/:id/create-client', requireStaff('clients'), (req, res) =
      emergency_name, emergency_phone, emergency_relationship,
      guardian_name, guardian_phone,
      counselor_id, status, main_issue, note, source, is_minor, intake_date,
-     password_hash, must_change_password)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'intake',?,?,?,?,?,?,?)`).run(
+     password_hash, must_change_password, assign_type)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'intake',?,?,?,?,?,?,?,?)`).run(
     code, b.name, b.gender || '', b.birth_date || '', b.phone, b.email || '',
     b.address || '', b.id_no || '', b.education || '',
     b.emergency_name || '', b.emergency_phone || '', b.emergency_relationship || '',
@@ -366,7 +366,9 @@ router.post('/bookings/:id/create-client', requireStaff('clients'), (req, res) =
     // 表單問的「期待得到的幫忙」沒有對應的個案欄位，接進備註才不會在建檔時掉掉
     b.expectation ? `個案於預約表單填寫的期待：${b.expectation}` : '',
     b.source === 'google_form' ? 'Google 預約表單' : '線上預約表單',
-    age !== null && age < adultAge ? 1 : 0, today(), pwHash, pwHash ? 1 : 0);
+    age !== null && age < adultAge ? 1 : 0, today(), pwHash, pwHash ? 1 : 0,
+    // 個案在預約表單自己點名心理師的算「指定案」，其餘由所方派案（年報表類別代碼要分）
+    b.counselor_id ? 'designated' : 'assigned');
   db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(info.lastInsertRowid, b.id);
   audit('staff', req.user.id, req.user.name, '由預約申請建檔', code);
   res.json({ client_id: info.lastInsertRowid, code });

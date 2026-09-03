@@ -811,7 +811,10 @@ ensureColumns('booking_requests', {
 });
 
 ensureColumns('clients', {
-  education: "TEXT NOT NULL DEFAULT ''"              // 教育程度（預約表單有問，建檔時一併帶入）
+  education: "TEXT NOT NULL DEFAULT ''",             // 教育程度（預約表單有問，建檔時一併帶入）
+  // 指定案／派案：年報表的類別代碼要分這兩種（自費 指定 0／派案 1、機構 指定 30／派案 31）。
+  // 線上預約時個案自己點名心理師的，建檔時記為指定；其餘為派案，之後仍可在個案資料改。
+  assign_type: "TEXT NOT NULL DEFAULT ''"            // '' 未註記 / designated 指定 / assigned 派案
 });
 
 // LINE 一次性預約連結：個案在官方帳號輸入「預約」即取得專屬網址，
@@ -866,6 +869,19 @@ ensureColumns('plan_topics', {
   report_code: "TEXT NOT NULL DEFAULT ''",
   code_prefix: "TEXT NOT NULL DEFAULT ''"
 });
+
+// 類別代碼一次性帶入：自費案 0、補助／合作單位案 30（皆為「指定案」的代碼，
+// 派案由年報表自動 +1，成為 1 與 31）。只在第一次升級時填一次，之後所方怎麼改都不再覆蓋。
+if (getSetting('report_code_seeded', '') !== '1') {
+  db.prepare(`UPDATE service_plans SET report_code =
+    CASE kind WHEN 'self' THEN '0' ELSE '30' END WHERE report_code = ''`).run();
+  // 編碼標記沿用所方年報表的寫法（1140601_青壯1、1140601_國軍1）
+  for (const mark of ['國軍', '青壯']) {
+    db.prepare("UPDATE service_plans SET code_prefix = ? WHERE code_prefix = '' AND name LIKE ?")
+      .run(mark, `%${mark}%`);
+  }
+  setSetting('report_code_seeded', '1');
+}
 
 // 「線上預約申請」原本併在「預約排程」權限底下，拆成獨立模組後，
 // 既有帳號只要有排程權限就一併補上，避免升級後頁面突然不見。

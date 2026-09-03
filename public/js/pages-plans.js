@@ -35,7 +35,8 @@ function planDialog(p, onDone) {
       ${UI.textarea('note', '內部備註', { value: d.note || '' })}
       ${UI.checkbox('portal_visible', '開放線上預約表單顯示此方案', d.portal_visible)}
       ${UI.checkbox('require_review', '線上預約需櫃檯確認才成立', d.require_review)}
-      ${UI.input('report_code', '年報表類別代碼', { value: d.report_code || '', placeholder: '如 0 指定／1 派案／3 機構' })}
+      ${UI.input('report_code', '年報表類別代碼（指定案；派案自動 +1）',
+    { value: d.report_code || '', placeholder: '自費填 0（派案印 1）、機構填 30（派案印 31）' })}
       ${UI.input('code_prefix', '年報表編碼標記', { value: d.code_prefix || '', placeholder: '如 青壯、國軍；自費案留空' })}
       ${UI.input('sort', '排序', { type: 'number', value: d.sort || 0 })}
       ${isNew ? '' : UI.checkbox('active', '啟用中', d.active)}
@@ -61,7 +62,7 @@ function topicDialog(planId, t, onDone) {
       ${UI.input('fee', '金額（0 沿用方案）', { type: 'number', value: d.fee || 0 })}
       ${UI.input('sort', '排序', { type: 'number', value: d.sort || 0 })}
       ${UI.input('fee_options', '可選金額（逗號分隔，0 沿用方案）', { value: d.fee_options || '', full: true })}
-      ${UI.input('report_code', '年報表類別代碼（留空沿用方案）', { value: d.report_code || '' })}
+      ${UI.input('report_code', '年報表類別代碼（指定案；留空沿用方案）', { value: d.report_code || '' })}
       ${UI.input('code_prefix', '年報表編碼標記（留空沿用方案）', { value: d.code_prefix || '' })}
       ${UI.textarea('note', '備註', { value: d.note || '' })}
       ${t ? UI.checkbox('active', '啟用中', d.active) : ''}
@@ -446,6 +447,7 @@ App.page('annual', {
     '選年度與心理師，就看得到整年逐月的明細；每一列同時有治療摘要、費用、所方／心理師拆帳與收據號。',
     '「未附收據」「未寫紀錄」會標紅，督考前可先把這些補齊。',
     '「匯出 Excel」會產生 12 個月分頁＋各方案分頁＋年度彙總，格式比照所方原本那本年報表。',
+    '類別代碼取自方案設定（自費 0、機構 30），該個案若在個案資料註記為「派案」則自動印 +1（1、31）。',
     '治療摘要屬紀錄內容，僅管理者、督導與該心理師本人看得到。',
   ],
   module: 'reports',

@@ -1443,6 +1443,29 @@ function startServer() {
     assert(d.rows.some(r => r.receipt_no !== undefined), '應帶出收據欄');
     equal(d.total.sessions, d.self_total.sessions + d.org_total.sessions, '自費＋機構＝全年人次');
   });
+  await test('年報表類別：方案代碼為指定案，派案自動 +1', async () => {
+    const me = await admin.ok('GET', '/api/me');
+    const plan = (await admin.ok('GET', '/api/service-plans')).find(p => p.active && p.kind === 'self');
+    await admin.ok('PUT', `/api/service-plans/${plan.id}`, { ...plan, report_code: '30' });
+    const date = nextWeekday(4, 200);
+    const made = await admin.ok('POST', '/api/appointments', {
+      client_id: clientId, counselor_id: me.id, date, start_time: '07:30',
+      plan_id: plan.id, override: true
+    });
+    await admin.ok('POST', `/api/appointments/${made.id}/status`, { status: 'done' });
+    const year = date.slice(0, 4);
+    const pick = () => admin.ok('GET', `/api/annual-report/${me.id}?year=${year}`)
+      .then(d => d.rows.find(r => r.appointment_id === made.id));
+    await admin.ok('PUT', `/api/clients/${clientId}`, { assign_type: 'designated' });
+    equal((await pick()).category, '30', '指定案印方案代碼');
+    await admin.ok('PUT', `/api/clients/${clientId}`, { assign_type: 'assigned' });
+    equal((await pick()).category, '31', '派案自動 +1');
+    await admin.ok('PUT', `/api/clients/${clientId}`, { assign_type: '' });
+    equal((await pick()).category, '30', '未註記時照方案代碼原樣印');
+    await admin.ok('POST', `/api/appointments/${made.id}/status`, { status: 'cancelled' });
+    await admin.del(`/api/appointments/${made.id}`);
+    await admin.ok('PUT', `/api/service-plans/${plan.id}`, { ...plan, report_code: plan.report_code || '' });
+  });
   await test('年報表匯出 Excel 與列印版', async () => {
     const year = ymd(new Date()).slice(0, 4);
     const cid = (await admin.ok('GET', `/api/annual-report?year=${year}`)).counselors[0].id;

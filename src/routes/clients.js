@@ -14,7 +14,9 @@ const CLIENT_FIELDS = [
   'source', 'referrer', 'partner_id', 'counselor_id', 'status', 'risk_level', 'main_issue', 'history', 'diagnosis',
   'is_minor', 'guardian_name', 'guardian_relationship', 'guardian_phone',
   'emergency_name', 'emergency_relationship', 'emergency_phone', 'note',
-  'intake_date', 'close_date', 'close_reason', 'portal_enabled'
+  'intake_date', 'close_date', 'close_reason', 'portal_enabled',
+  // 指定案／派案：年報表類別代碼要分這兩種（自費 0／1、機構 30／31）
+  'assign_type'
 ];
 
 function pick(body) {
