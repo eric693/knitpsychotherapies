@@ -1968,6 +1968,33 @@ function startServer() {
     assert(list.some(m => m.client_id === clientId), '對話清單應出現這位個案');
   });
 
+  section('設定與範本的還原');
+  await test('系統設定可逐欄或整組還原成預設值', async () => {
+    const defs = await admin.ok('GET', '/api/settings/defaults');
+    assert(defs.session_minutes && defs.session_minutes.default === '50', '應查得到預設值');
+    assert(!defs.session_minutes.changed, '還沒改過');
+    await admin.ok('PUT', '/api/settings', { session_minutes: '80', cancel_hours: '48' });
+    const after = await admin.ok('GET', '/api/settings/defaults');
+    assert(after.session_minutes.changed && after.cancel_hours.changed, '改過的欄位要標示出來');
+    await admin.ok('POST', '/api/settings/reset', { keys: ['session_minutes', 'cancel_hours'] });
+    const s2 = await admin.ok('GET', '/api/settings');
+    equal(s2.session_minutes, '50', '還原晤談時長');
+    equal(s2.cancel_hours, defs.cancel_hours.default, '還原取消門檻');
+    await admin.fails('POST', '/api/settings/reset', { keys: ['not_a_real_setting'] }, '沒有可還原');
+    await office.fails('POST', '/api/settings/reset', { keys: ['session_minutes'] });
+  });
+  await test('同意書範本可還原成系統內建版本', async () => {
+    const t = (await admin.ok('GET', '/api/consent-templates')).find(x => x.key === 'counseling');
+    await admin.ok('PUT', `/api/consent-templates/${t.id}`, { title: '改壞的標題', body: '整份被刪掉了' });
+    const broken = (await admin.ok('GET', '/api/consent-templates')).find(x => x.key === 'counseling');
+    equal(broken.title, '改壞的標題', '先改壞');
+    const r = await admin.ok('POST', `/api/consent-templates/${t.id}/reset`, {});
+    const back = (await admin.ok('GET', '/api/consent-templates')).find(x => x.key === 'counseling');
+    equal(back.title, '諮商／治療同意書', '標題還原');
+    assert(back.body.includes('專業保密') && back.body.includes('50 分鐘'), '全文還原');
+    assert(r.version > broken.version, '內容有變動要遞增版本');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

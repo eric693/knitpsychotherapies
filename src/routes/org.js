@@ -476,6 +476,32 @@ router.get('/settings', requireStaff('settings'), (req, res) => {
   const rows = db.prepare('SELECT key, value FROM settings').all();
   res.json(Object.fromEntries(rows.map(r => [r.key, r.value])));
 });
+// 還原預設：設定改壞了要回得去。回傳每個欄位的系統預設值與是否被改過，
+// 前端才知道哪些欄位可以按「還原」。
+router.get('/settings/defaults', requireStaff('settings'), (req, res) => {
+  const { ALL_SETTING_DEFAULTS } = require('../db');
+  const out = {};
+  for (const [k, v] of Object.entries(ALL_SETTING_DEFAULTS)) {
+    out[k] = { default: v, changed: getSetting(k, v) !== v };
+  }
+  res.json(out);
+});
+
+// 指定欄位（或整組）還原成系統預設；沒有預設值的欄位（如機構名稱）不受理
+router.post('/settings/reset', requireStaff('settings'), (req, res) => {
+  const { ALL_SETTING_DEFAULTS } = require('../db');
+  const keys = Array.isArray((req.body || {}).keys) ? req.body.keys : [];
+  const done = [];
+  for (const k of keys) {
+    if (!(k in ALL_SETTING_DEFAULTS)) continue;
+    setSetting(k, ALL_SETTING_DEFAULTS[k]);
+    done.push(k);
+  }
+  if (!done.length) return res.status(400).json({ error: '沒有可還原的欄位（該欄位沒有系統預設值）' });
+  audit('staff', req.user.id, req.user.name, '還原系統設定', done.join(','));
+  res.json({ ok: true, reset: done });
+});
+
 router.put('/settings', requireStaff('settings'), (req, res) => {
   const body = req.body || {};
   for (const [k, v] of Object.entries(body)) {

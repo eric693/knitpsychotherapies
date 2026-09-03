@@ -23,6 +23,11 @@ db.pragma('busy_timeout = 5000');
 
 db.exec(fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8'));
 
+// 系統預設值與內建同意書範本：改壞了要能一鍵還原，因此集中留一份。
+// 這兩個容器由下方各區塊填入，並對外匯出給「還原預設」使用。
+const ALL_SETTING_DEFAULTS = {};
+const CONSENT_TEMPLATE_DEFAULTS = [];
+
 // 既有資料庫的欄位遷移（日後加欄位補在此，新裝走 schema.sql）
 function ensureColumns(table, cols) {
   const existing = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
@@ -444,6 +449,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     time_off_reasons: '特休,病假,事假,研習,督導,公假,其他',
     group_topics: '情緒調適,人際關係,壓力管理,親職教養,悲傷輔導,正念練習'
   };
+  Object.assign(ALL_SETTING_DEFAULTS, SETTING_DEFAULTS);
   const has = db.prepare('SELECT 1 FROM settings WHERE key = ?');
   const ins = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(SETTING_DEFAULTS)) if (!has.get(k)) ins.run(k, v);
@@ -452,7 +458,8 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 // 同意書範本（後台可改內容並遞增版本；已簽署者保存全文快照，不受改版影響）
 // 注意：以下為參考範本，正式使用前請由諮商所依《心理師法》與所內規範確認。
 {
-  const CONSENT_DEFAULTS = [
+  const CONSENT_DEFAULTS = CONSENT_TEMPLATE_DEFAULTS;
+  CONSENT_DEFAULTS.push(
     {
       key: 'informed', title: '心理諮商知情同意書', sort: 1, required: 1, allow_decline: 0, minor_only: 0,
       body: `一、服務內容：本所提供之心理諮商由領有證照之心理師提供，每次晤談時間約 50 分鐘，次數依評估與雙方討論後決定。
@@ -713,7 +720,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 
 十一、為瞭解兒童實際接受療育服務之成效與過程，誠摯邀請家長於定期成效評估後填寫本市「早期療育服務家庭服務流程／成效問卷」，俾利協助改善本市早期療育服務。`
     }
-  ];
+  );
   // 既有安裝的內建範本補上適用對象（只補一次，之後所方怎麼改都不再覆蓋）
   if (getSetting('consent_audience_seeded', '') !== '1') {
     const upd = db.prepare("UPDATE consent_templates SET audience = ? WHERE key = ? AND audience = ''");
@@ -1303,6 +1310,7 @@ if (getSetting('military_urls_seeded', '') !== '1') {
     // 印花稅總繳章掃描圖：有上傳就用圖，沒有就印上面那組文字戳記
     receipt_stamp_image: ''
   };
+  Object.assign(ALL_SETTING_DEFAULTS, EXT_SETTING_DEFAULTS);
   const has = db.prepare('SELECT 1 FROM settings WHERE key = ?');
   const ins = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(EXT_SETTING_DEFAULTS)) if (!has.get(k)) ins.run(k, v);
@@ -1314,5 +1322,6 @@ if (getSetting('military_urls_seeded', '') !== '1') {
 
 module.exports = {
   db, SECRET, DATA_DIR, UPLOAD_DIR, getSetting, setSetting, listSetting, audit,
+  ALL_SETTING_DEFAULTS, CONSENT_TEMPLATE_DEFAULTS,
   today, nowTime, nowStamp, addDays, ageYears, nextClientCode, UI_TEXT_KEYS
 };

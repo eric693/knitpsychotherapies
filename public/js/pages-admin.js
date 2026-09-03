@@ -1140,6 +1140,8 @@ App.page('settings', {
   module: 'settings',
   async render(el) {
     const s = await GET('/settings');
+    // 每個欄位的系統預設值：被改過的欄位旁邊給一個「還原」，整組也能一次還原
+    const defs = await GET('/settings/defaults').catch(() => ({}));
     const groups = [
       ['所別資訊', [['center_name', '諮商所名稱'], ['center_phone', '電話'], ['center_address', '地址'],
         ['center_email', 'Email'], ['center_license_no', '開業執照字號'], ['center_director', '負責心理師'],
@@ -1254,12 +1256,20 @@ App.page('settings', {
     const fieldHelp = k => (FIELD_HELP[k]
       ? `<div style="grid-column:1/-1;margin:-6px 0 8px;font-size:12px;color:var(--muted);line-height:1.7">↳ ${FIELD_HELP[k]}</div>`
       : '');
-    el.innerHTML = groups.map(([label, fields]) => `<div class="card"><h3>${label}</h3>
+    const resetBtn = k => (defs[k] && defs[k].changed
+      ? `<button class="btn tiny secondary" type="button" data-rs="${k}"
+          title="還原成系統預設值：${UI.esc(String(defs[k].default).slice(0, 40))}"
+          style="align-self:flex-start;margin:-4px 0 8px">↺ 還原預設</button>`
+      : '');
+    el.innerHTML = groups.map(([label, fields]) => `<div class="card"><h3>${label}
+        ${fields.some(([k]) => defs[k] && defs[k].changed)
+    ? `<button class="btn tiny secondary" type="button" data-rsg="${UI.esc(fields.map(f => f[0]).join(','))}"
+        style="font-weight:400">↺ 整組還原預設</button>` : ''}</h3>
       ${GROUP_HELP[label] ? `<div class="notice" style="margin-bottom:12px;font-size:13px">${GROUP_HELP[label]}</div>` : ''}
       <div class="form-grid">${fields.map(([k, l]) =>
         (String(s[k] || '').length > 40 || k === 'reminder_template' || k === 'shift_quick_fills' || k === 'safety_plan_resources' || k.startsWith('ui_demo') || k === 'ui_portal_note' || k === 'ui_crisis_note' || k.endsWith('_options') || k.endsWith('_types') || k.endsWith('_methods') || k.endsWith('_reasons') || k.endsWith('_channels'))
-          ? UI.textarea(k, l, { value: s[k] || '' })
-          : UI.input(k, l, { value: s[k] || '' }) + fieldHelp(k)).join('')}</div></div>`).join('') +
+          ? UI.textarea(k, l, { value: s[k] || '' }) + resetBtn(k)
+          : UI.input(k, l, { value: s[k] || '' }) + resetBtn(k) + fieldHelp(k)).join('')}</div></div>`).join('') +
       `<div class="card"><h3>收據用印</h3>
          <div style="font-size:13px;color:var(--muted);line-height:1.9;margin-bottom:12px">
            把實體印章蓋在白紙上拍照或掃描後上傳，開立收據與列印時就會自動蓋在收據上。
@@ -1422,6 +1432,20 @@ App.page('settings', {
       bindSeal('stamp', 'receipt_stamp_image', '移除印花稅總繳章？之後會改印文字戳記。');
     }
 
+    // 還原：單一欄位或整組，還原後重新載入頁面顯示新值
+    const doReset = async keys => {
+      if (!await UI.confirm(`把 ${keys.length} 個欄位還原成系統預設值？`)) return;
+      try {
+        await POST('/settings/reset', { keys });
+        UI.toast('已還原預設值');
+        App.go('settings');
+      } catch (e) { UI.err(e); }
+    };
+    el.querySelectorAll('[data-rs]').forEach(b => { b.onclick = () => doReset([b.dataset.rs]); });
+    el.querySelectorAll('[data-rsg]').forEach(b => {
+      b.onclick = () => doReset(b.dataset.rsg.split(',').filter(k => defs[k] && defs[k].changed));
+    });
+
     el.querySelector('#save').onclick = async () => {
       const data = {};
       el.querySelectorAll('.card input[name], .card textarea[name]').forEach(i => {
@@ -1474,8 +1498,16 @@ App.page('settings', {
       <td style="white-space:nowrap"><button class="btn tiny secondary" data-t="${t.id}">編輯</button>
         <button class="btn tiny secondary" data-tp="${t.key}">列印空白（兩聯）</button>
         <button class="btn tiny secondary" data-tw="${t.key}">匯出 Word</button>
+        <button class="btn tiny secondary" data-trs="${t.id}">↺ 還原</button>
         <button class="btn tiny danger" data-td="${t.id}">刪除</button></td></tr>`)) +
       '<div style="font-size:12.5px;color:var(--muted);margin-top:8px">修改內容會使版本遞增，已簽署者需重新簽署；舊版簽署紀錄保留全文快照。</div>';
+    cb.querySelectorAll('[data-trs]').forEach(b => {
+      const t = templates.find(x => x.id === Number(b.dataset.trs));
+      b.onclick = async () => {
+        if (!await UI.confirm(`把「${t.title}」還原成系統內建的版本？已簽署的舊版仍保留當時的全文。`)) return;
+        try { await POST(`/consent-templates/${t.id}/reset`, {}); UI.toast('已還原'); App.go('settings'); } catch (e) { UI.err(e); }
+      };
+    });
     cb.querySelectorAll('[data-tp]').forEach(b => {
       b.onclick = () => window.open(`/api/consent-templates/${b.dataset.tp}/print`, '_blank');
     });

@@ -314,6 +314,27 @@ router.delete('/consent-templates/:id', requireStaff('settings'), (req, res) => 
   res.json({ ok: true, deactivated: false });
 });
 
+// 還原成系統內建的版本：改壞了或想回到原文時用；內容有變動一樣會遞增版本，
+// 已簽署的舊版仍保留當時的全文快照，不受影響。
+router.post('/consent-templates/:id/reset', requireStaff('settings'), (req, res) => {
+  const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: '找不到此範本' });
+  const { CONSENT_TEMPLATE_DEFAULTS } = require('../db');
+  const d = CONSENT_TEMPLATE_DEFAULTS.find(x => x.key === t.key);
+  if (!d) return res.status(400).json({ error: '這是所方自建的範本，沒有系統預設可還原' });
+  const center = getSetting('center_name', '本所');
+  const phone = getSetting('center_phone', '');
+  const fill = v => String(v || '').replace(/\{center\}/g, center).replace(/\{phone\}/g, phone);
+  const body = fill(d.body);
+  const version = body !== t.body ? t.version + 1 : t.version;
+  db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?,
+      minor_only = ?, sign_block = ?, copy_labels = ?, audience = ? WHERE id = ?`)
+    .run(d.title, body, version, d.required, d.allow_decline, d.minor_only,
+      fill(d.sign_block), fill(d.copy_labels), d.audience || '', t.id);
+  audit('staff', req.user.id, req.user.name, '還原同意書範本', t.key, { version });
+  res.json({ ok: true, version });
+});
+
 router.put('/consent-templates/:id', requireStaff('settings'), (req, res) => {
   const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '找不到此範本' });
