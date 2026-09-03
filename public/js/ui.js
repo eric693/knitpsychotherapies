@@ -137,6 +137,50 @@ const UI = {
 
   tag(text, cls = '') { return `<span class="tag ${cls}">${UI.esc(text)}</span>`; },
 
+  // 清單頁的搜尋與篩選：資料已在畫面上，直接就地過濾列，不必再打一次 API。
+  // 用法：UI.filterBar(el, { search: '搜尋姓名或編號', filters: [{ label:'狀態', options:[['new','待處理']] }] })
+  // 會把工具列插在 el 的最前面（或指定的 mount），並即時隱藏不符合的 <tr>。
+  filterBar(el, opts = {}) {
+    const rows = () => Array.from(el.querySelectorAll('table.list tbody tr'));
+    if (!rows().length && !opts.keepEmpty) return null;
+    const id = 'fb' + Math.random().toString(36).slice(2, 8);
+    const filters = opts.filters || [];
+    const html = `<div class="toolbar" id="${id}">
+      ${opts.search === false ? '' : `<input class="fb-q" placeholder="${UI.esc(opts.search || '搜尋')}" style="min-width:200px">`}
+      ${filters.map((f, i) => `<label>${UI.esc(f.label)}</label>
+        <select class="fb-f" data-i="${i}"><option value="">全部</option>
+          ${f.options.map(o => `<option value="${UI.esc(o[0])}">${UI.esc(o[1])}</option>`).join('')}</select>`).join('')}
+      <span class="fb-count" style="color:var(--muted);font-size:12.5px"></span></div>`;
+    const mount = opts.mount ? el.querySelector(opts.mount) : el;
+    if (!mount) return null;
+    mount.insertAdjacentHTML('afterbegin', html);
+    const bar = el.querySelector('#' + id);
+    const q = bar.querySelector('.fb-q');
+    const sels = Array.from(bar.querySelectorAll('.fb-f'));
+    const apply = () => {
+      const text = (q ? q.value : '').trim().toLowerCase();
+      const picks = sels.map(s => s.value);
+      let shown = 0;
+      for (const tr of rows()) {
+        const hay = tr.textContent.toLowerCase();
+        let ok = !text || hay.includes(text);
+        picks.forEach((v, i) => {
+          if (!ok || !v) return;
+          const f = filters[i];
+          // 預設比對整列文字；需要精準比對時由呼叫端給 match(tr, value)
+          ok = f.match ? f.match(tr, v) : hay.includes(String(v).toLowerCase());
+        });
+        tr.style.display = ok ? '' : 'none';
+        if (ok) shown++;
+      }
+      bar.querySelector('.fb-count').textContent = `顯示 ${shown} / ${rows().length} 筆`;
+    };
+    if (q) q.oninput = apply;
+    sels.forEach(s => { s.onchange = apply; });
+    apply();
+    return { apply, bar };
+  },
+
   today() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

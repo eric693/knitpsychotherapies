@@ -77,11 +77,22 @@ App.page('assessments', {
           <td>${t.due_date || '-'}</td><td>${UI.esc(t.assigner_name || '')}</td>
           <td><button class="btn tiny danger" data-del="${t.id}">取消</button></td></tr>`))}</div>` : ''}
       <div class="card"><h3>最近測驗結果</h3>
-        ${UI.table(['日期', '個案', '量表', '總分', '判讀', '填寫者'], rows.map(r => `<tr>
+        ${UI.table(['日期', '個案', '量表', '總分', '判讀', '填寫者', ''], rows.map(r => `<tr>
           <td>${r.date}</td><td><a href="#client/${r.client_id}">${UI.esc(r.client_name)}</a></td>
           <td>${UI.esc(SCALE_NAMES[r.scale] || r.scale)}</td><td><strong>${r.total}</strong></td>
           <td>${r.alert ? UI.tag(r.severity, 'danger') : UI.esc(r.severity)}</td>
-          <td>${r.filled_by === 'client' ? '個案自填' : '所內登錄'}</td></tr>`), '尚無測驗紀錄')}</div>`;
+          <td>${r.filled_by === 'client' ? '個案自填' : '所內登錄'}</td>
+          <td><button class="btn tiny danger" data-drow="${r.id}">刪除</button></td></tr>`), '尚無測驗紀錄')}</div>`;
+    el.querySelectorAll('[data-drow]').forEach(b => {
+      b.onclick = async () => {
+        if (!await UI.confirm('刪除這筆測驗紀錄？刪除後趨勢圖也會一併更新。')) return;
+        await DEL(`/assessments/${b.dataset.drow}`);
+        UI.toast('已刪除'); App.go('assessments');
+      };
+    });
+    UI.filterBar(el, { search: '搜尋個案、量表或判讀',
+      filters: [{ label: '量表', options: Object.entries(SCALE_NAMES) },
+        { label: '警戒', options: [['danger', '僅看警戒']], match: (tr, v) => tr.querySelector('.tag.danger') !== null }] });
     el.querySelector('#fill').onclick = () => scaleFillDialog(null, () => App.go('assessments'));
     el.querySelectorAll('[data-del]').forEach(b => {
       b.onclick = async () => { await DEL(`/assessment-tasks/${b.dataset.del}`); App.go('assessments'); };
@@ -754,11 +765,30 @@ App.page('messages', {
   module: 'messages',
   async render(el) {
     const list = await GET('/messages');
-    el.innerHTML = `<div class="card"><h3>對話</h3>
+    el.innerHTML = `<div class="toolbar"><div class="spacer"></div>
+        <button class="btn" id="newchat">新增對話</button></div>
+      <div class="card"><h3>對話</h3>
       ${UI.table(['個案', '最後訊息', '時間', ''], list.map(m => `<tr>
         <td>${UI.esc(m.client_name)}（${m.client_code}）${m.unread ? UI.tag(m.unread + ' 未讀', 'danger') : ''}</td>
         <td>${UI.esc((m.last_content || '').slice(0, 30))}</td><td>${UI.esc(m.last_at || '')}</td>
         <td><button class="btn tiny" data-m="${m.client_id}">開啟</button></td></tr>`), '尚無訊息')}</div>`;
+    // 還沒有對話紀錄的個案，也能從這裡主動起一則行政聯繫
+    el.querySelector('#newchat').onclick = async () => {
+      const clients = await App.clientOptions(true);
+      UI.modal({
+        title: '新增對話',
+        body: `<div class="form-grid">${UI.select('client_id', '個案', clients, { full: true })}
+          ${UI.textarea('content', '訊息內容', { rows: 4, full: true })}</div>
+          <div class="notice">行政聯繫用（改期、繳費、提醒）；晤談內容請勿於此討論。</div>`,
+        onSubmit: async e2 => {
+          const d2 = UI.formData(e2);
+          if (!d2.client_id) throw new Error('請選擇個案');
+          if (!d2.content) throw new Error('請填寫訊息內容');
+          await POST('/messages', { client_id: Number(d2.client_id), content: d2.content });
+          UI.toast('已送出'); App.go('messages');
+        }
+      });
+    };
     el.querySelectorAll('[data-m]').forEach(b => {
       b.onclick = async () => {
         const cid = Number(b.dataset.m);

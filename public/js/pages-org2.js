@@ -240,7 +240,8 @@ App.page('hr', {
           <td>${o.start_date}${o.end_date !== o.start_date ? ' ~ ' + o.end_date : ''}</td>
           <td>${o.all_day ? '全天' : `${o.start_time}-${o.end_time}`}</td>
           <td>${UI.esc(o.reason || '-')}</td>
-          <td><button class="btn tiny danger" data-do="${o.id}">刪除</button></td></tr>`), '目前沒有請假紀錄')}</div>
+          <td><button class="btn tiny secondary" data-eo="${o.id}">編輯</button>
+            <button class="btn tiny danger" data-do="${o.id}">刪除</button></td></tr>`), '目前沒有請假紀錄')}</div>
       <div class="card"><h3>繼續教育明細</h3>
         ${UI.table(['日期', '心理師', '課程', '主辦', '類別', '時數', '積分', ''], list.map(c => `<tr>
           <td>${c.date}</td><td>${UI.esc(c.user_name)}</td><td>${UI.esc(c.title)}</td>
@@ -248,19 +249,28 @@ App.page('hr', {
           <td>${c.hours}</td><td>${c.credits}</td>
           <td><button class="btn tiny danger" data-dc="${c.id}">刪除</button></td></tr>`), '尚無積分紀錄')}</div>`;
 
-    el.querySelector('#addoff').onclick = () => UI.modal({
-      title: '登錄請假／不可預約',
+    // 登錄與編輯共用同一張表單：填錯日期或時段時直接改，不必刪掉重登
+    const timeOffDialog = o => UI.modal({
+      title: o ? '編輯請假／不可預約' : '登錄請假／不可預約',
       body: `<div class="form-grid">
-        ${UI.select('counselor_id', '心理師', App.counselorOptions(), { value: App.me.id })}
-        ${UI.input('start_date', '起始日', { type: 'date', value: UI.today() })}
-        ${UI.input('end_date', '結束日', { type: 'date', value: UI.today() })}
-        ${UI.checkbox('all_day', '全天不可預約', true)}
-        ${UI.input('start_time', '起（非全天時填）', { type: 'time' })}
-        ${UI.input('end_time', '迄（非全天時填）', { type: 'time' })}
-        ${UI.inputList('reason', '事由', App.meta.time_off_reasons || [], { full: true })}
+        ${UI.select('counselor_id', '心理師', App.counselorOptions(), { value: o ? o.counselor_id : App.me.id })}
+        ${UI.input('start_date', '起始日', { type: 'date', value: o ? o.start_date : UI.today() })}
+        ${UI.input('end_date', '結束日', { type: 'date', value: o ? o.end_date : UI.today() })}
+        ${UI.checkbox('all_day', '全天不可預約', o ? !!o.all_day : true)}
+        ${UI.input('start_time', '起（非全天時填）', { type: 'time', value: o ? o.start_time : '' })}
+        ${UI.input('end_time', '迄（非全天時填）', { type: 'time', value: o ? o.end_time : '' })}
+        ${UI.inputList('reason', '事由', App.meta.time_off_reasons || [], { full: true, value: o ? o.reason : '' })}
         ${UI.checkbox('force', '期間已有預約時仍要登錄（我會另行改期）', false)}
       </div>`,
-      onSubmit: async e => { await POST('/time-off', UI.formData(e)); UI.toast('已登錄'); App.go('hr'); }
+      onSubmit: async e => {
+        const d = UI.formData(e);
+        if (o) await PUT(`/time-off/${o.id}`, d); else await POST('/time-off', d);
+        UI.toast('已儲存'); App.go('hr');
+      }
+    });
+    el.querySelector('#addoff').onclick = () => timeOffDialog(null);
+    el.querySelectorAll('[data-eo]').forEach(b => {
+      b.onclick = () => timeOffDialog(offs.find(o => o.id === Number(b.dataset.eo)));
     });
     el.querySelector('#addce').onclick = () => UI.modal({
       title: '登錄繼續教育積分',

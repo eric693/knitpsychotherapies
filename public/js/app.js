@@ -182,6 +182,22 @@ const App = {
     });
   },
 
+  // 為每張清單補上就地搜尋：頁面自己已有搜尋框（或表格太短）就不重複加。
+  autoSearch(body, def) {
+    if (!body || body.querySelector('.fb-q')) return;
+    const already = Array.from(body.querySelectorAll('input')).some(i => /搜尋/.test(i.placeholder || ''));
+    if (already) return;
+    const cards = Array.from(body.querySelectorAll('.card')).filter(c => {
+      const rows = c.querySelectorAll('table.list tbody tr');
+      return rows.length >= (def.searchMin || 5);
+    });
+    for (const card of cards) UI.filterBar(card, { search: def.searchHint || '搜尋這張表' });
+    // 卡片外的獨立表格（有些頁面直接放表）
+    if (!cards.length && body.querySelectorAll('table.list tbody tr').length >= (def.searchMin || 5)) {
+      UI.filterBar(body, { search: def.searchHint || '搜尋這張表' });
+    }
+  },
+
   async go(key) {
     // 個案詳情以 hash 帶 id：#client/12
     const [k, arg] = key.split('/');
@@ -201,8 +217,13 @@ const App = {
       <div id="page-body"><div class="empty">載入中...</div></div>`;
     const helpEl = document.getElementById('page-help');
     if (helpEl) helpEl.ontoggle = () => localStorage.setItem('mc-help-' + k, helpEl.open ? '1' : '0');
-    try { await def.render(document.getElementById('page-body'), arg); }
-    catch (e) { document.getElementById('page-body').innerHTML = `<div class="empty">${UI.esc(e.message)}</div>`; }
+    const body = document.getElementById('page-body');
+    try {
+      await def.render(body, arg);
+      // 每個模組都要能搜尋：頁面沒有自備搜尋框時，就地補上一個能過濾各張表的搜尋列。
+      // 資料已經在畫面上，過濾不必再打 API；def.noSearch 可讓不適合的頁面關掉。
+      if (!def.noSearch) App.autoSearch(body, def);
+    } catch (e) { body.innerHTML = `<div class="empty">${UI.esc(e.message)}</div>`; }
   }
 };
 
