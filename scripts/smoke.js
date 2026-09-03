@@ -1795,6 +1795,68 @@ function startServer() {
     await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'cancelled' });
   });
 
+  await test('早療官方表單：三頁（申請表、交通蓋章卡、療育收據卡）並帶入療程', async () => {
+    const month = (await admin.ok('GET', `/api/certificates/template?kind=early_intervention&subject_id=${clientId}`))
+      .data.rows.find(r => r.label === '申請月份') ? '' : '';
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=ei_official&subject_id=${clientId}`);
+    equal(tpl.data.layout, 'ei_official', '走官方版面');
+    assert(tpl.data.rows.find(r => r.label === '兒童遲緩狀況').value.includes('疑似發展遲緩'), '遲緩狀況勾選欄');
+    assert(tpl.data.rows.find(r => r.label === '應備文件').value.includes('療育紀錄卡'), '應備文件清單');
+    assert(tpl.data.stamp_cells >= 4, '表二蓋章格數');
+    const cert = await admin.ok('POST', '/api/certificates', {
+      kind: 'ei_official', subject_id: clientId, subject_name: tpl.subject_name, data: tpl.data
+    });
+    const html = await admin.get(`/api/certificates/${cert.id}/print`);
+    equal((html.text.match(/<section>/g) || []).length, 3, '應印三頁');
+    assert(html.text.includes('表一') && html.text.includes('表二') && html.text.includes('表三'), '三張表');
+    assert(html.text.includes('收據正本浮貼處'), '表三應留收據浮貼處');
+    assert(html.text.includes('核定交通費'), '表二核定欄');
+    const doc = await admin.get(`/api/certificates/${cert.id}/print?format=doc`);
+    equal(doc.status, 200, 'Word 匯出：' + month);
+  });
+  await test('弱勢療育記錄卡：單張表件二，含自訂注意事項', async () => {
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=disadv_official&subject_id=${clientId}`);
+    equal(tpl.data.layout, 'disadv_official', '走官方版面');
+    assert(tpl.data.form_note.includes('每天最多'), '弱勢療育的療育次數規定');
+    assert(tpl.data.rows.find(r => r.label === '補助項目').value.includes('療育訓練費'), '補助項目');
+    const cert = await admin.ok('POST', '/api/certificates', {
+      kind: 'disadv_official', subject_id: clientId, subject_name: tpl.subject_name, data: tpl.data
+    });
+    const html = await admin.get(`/api/certificates/${cert.id}/print`);
+    equal((html.text.match(/<section>/g) || []).length, 2, '基本資料頁＋記錄表');
+    assert(html.text.includes('療育訓練費補助記錄表') && html.text.includes('療育費補助合計'), '表件二版面');
+  });
+  await test('早期／弱勢療育服務同意書，一式兩份', async () => {
+    const t = (await admin.ok('GET', '/api/consent-templates')).find(x => x.key === 'ei_service');
+    assert(t && t.body.includes('個別療育') && t.body.includes('申訴專線'), '應含收費、服務方式與申訴管道');
+    assert(t.body.includes('4,000 元'), '早療補助額度說明');
+    const html = await admin.get('/api/consent-templates/ei_service/print');
+    assert(html.text.includes('家長留存聯') && html.text.includes('家長簽名'), '兩聯與家長簽名欄');
+  });
+  await test('未成年基本資料表標題依年齡分成兒童與青少年', async () => {
+    await admin.ok('PUT', `/api/clients/${clientId}`, { birth_date: ymd(new Date()).slice(0, 4) - 9 + '-05-05' });
+    let tpl = await admin.ok('GET', `/api/certificates/template?kind=profile_minor&subject_id=${clientId}`);
+    assert(tpl.data.title.includes('兒童'), '9 歲應為兒童版：' + tpl.data.title);
+    await admin.ok('PUT', `/api/clients/${clientId}`, { birth_date: ymd(new Date()).slice(0, 4) - 15 + '-05-05' });
+    tpl = await admin.ok('GET', `/api/certificates/template?kind=profile_minor&subject_id=${clientId}`);
+    assert(tpl.data.title.includes('青少年'), '15 歲應為青少年版：' + tpl.data.title);
+  });
+
+  await test('同意書依適用對象篩選：兒童看得到療育同意書，成人看不到', async () => {
+    await admin.ok('PUT', `/api/clients/${clientId}`, { birth_date: ymd(new Date()).slice(0, 4) - 8 + '-05-05' });
+    let c = await admin.ok('GET', `/api/clients/${clientId}`);
+    equal(c.age_group, 'child', '8 歲為兒童');
+    const tpls = await admin.ok('GET', '/api/consent-templates');
+    equal(tpls.find(t => t.key === 'ei_service').audience, 'child', '療育服務同意書限兒童');
+    equal(tpls.find(t => t.key === 'youth').audience, 'adult', '青壯方案同意書限成人');
+    assert(!c.pending_consents.some(x => x.key === 'youth'), '兒童不該出現青壯方案同意書');
+    await admin.ok('PUT', `/api/clients/${clientId}`, { birth_date: ymd(new Date()).slice(0, 4) - 30 + '-05-05' });
+    c = await admin.ok('GET', `/api/clients/${clientId}`);
+    equal(c.age_group, 'adult', '30 歲為成人');
+    assert(!c.pending_consents.some(x => x.key === 'ei_service'), '成人不該出現療育服務同意書');
+    assert(c.pending_consents.some(x => x.key === 'privacy'), '未設對象的同意書仍對所有人顯示');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

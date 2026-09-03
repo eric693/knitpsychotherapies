@@ -1140,6 +1140,12 @@ App.page('settings', {
         ['cert_early_intervention_title', '早療補助療育紀錄 標題'],
         ['cert_early_intervention_statement', '早療補助療育紀錄 說明文字'],
         ['early_intervention_item', '早療紀錄的療育項目'],
+        ['cert_ei_official_title', '早療官方表單 標題'], ['ei_official_authority', '早療官方表單 主管機關'],
+        ['ei_transport_fee', '每趟次交通費補助額'], ['ei_form2_cells', '表二蓋章格數'],
+        ['ei_form2_note', '表二注意事項'], ['ei_form3_note', '表三注意事項'],
+        ['cert_disadv_official_title', '弱勢療育記錄卡 標題'],
+        ['disadv_official_authority', '弱勢療育記錄卡 主管機關'],
+        ['disadv_form_note', '弱勢療育記錄卡 注意事項'],
         ['cert_treatment_statement', '治療證明 聲明文字（{purpose} 會代入用途）']]],
       ['提醒發送通道', [['notify_webhook_url', 'Webhook 網址（留空則僅人工發送）'],
         ['notify_webhook_token', 'Webhook 驗證權杖']]],
@@ -1451,6 +1457,9 @@ App.page('settings', {
     { value: t.sign_block || '', rows: 6 })}
           ${UI.input('copy_labels', '聯別名稱（逗號分隔，留空為「個案留存聯、機構留存聯」）',
     { value: t.copy_labels || '', full: true, placeholder: '存根聯,收執聯' })}
+          ${UI.select('audience', '適用對象（個案頁預設只列出相符的）',
+    [['', '全部個案'], ['child', '兒童（未滿 12 歲）'], ['teen', '青少年（12-17 歲）'],
+      ['minor', '未成年（兒童與青少年）'], ['adult', '成人']], { value: t.audience || '' })}
           ${UI.checkbox('required', '必要同意書', t.required)}
           ${UI.checkbox('allow_decline', '允許選擇不同意', t.allow_decline)}
           ${UI.checkbox('minor_only', '僅未成年個案需簽', t.minor_only)}</div>`,

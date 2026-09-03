@@ -419,7 +419,9 @@ App.page('client', {
     const c = await GET(`/clients/${id}`);
     document.querySelector('.page-title').textContent = `${c.name}（${c.code}）`;
     document.querySelector('.page-sub').innerHTML =
-      `${TW.client_status[c.status]}　主責：${UI.esc(c.counselor_name || '未指定')}　風險：${TW.risk_level[c.risk_level]}` +
+      `${TW.client_status[c.status]}　主責：${UI.esc(c.counselor_name || '未指定')}　風險：${TW.risk_level[c.risk_level]}`
+      + (c.age_group ? `　分層：${{ child: '兒童', teen: '青少年', adult: '成人' }[c.age_group]}${
+        c.age !== null && c.age !== undefined ? `（${c.age} 歲）` : ''}` : '') +
       (c.can_view_notes ? '' : '　（您無此個案的晤談紀錄存取權）');
 
     const head = document.createElement('div');
@@ -702,7 +704,15 @@ App.page('client', {
 
       if (key === 'consents') {
         const templates = await GET('/consent-templates');
-        const list = templates.filter(t => !t.minor_only || c.is_minor);
+        const fits = t => {
+          const a = t.audience || '';
+          if (!a || !c.age_group) return true;
+          if (a === 'minor') return c.age_group === 'child' || c.age_group === 'teen';
+          return a === c.age_group;
+        };
+        const all = templates.filter(t => !t.minor_only || c.is_minor);
+        const list = el.querySelector('#allconsents') && el.querySelector('#allconsents').checked
+          ? all : all.filter(fits);
         body.innerHTML = `<div class="card">${UI.table(['同意書', '版本', '狀態', '簽署人', '簽署時間', ''],
           list.map(t => {
             const s = c.consents.find(x => x.key === t.key && x.version === t.version);
@@ -716,7 +726,12 @@ App.page('client', {
                       <button class="btn tiny secondary" data-cw="${s.id}">Word</button>`
     : `<button class="btn tiny secondary" data-bp="${t.key}">列印空白</button>`}</td></tr>`;
           }))}
+          <label style="display:block;margin-top:8px;font-size:13px">
+            <input type="checkbox" id="allconsents"> 顯示全部同意書（預設只列出適用${
+  { child: '兒童', teen: '青少年', adult: '成人' }[c.age_group] || '這位個案'}的）</label>
           <div style="font-size:12.5px;color:var(--muted);margin-top:8px">標示 * 為必要同意書；範本內容修改後版本會遞增，需重新簽署。</div></div>`;
+        const allBox = body.querySelector('#allconsents');
+        if (allBox) allBox.onchange = () => App.go('client/' + id + '/consents');
         body.querySelectorAll('[data-c]').forEach(b => {
           b.onclick = () => consentDialog(c.id, b.dataset.c, b.dataset.minor === '1', () => App.go('client/' + id));
         });

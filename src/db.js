@@ -74,7 +74,10 @@ ensureColumns('consent_templates', {
   sign_block: "TEXT NOT NULL DEFAULT ''",
   // 列印時的聯別名稱（逗號分隔）：留空用預設的「個案留存聯、機構留存聯」；
   // 公部門方案的同意書常寫成「存根聯、收執聯」，逐份可改。
-  copy_labels: "TEXT NOT NULL DEFAULT ''"
+  copy_labels: "TEXT NOT NULL DEFAULT ''",
+  // 適用對象：同意書愈來愈多，個案頁只列出跟這位個案有關的。
+  // '' 全部適用 / child 兒童（未滿 12）/ teen 青少年（12-17）/ minor 未成年 / adult 成人
+  audience: "TEXT NOT NULL DEFAULT ''"
 });
 ensureColumns('session_notes', {
   // 覆核狀態：none 不需覆核（正式心理師）／pending 待督導覆核／approved 已覆核／returned 退回補正
@@ -337,6 +340,33 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     cert_early_intervention_statement: '本表為本所開立之療育紀錄，供家長辦理早期療育補助之用；'
       + '申請時請依主管機關規定併附收據正本與相關證明文件，並由療育單位及療育人員蓋章。',
     early_intervention_item: '心理治療',   // 療育項目（早療紀錄卡的填法）
+    // 官方版早療補助表單（臺中市發展遲緩兒童交通及療育補助）：
+    // 表一申請表、表二交通補助紀錄卡、表三療育補助紀錄卡的固定文字，格式若改版於此調整。
+    cert_ei_official_title: '發展遲緩兒童交通及療育補助申請表',
+    cert_disadv_official_title: '弱勢醫療記錄卡－療育訓練費補助',
+    cert_disadv_official_statement: '',
+    disadv_official_authority: '臺中市政府辦理低收入戶及弱勢兒童及少年醫療補助計畫',
+    disadv_form_note: '一、療育次數：(1) 同一院所相同療育項目，每天最多 1 次；(2) 同一院所不同療育項目，每天最多 2 次；'
+      + '(3) 不同院所相同療育項目，每天最多 2 次；(4) 不同院所不同療育項目，每天最多 2 次。\n'
+      + '二、療育單位：以健保特約醫院或本府核可之早期療育單位為限。\n'
+      + '三、療育日期：以診斷書開立日期後之療育才可受理。\n'
+      + '四、執行療育人員：需為本局核可之療育人員，並請蓋職章（姓名、職務）。\n'
+      + '五、療育項目：包括認知學習、物理治療、職能治療、語言治療、感覺統合治療、音樂治療、遊戲治療、'
+      + '心理治療、藝術治療、戲劇治療、聽覺復健。\n'
+      + '六、療育單據：(1) 須為正本，請務必黏貼於上方黏貼處；(2) 單位收據需有立案字號、地址、統編、電話、'
+      + '機構章、療育日期、療育項目及其單價；(3) 如採預付方式，請於收據上註明療育日期，並請執行療育人員加蓋職章。\n'
+      + '七、掛號費、健保給付項目之基本部分負擔不予補助。',
+    ei_official_authority: '臺中市政府社會局',
+    ei_transport_fee: '200',              // 每趟次交通費補助額
+    ei_form2_cells: '12',                 // 表二每頁的療育蓋章格數
+    ei_form2_note: '1. 補助次數：同一天交通費補助不超過 2 次；同一天同一療育單位僅補助一次交通費；'
+      + '家中兄弟姊妹同天至同單位進行療育課程，交通費以一次計算。\n'
+      + '2. 療育日期：醫檢證明開立後且完成通報，交通費補助始可受理。\n'
+      + '3. 療育項目：包括物理治療、職能治療、語言治療、心理治療、針灸治療（限領有身障證明者）、'
+      + '水中運動治療、聽覺復健、認知學習、音樂療育、遊戲療育、藝術療育、戲劇療育、定向訓練、馬術療育、體適能。\n'
+      + '4. 療育單位：以健保特約醫院或本局核可之早期療育單位為限。',
+    ei_form3_note: '※ 療育日期、項目、單位、人員請確實填寫核章；若有塗改請療育人員務必加蓋職章！'
+      + '收據正本請浮貼於各單位欄位下方。',
     cert_referral_clinic_statement: '',
     referral_clinic_copies: '第一聯　本所存根聯,第二聯　醫療端留存聯,第三聯　醫療端回覆聯',
     referral_clinic_targets: '蕭芸嶙身心診所　電話 04-23939203　411 臺中市太平區樹孝路 501 號\n'
@@ -535,7 +565,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 ※ 本人已經詳細閱讀前述文字並了解其內容，有疑問時可洽詢本所。`
     },
     {
-      key: 'military', title: '國軍心理健康照護方案權益須知同意書', sort: 8, required: 0, allow_decline: 0, minor_only: 0,
+      key: 'military', audience: 'adult', title: '國軍心理健康照護方案權益須知同意書', sort: 8, required: 0, allow_decline: 0, minor_only: 0,
       sign_block: `立書同意人：
 　單位：＿＿＿＿＿＿＿＿　級職：＿＿＿＿＿＿＿＿　姓名：＿＿＿＿＿＿＿＿
 　身分證字號：＿＿＿＿＿＿＿＿＿＿＿＿
@@ -564,7 +594,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 八、我已認真閱讀、瞭解以上我所應盡的權利，並同意上述內容及機構安排諮商輔導服務。`
     },
     {
-      key: 'youth', title: '15-45 歲青壯世代心理健康支持方案同意書', sort: 9, required: 0, allow_decline: 0, minor_only: 0,
+      key: 'youth', audience: 'adult', title: '15-45 歲青壯世代心理健康支持方案同意書', sort: 9, required: 0, allow_decline: 0, minor_only: 0,
       copy_labels: '存根聯,收執聯',
       sign_block: `立　書　人：＿＿＿＿＿＿＿＿＿＿
 立書人地址：＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿
@@ -600,7 +630,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 衛生福利部　關心您！`
     },
     {
-      key: 'child_guardian', title: '個別心理治療家長（監護人、主要照顧者）同意書',
+      key: 'child_guardian', audience: 'minor', title: '個別心理治療家長（監護人、主要照顧者）同意書',
       sort: 10, required: 0, allow_decline: 0, minor_only: 1,
       copy_labels: '家長留存聯,{center}留存聯',
       sign_block: `※ 本人已經詳細閱讀前述文字並了解其內容，謹同意下列事項：
@@ -624,7 +654,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 　在您簽署同意書後，將開始進行心理治療，心理師會安排孩子進行心理治療的時間，每次治療時間為 50 分鐘。請務必準時，遲到恕不補課。若孩子生病或有事無法來上課，請務必至少在治療當天來電請假；為維護治療品質，無特殊狀況請勿連續請假。治療之結束應由心理師及家長共同討論決議。`
     },
     {
-      key: 'recording_child', title: '諮商／治療錄音錄影同意書（兒少）',
+      key: 'recording_child', audience: 'minor', title: '諮商／治療錄音錄影同意書（兒少）',
       sort: 11, required: 0, allow_decline: 1, minor_only: 0,
       copy_labels: '個案留存聯,{center}留存聯',
       sign_block: `※ 本人已經詳細閱讀前述文字並了解其內容，有疑問時可洽詢{center}。
@@ -640,19 +670,66 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 二、心理諮商／治療時，若須錄音錄影，心理師會於事前取得我的同意，我可以不同意心理師錄音錄影，我也不會錄音錄影。
 
 三、因心理師個人督導、記錄整理之需要，我同意進行諮商／治療過程之錄音錄影。`
+    },
+    {
+      key: 'ei_service', audience: 'child', title: '早期／弱勢療育服務同意書',
+      sort: 12, required: 0, allow_decline: 0, minor_only: 1,
+      copy_labels: '家長留存聯,{center}留存聯',
+      sign_block: `＊ 本同意書我已詳細閱讀並了解，我願意讓兒童接受貴單位的療育服務並遵守相關規定；
+　　本同意書一式兩份，一份由家長自行保存，一份由單位保存。
+
+兒童姓名：＿＿＿＿＿＿＿＿＿＿
+家長簽名：＿＿＿＿＿＿＿＿＿＿　　簽名日期：＿＿＿＿ 年 ＿＿ 月 ＿＿ 日`,
+      body: `一、服務費用（收費標準不可任意異動，如有異動須先經主管機關核可）
+　為使療育能融入兒童日常生活作息中，各項療育應包含與家長溝通諮詢時間；如一堂 60 分鐘，請留 10 至 15 分鐘與家長溝通諮詢，以確保療育成效。
+　□＿＿＿＿療育，□個別療育 □團體療育：一堂＿＿＿分鐘；收費＿＿＿＿元
+　□＿＿＿＿療育，□個別療育 □團體療育：一堂＿＿＿分鐘；收費＿＿＿＿元
+
+二、服務方式：個別療育是透過一對一的療育方式；團體療育最多為一對三的療育方式，協助兒童減緩在發展上所遇到的問題，並協助家長瞭解兒童所遇到的發展困境。
+
+三、保密：治療專業人員對於兒童的療育過程均會作相關紀錄，並依專業人員倫理規範及個人資料保護法進行保密原則。但以下三種特殊情形不在此限：
+　（一）兒童有立即且明顯的危險，涉及兒童個人生命與他人安危時。
+　（二）涉及法律責任時，如兒童及少年福利與權益保障法、性別平等教育法、性侵害犯罪防治法、家庭暴力防治法等，但不限於此。
+　（三）市府針對申請早期療育費用補助或低收入戶及弱勢兒童少年醫療補助等業務權責依法查調資料。
+
+四、取消療育服務：若因故無法前來進行療育服務，請於 ＿1＿ 天前以電話、通訊軟體或親至單位取消或重新預約。
+　單位聯絡電話：{phone}　　通訊軟體 ID：＿＿＿＿＿＿＿＿
+
+五、錄音（影）：治療專業人員為能更瞭解兒童進行療育服務的成效，可能會要求錄音（影）；但在進行錄音（影）前，一定會徵求家長的同意，家長有權利決定是否接受。
+
+六、療育關係：療育關係是一種合作關係，家長有權利參與及知道治療專業人員為兒童所設定之目標及接受療育服務的成效，治療專業人員應定期與家長討論療育目標及達成狀況。
+
+七、終止療育服務：家長有權利終止兒童的療育服務，但建議家長先和治療專業人員溝通過。
+
+八、對於本單位所提供療育服務如有任何疑問，歡迎來電洽詢本單位服務人員：＿＿＿＿＿＿＿＿
+　聯絡電話：{phone}；服務時間：週＿＿ 至 週＿＿　＿＿：＿＿ 至 ＿＿：＿＿。
+
+九、另設籍本市 0 至 6 歲（疑似）發展遲緩兒童接受本單位療育服務，業經通報本市各區兒童發展社區資源中心，得申請早期療育費及交通費補助（一般戶最高每月 4,000 元；低收入戶最高每月 6,000 元）。
+
+十、申訴管道：應於事件發生或知悉之日起 14 日內提出。本單位內部申訴專線：{phone}；若對本單位申訴處理仍不滿意，請洽社會局申訴專線：04-22289111 轉 37152、37153。
+
+十一、為瞭解兒童實際接受療育服務之成效與過程，誠摯邀請家長於定期成效評估後填寫本市「早期療育服務家庭服務流程／成效問卷」，俾利協助改善本市早期療育服務。`
     }
   ];
+  // 既有安裝的內建範本補上適用對象（只補一次，之後所方怎麼改都不再覆蓋）
+  if (getSetting('consent_audience_seeded', '') !== '1') {
+    const upd = db.prepare("UPDATE consent_templates SET audience = ? WHERE key = ? AND audience = ''");
+    for (const t of CONSENT_DEFAULTS) if (t.audience) upd.run(t.audience, t.key);
+    setSetting('consent_audience_seeded', '1');
+  }
   const hasT = db.prepare('SELECT 1 FROM consent_templates WHERE key = ?');
   const insT = db.prepare(`INSERT INTO consent_templates
-      (key, title, body, version, required, allow_decline, minor_only, sort, sign_block, copy_labels)
-    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`);
+      (key, title, body, version, required, allow_decline, minor_only, sort, sign_block, copy_labels, audience)
+    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`);
   // {center} 代入機構名稱，改名時範本不必逐份改寫
   const center = getSetting('center_name', '本所');
   for (const t of CONSENT_DEFAULTS) {
     if (!hasT.get(t.key)) {
-      insT.run(t.key, t.title, t.body.replace(/\{center\}/g, center), t.required, t.allow_decline,
+      insT.run(t.key, t.title,
+        t.body.replace(/\{center\}/g, center).replace(/\{phone\}/g, getSetting('center_phone', '')),
+        t.required, t.allow_decline,
         t.minor_only, t.sort, (t.sign_block || '').replace(/\{center\}/g, center),
-        (t.copy_labels || '').replace(/\{center\}/g, center));
+        (t.copy_labels || '').replace(/\{center\}/g, center), t.audience || '');
     }
   }
 }

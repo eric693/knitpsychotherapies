@@ -6,7 +6,7 @@
 // 套版只負責帶入預設值與當事人資料，不限制所方最後怎麼寫。
 
 const express = require('express');
-const { db, audit, today, getSetting, listSetting } = require('../db');
+const { db, audit, today, getSetting, listSetting, ageYears } = require('../db');
 const { requireStaff } = require('../auth');
 
 const router = express.Router();
@@ -23,7 +23,10 @@ const KINDS = {
   referral_clinic: { label: '轉介單（一式三聯）', module: 'clients', subject: 'client' },
   // 兒少：未成年個案的基本資料表，以及家長申請早療補助要附的療育紀錄
   profile_minor: { label: '未成年個案基本資料表', module: 'clients', subject: 'client' },
-  early_intervention: { label: '早療補助療育紀錄', module: 'clients', subject: 'client' }
+  early_intervention: { label: '早療補助療育紀錄', module: 'clients', subject: 'client' },
+  // 官方版補助表單：學齡前走早療（社會局），學齡走弱勢療育訓練費（醫療補助計畫）
+  ei_official: { label: '早療補助官方表單（表一～表三）', module: 'clients', subject: 'client' },
+  disadv_official: { label: '弱勢療育補助記錄卡（表件二）', module: 'clients', subject: 'client' }
 };
 
 // 流水編號：前綴 + 西元年月 + 四碼序號，如 KC2026090001。
@@ -35,6 +38,16 @@ function nextCertNo() {
     .get(`${prefix}${ym}%`);
   const seq = row ? Number(row.cert_no.slice(-4)) + 1 : 1;
   return `${prefix}${ym}${String(seq).padStart(4, '0')}`;
+}
+
+// 兒少再分兒童與青少年：紙本與方案的用語不同（兒童講「上課」「家長」，
+// 青少年多半自己來談），分層依生日推算，未填生日則以未成年一概稱之。
+function ageGroup(birthDate) {
+  const age = birthDate ? ageYears(birthDate) : null;
+  if (age === null) return { key: 'minor', label: '未成年' };
+  if (age < 12) return { key: 'child', label: '兒童' };
+  if (age < 18) return { key: 'teen', label: '青少年' };
+  return { key: 'adult', label: '成人' };
 }
 
 function rocText(d) {
@@ -166,6 +179,37 @@ function subjectRows(kind, subject, extra = {}) {
       { label: '其他想讓心理師知道的事', value: '' }
     ];
   }
+  if (kind === 'ei_official' || kind === 'disadv_official') {
+    const mark = '□';
+    return [
+      { label: '兒童姓名', value: u.name || '' },
+      { label: '性別', value: GENDER[u.gender] || '□男　□女' },
+      { label: '出生日期', value: rocText(u.birth_date) },
+      { label: '身分證字號', value: u.id_no || '' },
+      { label: '戶籍地址', value: u.address || '' },
+      { label: '申請人（主要照顧者）', value: u.guardian_name
+        ? `${u.guardian_name}（${u.guardian_relationship || ''}）${u.guardian_phone || ''}` : '' },
+      { label: '申請月份', value: extra.month || '' },
+      ...(kind === 'ei_official' ? [
+        { label: '兒童遲緩狀況', value:
+          `${mark}身心障礙證明，第＿＿＿類，程度：${mark}輕度 ${mark}中度 ${mark}重度 ${mark}極重度\n`
+          + `${mark}發展遲緩證明，類別：${mark}認知 ${mark}語言 ${mark}動作 ${mark}社會情緒 ${mark}聽力 ${mark}其他發展\n`
+          + `${mark}疑似發展遲緩證明，類別：${mark}認知 ${mark}語言 ${mark}動作 ${mark}社會情緒 ${mark}聽力 ${mark}其他發展` },
+        { label: '申請別', value: `${mark}首次申請，完成通報日：＿＿＿年＿＿月＿＿日　${mark}低收入戶（請檢附低收證明）` },
+        { label: '應備文件', value: [
+          '1. 申請表【表一】', '2. 療育紀錄卡－交通補助【表二】',
+          '3. 療育紀錄卡－療育補助【表三】（貼附收據正本）',
+          '4. 有效期限內身障證明、評估報告書或區域級以上醫院相關科別診斷證明書影本',
+          '5. 三個月內電子戶籍謄本或新式戶口名簿影本', '6. 兒童（或監護人）郵局存摺封面影本',
+          '7. 低收入戶證明影本', '8. 其他文件證明＿＿＿＿＿＿＿＿'
+        ].map(x => mark + x).join('\n') },
+        { label: '撥款帳戶', value: '郵局局號：□□□□□□□　帳號：□□□□□□□\n'
+          + `戶名：${mark}同受補助兒童　${mark}同申請人` }
+      ] : [
+        { label: '補助項目', value: '療育訓練費補助' }
+      ])
+    ];
+  }
   if (kind === 'early_intervention') {
     return [
       { label: '兒童姓名', value: u.name || '' },
@@ -220,6 +264,15 @@ function gridFor(kind, subject, opts = {}) {
   if (kind === 'profile_minor') {
     return { label: '上課紀錄（每次上課由家長簽名）', headers: ['上課日期', '時間', '家長簽名', '收費'], rows: 12 };
   }
+  if (kind === 'ei_official' || kind === 'disadv_official') {
+    const data = subject ? earlyInterventionRows(subject.id, opts.month) : [];
+    return {
+      label: '療育明細（依本所紀錄帶出，送件時請貼附收據正本並蓋章）',
+      headers: ['療育日期', '療育項目', '療育單位', '療育人員（蓋章）', '自費金額', '收據號碼'],
+      rows: Math.max(4, data.length),
+      data
+    };
+  }
   if (kind === 'early_intervention') {
     const data = subject ? earlyInterventionRows(subject.id, opts.month) : [];
     return {
@@ -244,7 +297,7 @@ function gridFor(kind, subject, opts = {}) {
 
 function signatureRows(kind) {
   if (kind === 'profile' || kind === 'profile_minor') return [];
-  if (kind === 'early_intervention') {
+  if (['early_intervention', 'ei_official', 'disadv_official'].includes(kind)) {
     return [
       { label: '療育人員（蓋章）', value: '' },
       { label: '療育單位（蓋章）', value: '' }
@@ -350,7 +403,7 @@ function buildTemplate(kind, subjectId, purpose = '', month = '') {
     subject = db.prepare('SELECT * FROM clients WHERE id = ?').get(subjectId) || null;
     if (subject && kind === 'treatment') extra = treatmentFacts(subject.id);
     if (subject && kind === 'referral') extra = { bsrs: latestBsrs(subject.id) };
-    if (kind === 'early_intervention') extra = { month };
+    if (['early_intervention', 'ei_official', 'disadv_official'].includes(kind)) extra = { month };
   }
   return {
     kind,
@@ -358,7 +411,10 @@ function buildTemplate(kind, subjectId, purpose = '', month = '') {
     subject_name: subject ? subject.name : '',
     purpose,
     data: {
-      title: getSetting(`cert_${kind}_title`, def.label),
+      title: kind === 'profile_minor' && subject
+        ? getSetting('cert_profile_minor_title', def.label)
+          .replace('未成年', ageGroup(subject.birth_date).label)
+        : getSetting(`cert_${kind}_title`, def.label),
       subtitle: kind === 'treatment' ? getSetting('center_name', '') : '',
       rows: subjectRows(kind, subject, extra),
       statement_label: kind === 'treatment' ? '單位聲明' : '',
@@ -367,6 +423,15 @@ function buildTemplate(kind, subjectId, purpose = '', month = '') {
       signatures: signatureRows(kind),
       // 基本資料表背面的簽到欄：空白格數可自行增減，欄位名稱也能改
       grid: gridFor(kind, subject, { month }),
+      // 官方表單走專屬版面（蓋章格、收據浮貼處），其餘用通用版面
+      layout: kind === 'ei_official' ? 'ei_official' : (kind === 'disadv_official' ? 'disadv_official' : ''),
+      form_note: kind === 'ei_official' ? getSetting('ei_form2_note', '')
+        : (kind === 'disadv_official' ? getSetting('disadv_form_note', '') : ''),
+      form_note2: kind === 'ei_official' ? getSetting('ei_form3_note', '') : '',
+      stamp_cells: kind === 'ei_official' ? Number(getSetting('ei_form2_cells', '12')) || 12 : 0,
+      transport_fee: Number(getSetting('ei_transport_fee', '200')) || 200,
+      authority: kind === 'ei_official' ? getSetting('ei_official_authority', '')
+        : (kind === 'disadv_official' ? getSetting('disadv_official_authority', '') : ''),
       // 聯別：一式數聯的表單，每一聯各印一頁並在頁尾標明是哪一聯
       copies: kind === 'referral_clinic'
         ? listSetting('referral_clinic_copies').filter(Boolean)
@@ -459,6 +524,12 @@ function cleanData(d = {}) {
         ? d.grid.data.slice(0, 60).map(r => (Array.isArray(r) ? r : []).map(v => String(v === undefined ? '' : v)))
         : []
     } : null,
+    layout: ['ei_official', 'disadv_official'].includes(d.layout) ? d.layout : '',
+    form_note: String(d.form_note || ''),
+    form_note2: String(d.form_note2 || ''),
+    stamp_cells: Math.min(40, Math.max(0, Math.round(Number(d.stamp_cells) || 0))),
+    transport_fee: Math.max(0, Math.round(Number(d.transport_fee) || 0)),
+    authority: String(d.authority || ''),
     copies: Array.isArray(d.copies)
       ? d.copies.map(x => String(x || '').trim()).filter(Boolean).slice(0, 6) : [],
     footer_date: String(d.footer_date || '')
@@ -524,6 +595,121 @@ router.delete('/certificates/:id', requireStaff(), (req, res) => {
   audit('staff', req.user.id, req.user.name, '刪除證明書', c.cert_no);
   res.json({ ok: true });
 });
+
+// 官方補助表單的版面（臺中市早療交通及療育補助表一～表三、弱勢療育訓練費補助表件二）。
+// 這些表要蓋章、要浮貼收據正本，欄位位置固定，因此不走通用版面；
+// 表格內的文字（注意事項、應備文件、蓋章格數）一樣存在 data 裡，逐張可改。
+function officialHtml(c, data, forWord) {
+  const esc = v => String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const nl = v => esc(v).replace(/\n/g, '<br>');
+  const row = label => (data.rows.find(r => r.label === label) || { value: '' }).value;
+  const head = title => `<div class="hd">${esc(data.authority)}</div>
+    <h1>${esc(title)}</h1>
+    <div class="line">兒童姓名：<b>${esc(row('兒童姓名'))}</b>　　月　份：${esc(row('申請月數') || row('申請月份'))}</div>`;
+  const dataRows = (data.grid && data.grid.data) || [];
+  const blank = n => Array.from({ length: n }, () => '');
+
+  // 表一：申請表（欄位逐列，內容都可改字）
+  const form1 = `<section>
+    <div class="hd">${esc(data.authority)}</div>
+    <h1>${esc(data.title)}（表一）</h1>
+    <div class="no">編號：${esc(c.cert_no)}</div>
+    <table>${data.rows.map(r => `<tr><th>${esc(r.label)}</th><td>${nl(r.value)}</td></tr>`).join('')}</table>
+    ${data.statement ? `<div class="stmt">${nl(data.statement)}</div>` : ''}
+    <div class="gridlb">審核欄（由受理單位填寫）</div>
+    <table class="grid"><tr><th>月份</th><th>交通費</th><th>療育費</th><th>合計</th></tr>
+      ${blank(4).map(() => '<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>').join('')}
+      <tr><td>總計</td><td>核定交通補助＿＿＿元</td><td>核定療育補助＿＿＿元</td><td>＿＿＿元</td></tr></table>
+    <div class="sign">承辦人：<span></span>　單位主管：<span></span></div>
+    <div class="date">${esc(data.footer_date)}</div>
+  </section>`;
+
+  // 表二：交通補助紀錄卡（每格一次療育，蓋三個章）
+  const cells = Array.from({ length: data.stamp_cells || 12 }, (_, i) => {
+    const d = dataRows[i] || [];
+    return `<td class="cell">
+      <div>療育日期：${esc(d[0] || '')}</div>
+      <div>療育項目：${esc(d[1] || '')}（蓋章）</div>
+      <div>療育單位：${esc(d[2] || '')}（蓋章）</div>
+      <div>療育人員：${esc(d[3] || '')}（蓋章）</div></td>`;
+  });
+  const cellRows = [];
+  for (let i = 0; i < cells.length; i += 4) cellRows.push(`<tr>${cells.slice(i, i + 4).join('')}</tr>`);
+  const form2 = `<section>
+    ${head('早期療育紀錄卡－交通補助（表二）')}
+    <div class="note">※ 療育日期、項目、單位、人員請確實填寫核章；若有塗改請療育人員務必加蓋職章！</div>
+    <table class="grid stamp">${cellRows.join('')}</table>
+    <div class="calc">（本欄由受理單位填寫）核定金額：＿＿＿年＿＿月，核定交通費 ＿＿＿ 次 × ${esc(data.transport_fee || 200)} 元，合計＿＿＿＿＿元</div>
+    ${data.form_note ? `<div class="note">${nl(data.form_note)}</div>` : ''}
+  </section>`;
+
+  // 表三／表件二：療育（訓練）費補助紀錄卡，右側浮貼收據正本
+  const feeRows = (dataRows.length ? dataRows : [[], [], [], []]).map(d => `<tr>
+    <td>療育單位：${esc(d[2] || '')}<br>療育項目：${esc(d[1] || '')}<br>療育人員（蓋章）：${esc(d[3] || '')}
+      <div class="paste">收據正本浮貼處${d[5] ? `<br><span class="rc">收據號碼：${esc(d[5])}</span>` : ''}</div></td>
+    <td>${esc(d[0] || '　月　日')}</td>
+    <td class="amt">${esc(d[4] || '')}</td>
+    <td>&nbsp;</td></tr>`).join('');
+  const feeTitle = data.layout === 'disadv_official'
+    ? `${esc(data.title)}（表件二　療育訓練費補助記錄表）`
+    : '早期療育紀錄卡－療育補助（表三）';
+  const form3 = `<section>
+    ${head(feeTitle)}
+    ${data.form_note2 ? `<div class="note">${nl(data.form_note2)}</div>` : ''}
+    <table class="grid"><tr><th>單位蓋章及收據正本</th><th>日期</th><th>自費金額</th><th>核定金額<br>（審核人員填寫）</th></tr>
+      ${feeRows}</table>
+    <div class="calc">（審核人員填寫）療育費補助合計：＿＿＿＿＿元</div>
+    ${data.layout === 'disadv_official' && data.form_note ? `<div class="note">${nl(data.form_note)}</div>` : ''}
+    <div class="sign">${data.signatures.map(r => `${esc(r.label)}：<span>${esc(r.value)}</span>`).join('　')}</div>
+    <div class="date">${esc(data.footer_date)}</div>
+  </section>`;
+
+  const pages = data.layout === 'disadv_official'
+    ? [`<section>
+        <div class="hd">${esc(data.authority)}</div>
+        <h1>${esc(data.title)}</h1>
+        <div class="no">編號：${esc(c.cert_no)}</div>
+        <table>${data.rows.map(r => `<tr><th>${esc(r.label)}</th><td>${nl(r.value)}</td></tr>`).join('')}</table>
+      </section>`, form3]
+    : [form1, form2, form3];
+
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<title>${esc(data.title)}－${esc(c.subject_name)}</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  body { font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    color: #1c2b2b; font-size: 12.5px; line-height: 1.8; }
+  section { page-break-after: always; }
+  section:last-child { page-break-after: auto; }
+  .hd { text-align: center; font-size: 13px; }
+  h1 { font-size: 18px; text-align: center; letter-spacing: 2px; margin: 4px 0 10px; }
+  .no { text-align: right; font-size: 11.5px; color: #667; }
+  .line { margin-bottom: 8px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 10px; }
+  th, td { border: 1px solid #444; padding: 6px 8px; vertical-align: top; }
+  th { background: #f2f5f5; width: 130px; text-align: left; }
+  table.grid th { width: auto; text-align: center; }
+  td.cell { width: 25%; height: 92px; font-size: 11.5px; }
+  .paste { margin-top: 6px; border: 1px dashed #888; height: 70px; padding: 4px; color: #778; font-size: 11px; }
+  .rc { color: #445; }
+  .amt { text-align: right; }
+  .note { font-size: 11.5px; color: #556; white-space: pre-wrap; margin-bottom: 8px; }
+  .calc { margin: 8px 0; font-size: 12px; }
+  .stmt { white-space: pre-wrap; margin: 10px 0; }
+  .gridlb { font-weight: 600; margin: 12px 0 6px; }
+  .sign { margin-top: 14px; }
+  .sign span { display: inline-block; min-width: 150px; border-bottom: 1px solid #444; }
+  .date { margin-top: 16px; text-align: center; }
+  .bar { margin-bottom: 12px; }
+  @media print { .bar { display: none; } }
+</style></head><body>
+<div class="bar"><button onclick="window.print()">列印／另存為 PDF</button></div>
+${c.status === 'void' ? `<div class="hd" style="color:#b4381f">【已作廢】${esc(c.void_reason)}</div>` : ''}
+${pages.join('')}
+${forWord ? '' : '<script>if (location.hash !== \'#noprint\') setTimeout(() => window.print(), 300);<\/script>'}
+</body></html>`;
+}
 
 // 列印／匯出：同一份 HTML，format=doc 時以 Word 開啟（開了還能繼續改字）
 function certHtml(c, data, forWord) {
@@ -602,7 +788,7 @@ router.get('/certificates/:id/print', requireStaff(), (req, res) => {
   } else {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
   }
-  res.send(certHtml(c, data, forWord));
+  res.send(data.layout ? officialHtml(c, data, forWord) : certHtml(c, data, forWord));
 });
 
 module.exports = router;

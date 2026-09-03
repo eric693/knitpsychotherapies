@@ -143,7 +143,11 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
     age: ageYears(c.birth_date),
     can_view_notes: canViewClientNotes(req.user, c),
     consents,
-    pending_consents: templates.filter(t => !consents.some(s => s.key === t.key && s.version === t.version)).map(t => ({ key: t.key, title: t.title })),
+    age_group: ageGroupOf(c.birth_date),
+    pending_consents: templates
+      .filter(t => consentFits(t, ageGroupOf(c.birth_date)))
+      .filter(t => !consents.some(s => s.key === t.key && s.version === t.version))
+      .map(t => ({ key: t.key, title: t.title })),
     appointments: db.prepare(`SELECT a.*, u.name AS counselor_name, sp.name AS plan_name FROM appointments a
       LEFT JOIN users u ON u.id = a.counselor_id
       LEFT JOIN service_plans sp ON sp.id = a.plan_id
@@ -314,19 +318,37 @@ router.put('/consent-templates/:id', requireStaff('settings'), (req, res) => {
   const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '找不到此範本' });
   const { title = t.title, body = t.body, required, allow_decline, minor_only,
-    sign_block = t.sign_block, copy_labels = t.copy_labels } = req.body || {};
+    sign_block = t.sign_block, copy_labels = t.copy_labels, audience = t.audience } = req.body || {};
   // 內容有變動即遞增版本，已簽署者需重新簽署新版（簽署欄只影響紙本版面，不動版本）
   const version = body !== t.body ? t.version + 1 : t.version;
   db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?,
-      minor_only = ?, sign_block = ?, copy_labels = ? WHERE id = ?`)
+      minor_only = ?, sign_block = ?, copy_labels = ?, audience = ? WHERE id = ?`)
     .run(title, body, version,
       required === undefined ? t.required : (required ? 1 : 0),
       allow_decline === undefined ? t.allow_decline : (allow_decline ? 1 : 0),
       minor_only === undefined ? t.minor_only : (minor_only ? 1 : 0), String(sign_block || ''),
-      String(copy_labels || ''), t.id);
+      String(copy_labels || ''), String(audience || ''), t.id);
   audit('staff', req.user.id, req.user.name, '修改同意書範本', t.key, { version });
   res.json({ ok: true, version });
 });
+
+// 兒少再分兒童與青少年：同意書與表單的用語、適用對象都不同。
+function ageGroupOf(birthDate) {
+  const age = birthDate ? ageYears(birthDate) : null;
+  if (age === null) return '';
+  if (age < 12) return 'child';
+  if (age < 18) return 'teen';
+  return 'adult';
+}
+
+// 同意書愈來愈多，個案頁只列出跟這位個案有關的：
+// audience 留空表示全部適用；minor 涵蓋兒童與青少年。
+function consentFits(t, group) {
+  const a = t.audience || '';
+  if (!a || !group) return true;
+  if (a === 'minor') return group === 'child' || group === 'teen';
+  return a === group;
+}
 
 // ---- 同意書列印／匯出 ----
 //
