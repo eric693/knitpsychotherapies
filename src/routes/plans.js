@@ -12,7 +12,9 @@ const router = express.Router();
 const PLAN_FIELDS = ['name', 'kind', 'appt_type', 'fee_mode', 'fee', 'fee_options', 'subsidy_amount',
   'subsidy_program', 'session_minutes', 'age_min', 'age_max', 'quota_per_year',
   'counselor_week_limit', 'counselor_month_limit', 'share_mode', 'share_percent', 'share_fixed',
-  'portal_visible', 'require_review', 'note', 'intro', 'sort', 'active', 'default_mode', 'venue_fee'];
+  'portal_visible', 'require_review', 'note', 'intro', 'sort', 'active', 'default_mode', 'venue_fee',
+  // 年報表用：類別代碼（如 0 指定／1 派案／3 機構／30 機構指定／31 機構派案）與個案編碼標記（如「青壯」「國軍」）
+  'report_code', 'code_prefix'];
 
 function normalizePlan(b, base = {}) {
   const d = { ...base };
@@ -31,7 +33,7 @@ function normalizePlan(b, base = {}) {
     d[n] = Math.max(0, Math.round(Number(d[n]) || 0));
   }
   for (const n of ['portal_visible', 'require_review', 'active']) d[n] = d[n] ? 1 : 0;
-  for (const s of ['subsidy_program', 'note', 'intro']) d[s] = String(d[s] || '');
+  for (const s of ['subsidy_program', 'note', 'intro', 'report_code', 'code_prefix']) d[s] = String(d[s] || '').trim();
   d.appt_type = String(d.appt_type || 'individual');
   d.default_mode = d.default_mode === 'online' ? 'online' : 'onsite';
   return d;
@@ -101,9 +103,11 @@ router.post('/service-plans/:id/topics', requireStaff('settings'), (req, res) =>
   const b = req.body || {};
   const name = String(b.name || '').trim();
   if (!name) return res.status(400).json({ error: '請填寫主題名稱' });
-  const info = db.prepare(`INSERT INTO plan_topics (plan_id, name, fee, fee_options, note, sort, active)
-    VALUES (?,?,?,?,?,?,1)`).run(p.id, name, Math.max(0, Number(b.fee) || 0),
-    parseOptions(b.fee_options).join(','), String(b.note || ''), Number(b.sort) || 0);
+  const info = db.prepare(`INSERT INTO plan_topics
+    (plan_id, name, fee, fee_options, note, sort, active, report_code, code_prefix)
+    VALUES (?,?,?,?,?,?,1,?,?)`).run(p.id, name, Math.max(0, Number(b.fee) || 0),
+    parseOptions(b.fee_options).join(','), String(b.note || ''), Number(b.sort) || 0,
+    String(b.report_code || '').trim(), String(b.code_prefix || '').trim());
   audit('staff', req.user.id, req.user.name, '新增方案主題', `${p.name}／${name}`);
   res.json({ id: info.lastInsertRowid });
 });
@@ -112,9 +116,11 @@ router.put('/topics/:id', requireStaff('settings'), (req, res) => {
   const t = db.prepare('SELECT * FROM plan_topics WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '找不到此主題' });
   const b = { ...t, ...req.body };
-  db.prepare('UPDATE plan_topics SET name = ?, fee = ?, fee_options = ?, note = ?, sort = ?, active = ? WHERE id = ?')
+  db.prepare(`UPDATE plan_topics SET name = ?, fee = ?, fee_options = ?, note = ?, sort = ?, active = ?,
+      report_code = ?, code_prefix = ? WHERE id = ?`)
     .run(String(b.name || t.name).trim(), Math.max(0, Number(b.fee) || 0),
-      parseOptions(b.fee_options).join(','), String(b.note || ''), Number(b.sort) || 0, b.active ? 1 : 0, t.id);
+      parseOptions(b.fee_options).join(','), String(b.note || ''), Number(b.sort) || 0, b.active ? 1 : 0,
+      String(b.report_code || '').trim(), String(b.code_prefix || '').trim(), t.id);
   audit('staff', req.user.id, req.user.name, '修改方案主題', String(b.name || t.name));
   res.json({ ok: true });
 });
@@ -463,6 +469,334 @@ router.get('/plan-income/:counselorId/detail', requireStaff('reports'), (req, re
     total_share: detail.reduce((a, b) => a + (b.counselor_share || 0), 0),
     center_name: getSetting('center_name')
   });
+});
+
+// ---- 心理師年報表（督考用）----
+//
+// 督考要的是「一位心理師一整年、紀錄與收費並排」的一份表：
+// 每一列是一次晤談，同時看得到治療摘要、費用、拆帳，以及對應的收據號，
+// 才能逐筆把紀錄對回收據。分月呈現、另附各方案（合作單位）與自費／機構的彙總。
+//
+// 治療摘要屬晤談紀錄內容，僅管理者、督導與該心理師本人看得到；
+// 其他有報表權限者看到的是「＊＊＊」，該列仍看得到有沒有寫紀錄。
+
+// 民國日期：1140601（年報表的個案編碼沿用這個寫法）
+function rocCompact(d) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || ''));
+  return m ? `${Number(m[1]) - 1911}${m[2]}${m[3]}` : '';
+}
+
+// 治療摘要：取晤談紀錄裡最能代表「今日治療情形」的欄位，串成 50～100 字的一段。
+function noteSummary(n) {
+  if (!n) return '';
+  const parts = [n.objective, n.assessment, n.intervention, n.plan]
+    .map(x => String(x || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const text = parts.join('；');
+  return text.length > 150 ? text.slice(0, 150) + '…' : text;
+}
+
+// 個案編碼：初評日期（該案最早一次晤談）＋方案標記＋該標記下的累計次數，
+// 例如 1140601_22、1140601_青壯1。標記取主題設定，主題沒設就取方案設定。
+function caseCodeMap(clientIds) {
+  if (!clientIds.length) return { codes: new Map(), firstDates: new Map() };
+  const rows = db.prepare(`SELECT a.id, a.client_id, a.date,
+      COALESCE(NULLIF(t.code_prefix, ''), p.code_prefix, '') AS prefix
+    FROM appointments a
+    LEFT JOIN service_plans p ON p.id = a.plan_id
+    LEFT JOIN plan_topics t ON t.id = a.topic_id
+    WHERE a.client_id IN (${clientIds.map(() => '?').join(',')})
+      AND a.status IN ('done','no_show')
+    ORDER BY a.date, a.start_time, a.id`).all(...clientIds);
+  const firstDates = new Map(), seq = new Map(), codes = new Map();
+  for (const r of rows) {
+    if (!firstDates.has(r.client_id)) firstDates.set(r.client_id, r.date);
+    const key = `${r.client_id}|${r.prefix}`;
+    const n = (seq.get(key) || 0) + 1;
+    seq.set(key, n);
+    codes.set(r.id, `${rocCompact(firstDates.get(r.client_id))}_${r.prefix}${n}`);
+  }
+  return { codes, firstDates };
+}
+
+function annualReport(counselorId, year, canSeeSummary) {
+  const u = db.prepare('SELECT id, name, title, license_type FROM users WHERE id = ?').get(counselorId);
+  if (!u) return null;
+  const like = `${year}-%`;
+  const appts = db.prepare(`SELECT a.*, c.code AS client_code, c.name AS client_name,
+      p.name AS plan_name, p.kind AS plan_kind,
+      COALESCE(NULLIF(t.report_code, ''), p.report_code, '') AS report_code,
+      t.name AS topic_name
+    FROM appointments a
+    LEFT JOIN clients c ON c.id = a.client_id
+    LEFT JOIN service_plans p ON p.id = a.plan_id
+    LEFT JOIN plan_topics t ON t.id = a.topic_id
+    WHERE a.counselor_id = ? AND a.date LIKE ? AND a.status IN ('done','no_show')
+    ORDER BY a.date, a.start_time`).all(counselorId, like);
+
+  const apptIds = appts.map(a => a.id);
+  const clientIds = [...new Set(appts.map(a => a.client_id).filter(Boolean))];
+  const { codes } = caseCodeMap(clientIds);
+
+  const inChunk = ids => (ids.length ? ids.map(() => '?').join(',') : 'NULL');
+  // 收據：收費單上的收據號，或另行開立的收據（作廢者不列）
+  const money = db.prepare(`SELECT i.appointment_id, i.status AS invoice_status, i.amount, i.method,
+      i.receipt_no AS invoice_receipt_no,
+      (SELECT GROUP_CONCAT(rc.receipt_no, '、') FROM receipts rc
+        WHERE rc.invoice_id = i.id AND rc.status = 'valid') AS receipt_nos
+    FROM invoices i WHERE i.appointment_id IN (${inChunk(apptIds)}) AND i.status != 'void'`).all(...apptIds);
+  const moneyMap = new Map(money.map(m => [m.appointment_id, m]));
+
+  const notes = db.prepare(`SELECT * FROM session_notes
+    WHERE counselor_id = ? AND date LIKE ?`).all(counselorId, like);
+  const noteByAppt = new Map(notes.filter(n => n.appointment_id).map(n => [n.appointment_id, n]));
+  const noteByDay = new Map(notes.map(n => [`${n.client_id}|${n.date}`, n]));
+
+  const rows = appts.map(a => {
+    const q = resolveFee({ plan_id: a.plan_id, topic_id: a.topic_id, counselor_id: a.counselor_id, fee_override: a.fee });
+    const rate = a.status === 'no_show' ? noShowCharge(a.fee).rate : 1;
+    const clientPay = Math.round((a.fee || 0) * rate);
+    const subsidy = Math.round((a.subsidy_amount || 0) * rate);
+    const gross = clientPay + subsidy;
+    const share = Math.round((a.counselor_share || q.counselor_share) * rate);
+    const note = noteByAppt.get(a.id) || noteByDay.get(`${a.client_id}|${a.date}`) || null;
+    const inv = moneyMap.get(a.id) || null;
+    return {
+      appointment_id: a.id,
+      date: a.date,
+      month: Number(a.date.slice(5, 7)),
+      case_code: codes.get(a.id) || '',
+      client_id: a.client_id,
+      client_code: a.client_code || '',
+      client_name: a.client_name || '',
+      counselor_name: u.name,
+      summary: canSeeSummary ? noteSummary(note) : (note ? '＊＊＊（無檢視權限）' : ''),
+      note_status: !note ? 'missing' : (note.locked ? 'signed' : 'draft'),
+      fee: gross,
+      self_pay: clientPay,
+      subsidy,
+      category: a.report_code || '',
+      center: gross - share,
+      share,
+      plan_id: a.plan_id || 0,
+      plan_name: a.plan_name || '未指定方案',
+      plan_kind: a.plan_kind || 'self',
+      topic_name: a.topic_name || '',
+      status: a.status,
+      receipt_no: (inv && (inv.receipt_nos || inv.invoice_receipt_no)) || '',
+      invoice_status: inv ? inv.invoice_status : 'none',
+      pay_method: (inv && inv.method) || ''
+    };
+  });
+
+  const blank = extra => ({ sessions: 0, fee: 0, center: 0, share: 0, no_receipt: 0, no_note: 0, ...extra });
+  const addTo = (acc, r) => {
+    acc.sessions++; acc.fee += r.fee; acc.center += r.center; acc.share += r.share;
+    if (!r.receipt_no) acc.no_receipt++;
+    if (r.note_status === 'missing') acc.no_note++;
+    return acc;
+  };
+
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const mRows = rows.filter(r => r.month === i + 1);
+    return {
+      month: i + 1,
+      label: `${i + 1}月`,
+      rows: mRows,
+      total: mRows.reduce(addTo, blank()),
+      self: mRows.filter(r => r.plan_kind === 'self').reduce(addTo, blank()),
+      org: mRows.filter(r => r.plan_kind !== 'self').reduce(addTo, blank())
+    };
+  });
+
+  const byPlan = new Map();
+  for (const r of rows) {
+    const key = r.plan_id;
+    if (!byPlan.has(key)) {
+      byPlan.set(key, blank({ plan_id: key, plan_name: r.plan_name, plan_kind: r.plan_kind, rows: [] }));
+    }
+    const p = byPlan.get(key);
+    p.rows.push(r);
+    addTo(p, r);
+  }
+
+  return {
+    year: String(year),
+    counselor: u,
+    can_see_summary: canSeeSummary,
+    rows,
+    months,
+    plans: [...byPlan.values()].sort((a, b) => b.fee - a.fee),
+    self_total: rows.filter(r => r.plan_kind === 'self').reduce(addTo, blank()),
+    org_total: rows.filter(r => r.plan_kind !== 'self').reduce(addTo, blank()),
+    total: rows.reduce(addTo, blank()),
+    center_name: getSetting('center_name', '織心心理治療所')
+  };
+}
+
+// 摘要屬紀錄內容：管理者、督導、以及該心理師本人才看得到
+function canSeeSummaryFor(user, counselorId) {
+  return user.role === 'admin' || user.role === 'supervisor' || user.id === Number(counselorId);
+}
+
+// 有哪些心理師該年有服務量（年報表挑人用）
+router.get('/annual-report', requireStaff('reports'), (req, res) => {
+  const year = String(req.query.year || today().slice(0, 4));
+  res.json({
+    year,
+    counselors: db.prepare(`SELECT u.id, u.name, u.title, COUNT(*) AS sessions
+      FROM appointments a JOIN users u ON u.id = a.counselor_id
+      WHERE a.date LIKE ? AND a.status IN ('done','no_show')
+      GROUP BY u.id ORDER BY u.name`).all(`${year}-%`)
+  });
+});
+
+router.get('/annual-report/:counselorId', requireStaff('reports'), (req, res) => {
+  const year = String(req.query.year || today().slice(0, 4));
+  const data = annualReport(Number(req.params.counselorId), year, canSeeSummaryFor(req.user, req.params.counselorId));
+  if (!data) return res.status(404).json({ error: '找不到此心理師' });
+  audit('staff', req.user.id, req.user.name, '檢視心理師年報表', data.counselor.name,
+    { year, sessions: data.total.sessions });
+  res.json(data);
+});
+
+const ANNUAL_HEADERS = ['日期', '編碼', '個案', '心理師', '治療摘要/報告', '費用', '類別',
+  '所方', '心理師報酬', '收據號', '收款', '紀錄'];
+const NOTE_LABEL = { missing: '未寫', draft: '未定稿', signed: '已定稿' };
+const INV_LABEL = { paid: '已收', unpaid: '未收', none: '未開單' };
+
+function annualRow(r) {
+  return [r.date, r.case_code, r.client_code || r.client_name, r.counselor_name, r.summary,
+    r.fee, r.category, r.center, r.share, r.receipt_no,
+    INV_LABEL[r.invoice_status] || r.invoice_status, NOTE_LABEL[r.note_status]];
+}
+
+// Excel 2003 XML：一個工作表對一個月，另加各方案與年度彙總，開起來就是所方原本那本年報表
+function annualExcel(data) {
+  const esc = v => String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const cell = v => (typeof v === 'number'
+    ? `<Cell ss:StyleID="n"><Data ss:Type="Number">${v}</Data></Cell>`
+    : `<Cell><Data ss:Type="String">${esc(v)}</Data></Cell>`);
+  const sheet = (name, rows) => `<Worksheet ss:Name="${esc(name).slice(0, 28)}"><Table>
+${rows.map(r => `<Row>${r.map(cell).join('')}</Row>`).join('\n')}
+</Table></Worksheet>`;
+  const totalRow = (label, t) => [label, '', '', '', '', t.fee, '', t.center, t.share,
+    `未附收據 ${t.no_receipt} 筆`, `${t.sessions} 人次`, `未寫紀錄 ${t.no_note} 筆`];
+
+  const monthSheets = data.months.map(m => sheet(m.label, [
+    [`${data.center_name}　${data.year} 年度　${data.counselor.name}　${m.label}`],
+    [], ANNUAL_HEADERS,
+    ...m.rows.map(annualRow),
+    [], totalRow('本月合計', m.total),
+    totalRow('　自費案', m.self), totalRow('　機構案', m.org)
+  ]));
+  const planSheets = data.plans.map(p => sheet(p.plan_name, [
+    [`${data.counselor.name}　${data.year} 年度　${p.plan_name}`],
+    [], ANNUAL_HEADERS, ...p.rows.map(annualRow), [], totalRow('合計', p)
+  ]));
+  const summary = sheet('年度彙總', [
+    [`${data.center_name}　${data.year} 年度　${data.counselor.name} 年報表`],
+    [], ['項目', '人次', '費用合計', '所方', '心理師報酬', '未附收據', '未寫紀錄'],
+    ...data.months.map(m => [m.label, m.total.sessions, m.total.fee, m.total.center, m.total.share,
+      m.total.no_receipt, m.total.no_note]),
+    [], ['自費', data.self_total.sessions, data.self_total.fee, data.self_total.center,
+      data.self_total.share, data.self_total.no_receipt, data.self_total.no_note],
+    ['機構', data.org_total.sessions, data.org_total.fee, data.org_total.center,
+      data.org_total.share, data.org_total.no_receipt, data.org_total.no_note],
+    ['全年', data.total.sessions, data.total.fee, data.total.center, data.total.share,
+      data.total.no_receipt, data.total.no_note],
+    [], ['方案別'], ['方案', '人次', '費用合計', '所方', '心理師報酬', '未附收據', '未寫紀錄'],
+    ...data.plans.map(p => [p.plan_name, p.sessions, p.fee, p.center, p.share, p.no_receipt, p.no_note])
+  ]);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<Styles><Style ss:ID="n"><NumberFormat ss:Format="#,##0"/></Style></Styles>
+${summary}
+${monthSheets.join('\n')}
+${planSheets.join('\n')}
+</Workbook>`;
+}
+
+function annualPrintHtml(data) {
+  const esc = v => String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const money = n => Number(n || 0).toLocaleString('en-US');
+  const totalLine = (label, t) => `<tr class="sum"><td colspan="5">${esc(label)}　${t.sessions} 人次</td>
+    <td class="amt">${money(t.fee)}</td><td></td><td class="amt">${money(t.center)}</td>
+    <td class="amt">${money(t.share)}</td><td colspan="3">未附收據 ${t.no_receipt} 筆／未寫紀錄 ${t.no_note} 筆</td></tr>`;
+  const table = rows => `<table><thead><tr>${ANNUAL_HEADERS.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td>${esc(r.date)}</td><td>${esc(r.case_code)}</td><td>${esc(r.client_code || r.client_name)}</td>
+      <td>${esc(r.counselor_name)}</td><td class="sm">${esc(r.summary)}</td>
+      <td class="amt">${money(r.fee)}</td><td>${esc(r.category)}</td>
+      <td class="amt">${money(r.center)}</td><td class="amt">${money(r.share)}</td>
+      <td>${esc(r.receipt_no) || '<span class="warn">未附</span>'}</td>
+      <td>${esc(INV_LABEL[r.invoice_status] || r.invoice_status)}</td>
+      <td>${r.note_status === 'missing' ? '<span class="warn">未寫</span>' : esc(NOTE_LABEL[r.note_status])}</td>
+    </tr>`).join('')}</tbody></table>`;
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<title>${esc(data.counselor.name)}　${esc(data.year)} 年度報表</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  body { font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; color: #1c2b2b; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; page-break-before: always; }
+  h2:first-of-type { page-break-before: avoid; }
+  .sub { font-size: 12px; color: #667; margin-bottom: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 11.5px; margin-bottom: 8px; }
+  th, td { border: 1px solid #c9d6d6; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #e6efef; }
+  .amt { text-align: right; }
+  .sm { font-size: 11px; max-width: 320px; }
+  .sum { background: #f3f7f7; font-weight: 600; }
+  .warn { color: #b4381f; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  .foot { margin-top: 12px; font-size: 11px; color: #778; }
+  .bar { margin-bottom: 12px; }
+  @media print { .bar { display: none; } }
+</style></head><body>
+<div class="bar"><button onclick="window.print()">列印／另存為 PDF</button></div>
+<h1>${esc(data.center_name)}　${esc(data.year)} 年度心理師報表－${esc(data.counselor.name)}</h1>
+<div class="sub">全年 ${data.total.sessions} 人次　費用合計 ${money(data.total.fee)}　所方 ${money(data.total.center)}　
+  心理師報酬 ${money(data.total.share)}　未附收據 ${data.total.no_receipt} 筆　未寫紀錄 ${data.total.no_note} 筆
+  ${data.can_see_summary ? '' : '（治療摘要因權限未顯示）'}</div>
+${data.months.filter(m => m.rows.length).map(m => `<h2>${esc(m.label)}</h2>
+  ${table(m.rows)}
+  <table>${totalLine('本月合計', m.total)}${totalLine('　自費案', m.self)}${totalLine('　機構案', m.org)}</table>`).join('')}
+<h2>年度彙總</h2>
+<table><thead><tr><th>項目</th><th>人次</th><th>費用合計</th><th>所方</th><th>心理師報酬</th><th>未附收據</th><th>未寫紀錄</th></tr></thead>
+<tbody>${data.months.map(m => `<tr><td>${m.label}</td><td>${m.total.sessions}</td>
+  <td class="amt">${money(m.total.fee)}</td><td class="amt">${money(m.total.center)}</td>
+  <td class="amt">${money(m.total.share)}</td><td>${m.total.no_receipt}</td><td>${m.total.no_note}</td></tr>`).join('')}
+${[['自費', data.self_total], ['機構', data.org_total], ['全年', data.total]].map(([label, t]) =>
+    `<tr class="sum"><td>${label}</td><td>${t.sessions}</td><td class="amt">${money(t.fee)}</td>
+      <td class="amt">${money(t.center)}</td><td class="amt">${money(t.share)}</td>
+      <td>${t.no_receipt}</td><td>${t.no_note}</td></tr>`).join('')}
+${data.plans.map(p => `<tr><td>方案：${esc(p.plan_name)}</td><td>${p.sessions}</td>
+  <td class="amt">${money(p.fee)}</td><td class="amt">${money(p.center)}</td>
+  <td class="amt">${money(p.share)}</td><td>${p.no_receipt}</td><td>${p.no_note}</td></tr>`).join('')}
+</tbody></table>
+<div class="foot">本表含個案相關資料與紀錄摘要，請依個人資料保護法與所內作業辦法妥善保管。</div>
+<script>if (location.hash !== '#noprint') setTimeout(() => window.print(), 400);<\/script>
+</body></html>`;
+}
+
+router.get('/annual-report/:counselorId/export', requireStaff('reports'), (req, res) => {
+  const year = String(req.query.year || today().slice(0, 4));
+  const format = req.query.format === 'pdf' ? 'pdf' : 'xls';
+  const data = annualReport(Number(req.params.counselorId), year, canSeeSummaryFor(req.user, req.params.counselorId));
+  if (!data) return res.status(404).json({ error: '找不到此心理師' });
+  audit('staff', req.user.id, req.user.name, '匯出心理師年報表', data.counselor.name,
+    { year, format, sessions: data.total.sessions });
+  if (format === 'pdf') {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(annualPrintHtml(data));
+  }
+  res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="annual_${data.counselor.id}_${year}.xls"`);
+  res.send(annualExcel(data));
 });
 
 module.exports = router;

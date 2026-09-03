@@ -35,6 +35,8 @@ function planDialog(p, onDone) {
       ${UI.textarea('note', '內部備註', { value: d.note || '' })}
       ${UI.checkbox('portal_visible', '開放線上預約表單顯示此方案', d.portal_visible)}
       ${UI.checkbox('require_review', '線上預約需櫃檯確認才成立', d.require_review)}
+      ${UI.input('report_code', '年報表類別代碼', { value: d.report_code || '', placeholder: '如 0 指定／1 派案／3 機構' })}
+      ${UI.input('code_prefix', '年報表編碼標記', { value: d.code_prefix || '', placeholder: '如 青壯、國軍；自費案留空' })}
       ${UI.input('sort', '排序', { type: 'number', value: d.sort || 0 })}
       ${isNew ? '' : UI.checkbox('active', '啟用中', d.active)}
     </div>
@@ -59,6 +61,8 @@ function topicDialog(planId, t, onDone) {
       ${UI.input('fee', '金額（0 沿用方案）', { type: 'number', value: d.fee || 0 })}
       ${UI.input('sort', '排序', { type: 'number', value: d.sort || 0 })}
       ${UI.input('fee_options', '可選金額（逗號分隔，0 沿用方案）', { value: d.fee_options || '', full: true })}
+      ${UI.input('report_code', '年報表類別代碼（留空沿用方案）', { value: d.report_code || '' })}
+      ${UI.input('code_prefix', '年報表編碼標記（留空沿用方案）', { value: d.code_prefix || '' })}
       ${UI.textarea('note', '備註', { value: d.note || '' })}
       ${t ? UI.checkbox('active', '啟用中', d.active) : ''}
     </div>`,
@@ -431,5 +435,90 @@ App.page('income', {
         });
       };
     });
+  }
+});
+
+// 心理師年報表（督考用）：一位心理師一整年，紀錄摘要與收費、收據並排在同一列。
+App.page('annual', {
+  title: '心理師年報表',
+  sub: '一位心理師一整年的晤談紀錄摘要、收費拆帳與收據號並排，供督考逐筆核對',
+  help: [
+    '選年度與心理師，就看得到整年逐月的明細；每一列同時有治療摘要、費用、所方／心理師拆帳與收據號。',
+    '「未附收據」「未寫紀錄」會標紅，督考前可先把這些補齊。',
+    '「匯出 Excel」會產生 12 個月分頁＋各方案分頁＋年度彙總，格式比照所方原本那本年報表。',
+    '治療摘要屬紀錄內容，僅管理者、督導與該心理師本人看得到。',
+  ],
+  module: 'reports',
+  async render(el) {
+    const [year, picked] = (location.hash.split('/').slice(1));
+    const y = year || String(new Date().getFullYear());
+    const list = await GET(`/annual-report?year=${y}`);
+    const cid = Number(picked) || (list.counselors[0] && list.counselors[0].id) || 0;
+
+    el.innerHTML = `<div class="toolbar">
+        <label>年度</label><input id="y" type="number" value="${y}" style="width:100px">
+        <label>心理師</label>
+        <select id="c">${list.counselors.map(c =>
+    `<option value="${c.id}"${c.id === cid ? ' selected' : ''}>${UI.esc(c.name)}（${c.sessions} 人次）</option>`).join('')}</select>
+        <div class="spacer"></div>
+        <button class="btn secondary" id="xls">匯出 Excel</button>
+        <button class="btn secondary" id="print">列印／PDF</button>
+      </div><div id="body"></div>`;
+
+    const go = () => {
+      location.hash = `annual/${el.querySelector('#y').value}/${el.querySelector('#c').value}`;
+    };
+    el.querySelector('#y').onchange = go;
+    el.querySelector('#c').onchange = go;
+    el.querySelector('#xls').onclick = () => window.open(
+      `/api/annual-report/${el.querySelector('#c').value}/export?year=${el.querySelector('#y').value}&format=xls`, '_blank');
+    el.querySelector('#print').onclick = () => window.open(
+      `/api/annual-report/${el.querySelector('#c').value}/export?year=${el.querySelector('#y').value}&format=pdf`, '_blank');
+
+    const box = el.querySelector('#body');
+    if (!cid) { box.innerHTML = '<div class="empty">此年度尚無已完成的晤談</div>'; return; }
+    const d = await GET(`/annual-report/${cid}?year=${y}`);
+    const noteLabel = { missing: '未寫', draft: '未定稿', signed: '已定稿' };
+    const row = r => `<tr>
+      <td>${r.date}</td><td>${UI.esc(r.case_code)}</td>
+      <td>${UI.esc(r.client_code || r.client_name)}</td>
+      <td style="font-size:12px;max-width:320px">${UI.esc(r.summary)}</td>
+      <td style="text-align:right">${UI.fmtMoney(r.fee)}</td>
+      <td>${UI.esc(r.category)}</td>
+      <td style="text-align:right">${UI.fmtMoney(r.center)}</td>
+      <td style="text-align:right">${UI.fmtMoney(r.share)}</td>
+      <td>${r.receipt_no ? UI.esc(r.receipt_no) : '<span style="color:var(--danger)">未附</span>'}</td>
+      <td>${TW.inv_status[r.invoice_status] || (r.invoice_status === 'none' ? '未開單' : r.invoice_status)}</td>
+      <td>${r.note_status === 'missing' ? '<span style="color:var(--danger)">未寫</span>' : noteLabel[r.note_status]}</td></tr>`;
+    const heads = ['日期', '編碼', '個案', '治療摘要／報告', '費用', '類別', '所方', '心理師報酬', '收據號', '收款', '紀錄'];
+    const sumLine = (label, t) => `<tr><td>${label}</td><td>${t.sessions}</td>
+      <td style="text-align:right">${UI.fmtMoney(t.fee)}</td>
+      <td style="text-align:right">${UI.fmtMoney(t.center)}</td>
+      <td style="text-align:right">${UI.fmtMoney(t.share)}</td>
+      <td>${t.no_receipt}</td><td>${t.no_note}</td></tr>`;
+
+    box.innerHTML = `<div class="stat-grid">
+        <div class="stat"><div class="num">${d.total.sessions}</div><div class="label">全年人次</div></div>
+        <div class="stat"><div class="num">${UI.fmtMoney(d.total.fee)}</div><div class="label">費用合計</div></div>
+        <div class="stat"><div class="num">${UI.fmtMoney(d.total.share)}</div><div class="label">心理師報酬</div></div>
+        <div class="stat"><div class="num">${UI.fmtMoney(d.total.center)}</div><div class="label">所方</div></div>
+        <div class="stat"><div class="num ${d.total.no_receipt ? 'warn' : ''}">${d.total.no_receipt}</div><div class="label">未附收據</div></div>
+        <div class="stat"><div class="num ${d.total.no_note ? 'warn' : ''}">${d.total.no_note}</div><div class="label">未寫紀錄</div></div>
+      </div>
+      ${d.can_see_summary ? '' : '<div class="notice warn">治療摘要屬晤談紀錄內容，僅管理者、督導與該心理師本人可檢視。</div>'}
+      <div class="card"><h3>年度彙總</h3>
+        ${UI.table(['項目', '人次', '費用合計', '所方', '心理師報酬', '未附收據', '未寫紀錄'],
+    d.months.map(m => sumLine(m.label, m.total))
+      .concat([sumLine('<strong>自費</strong>', d.self_total), sumLine('<strong>機構</strong>', d.org_total),
+        sumLine('<strong>全年</strong>', d.total)])
+      .concat(d.plans.map(p => sumLine('方案：' + UI.esc(p.plan_name), p))))}</div>
+      ${d.months.filter(m => m.rows.length).map(m => `<div class="card">
+        <h3>${m.label}
+          <span style="font-size:13px;font-weight:400;color:var(--muted)">
+            ${m.total.sessions} 人次｜費用 ${UI.fmtMoney(m.total.fee)}｜所方 ${UI.fmtMoney(m.total.center)}｜報酬 ${UI.fmtMoney(m.total.share)}</span></h3>
+        ${UI.table(heads, m.rows.map(row))}
+        <div style="font-size:12.5px;color:var(--muted)">
+          自費案 ${m.self.sessions} 人次／${UI.fmtMoney(m.self.fee)}　機構案 ${m.org.sessions} 人次／${UI.fmtMoney(m.org.fee)}</div>
+      </div>`).join('') || '<div class="empty">此年度尚無已完成的晤談</div>'}`;
   }
 });

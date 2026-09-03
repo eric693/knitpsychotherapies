@@ -45,11 +45,11 @@ const PLANS = [
     fee: 0, session_minutes: 80,
     intro: '費用請傳訊至官方 LINE，由專員向您說明。' },
   { name: '國軍方案（40 分鐘）', kind: 'subsidy', appt_type: 'individual',
-    fee: 1800, session_minutes: 40, quota_per_year: 6,
+    fee: 1800, session_minutes: 40, quota_per_year: 6, code_prefix: '國軍',
     subsidy_program: '國軍心理健康支持方案',
     intro: '國防部所屬人員六次免費，需先於國防部系統完成預先審核。' },
   { name: '青壯方案（50 分鐘）', kind: 'subsidy', appt_type: 'individual',
-    fee: 1800, session_minutes: 50, age_min: 15, age_max: 45, quota_per_year: 3,
+    fee: 1800, session_minutes: 50, age_min: 15, age_max: 45, quota_per_year: 3, code_prefix: '青壯',
     subsidy_program: '青壯世代心理健康支持方案',
     intro: '15-45 歲三次免費。' },
   { name: '通訊（視訊）諮商（50 分鐘）', kind: 'self', appt_type: 'individual',
@@ -83,7 +83,9 @@ for (const c of COUNSELORS) {
 const PLAN_COLS = ['name', 'kind', 'appt_type', 'fee_mode', 'fee', 'fee_options', 'subsidy_amount',
   'subsidy_program', 'session_minutes', 'age_min', 'age_max', 'quota_per_year',
   'counselor_week_limit', 'counselor_month_limit', 'share_mode', 'share_percent', 'share_fixed',
-  'portal_visible', 'require_review', 'note', 'intro', 'sort', 'active', 'default_mode', 'venue_fee'];
+  'portal_visible', 'require_review', 'note', 'intro', 'sort', 'active', 'default_mode', 'venue_fee',
+  // 年報表的個案編碼標記（如 1140601_青壯1）；類別代碼由所方自行在方案設定填
+  'code_prefix'];
 
 const findPlan = db.prepare('SELECT * FROM service_plans WHERE name = ?');
 const insTopic = db.prepare('INSERT INTO plan_topics (plan_id, name, sort) VALUES (?,?,?)');
@@ -116,9 +118,12 @@ PLANS.forEach((p, idx) => {
     intro: p.intro || '',
     sort: idx + 1,
     active: 1,
-    default_mode: p.default_mode || 'onsite'
+    default_mode: p.default_mode || 'onsite',
+    code_prefix: p.code_prefix || ''
   };
   const exist = findPlan.get(p.name);
+  // 已在後台調整過的編碼標記不被重跑 seed 覆蓋
+  if (exist && exist.code_prefix) row.code_prefix = exist.code_prefix;
   let planId;
   if (exist) {
     db.prepare(`UPDATE service_plans SET ${PLAN_COLS.map(c => `${c} = ?`).join(', ')} WHERE id = ?`)

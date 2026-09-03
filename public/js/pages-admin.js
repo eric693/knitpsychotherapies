@@ -964,6 +964,17 @@ App.page('users', {
   })}
         ${UI.input('phone', '電話', { value: u ? u.phone : '' })}
         ${UI.input('email', 'Email', { value: u ? u.email : '' })}
+        <div class="form-row full" style="margin-top:4px"><label>領款人資料（列印勞務報酬單、申報扣繳憑單用）</label></div>
+        ${UI.input('id_no', '身分證字號', { value: u ? (u.id_no || '') : '' })}
+        ${UI.input('passport_no', '居留證／護照號碼', { value: u ? (u.passport_no || '') : '' })}
+        ${UI.select('residency', '身分別', [['local', '本國籍'], ['local_abroad', '本國籍但未在台居住'],
+    ['foreign_183', '外國籍在台滿 183 天'], ['foreign_lt183', '外國籍在台未滿 183 天']],
+  { value: u ? (u.residency || 'local') : 'local' })}
+        ${UI.input('household_address', '戶籍地址', { value: u ? (u.household_address || '') : '', full: true })}
+        ${UI.input('mailing_address', '通訊地址（同戶籍可留空）', { value: u ? (u.mailing_address || '') : '', full: true })}
+        ${UI.input('bank_name', '匯款銀行', { value: u ? (u.bank_name || '') : '' })}
+        ${UI.input('bank_account', '帳號', { value: u ? (u.bank_account || '') : '' })}
+        ${UI.input('bank_holder', '戶名（同姓名可留空）', { value: u ? (u.bank_holder || '') : '' })}
         ${UI.checkbox('portal_bookable', '出現在線上預約表單的心理師清單', u ? u.portal_bookable !== 0 : true)}
         ${UI.checkbox('online_only', '僅接受線上通訊諮商', u ? !!u.online_only : false)}
         ${App.meta.intern_review ? UI.checkbox('is_intern', '實習心理師（晤談紀錄須經指定督導覆核後才定稿）', u ? u.is_intern : false) : ''}
@@ -1103,7 +1114,9 @@ App.page('settings', {
       ['責任通報', [['mandatory_report_types', '應通報之事件類型（逗號分隔）'],
         ['report_deadline_hours', '通報時限（小時）']]],
       ['報酬與扣繳', [['withholding_rate', '執行業務所得扣繳率（0-1）'], ['withholding_min', '所得稅起扣金額'],
-        ['nhi_supplement_rate', '二代健保補充保費費率（0-1）'], ['nhi_supplement_min', '補充保費起扣金額']]],
+        ['nhi_supplement_rate', '二代健保補充保費費率（0-1）'], ['nhi_supplement_min', '補充保費起扣金額'],
+        ['payout_split_max', '拆單每筆上限（低於起扣門檻）'], ['payout_split_interval_days', '拆單每筆間隔天數'],
+        ['payout_slip_service', '勞務報酬單的勞務內容'], ['payout_slip_handler', '勞務報酬單經手人（留空用操作者）']]],
       ['提醒發送通道', [['notify_webhook_url', 'Webhook 網址（留空則僅人工發送）'],
         ['notify_webhook_token', 'Webhook 驗證權杖']]],
       ['提醒訊息', [['reminder_template', '晤談提醒範本（{client}{counselor}{date}{weekday}{time}{center}{cancel_hours}{phone}{meeting}）'],

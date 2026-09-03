@@ -215,10 +215,10 @@ router.post('/payouts', requireStaff('payouts'), (req, res) => {
   const withholding = b.withholding === undefined || b.withholding === '' ? auto.withholding : Number(b.withholding) || 0;
   const nhi = b.nhi_supplement === undefined || b.nhi_supplement === '' ? auto.nhi_supplement : Number(b.nhi_supplement) || 0;
   const info = db.prepare(`INSERT INTO payouts
-    (user_id, month, item, sessions, gross, income_type, withholding, nhi_supplement, net, note)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    (user_id, month, item, sessions, gross, income_type, withholding, nhi_supplement, net, note, pay_date)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
     u.id, b.month, b.item || '晤談鐘點', Number(b.sessions) || 0, gross, b.income_type || '9B',
-    withholding, nhi, gross - withholding - nhi, b.note || '');
+    withholding, nhi, gross - withholding - nhi, b.note || '', String(b.pay_date || ''));
   audit('staff', req.user.id, req.user.name, '新增報酬單', u.name, { month: b.month, gross });
   res.json({ id: info.lastInsertRowid });
 });
@@ -232,9 +232,9 @@ router.put('/payouts/:id', requireStaff('payouts'), (req, res) => {
   const withholding = Number(b.withholding) || 0;
   const nhi = Number(b.nhi_supplement) || 0;
   db.prepare(`UPDATE payouts SET month = ?, item = ?, sessions = ?, gross = ?, income_type = ?,
-      withholding = ?, nhi_supplement = ?, net = ?, note = ? WHERE id = ?`).run(
+      withholding = ?, nhi_supplement = ?, net = ?, note = ?, pay_date = ? WHERE id = ?`).run(
     b.month, b.item || '', Number(b.sessions) || 0, gross, b.income_type,
-    withholding, nhi, gross - withholding - nhi, b.note || '', p.id);
+    withholding, nhi, gross - withholding - nhi, b.note || '', String(b.pay_date || ''), p.id);
   audit('staff', req.user.id, req.user.name, '修改報酬單', String(p.user_id), { id: p.id });
   res.json({ ok: true });
 });
@@ -267,6 +267,226 @@ router.get('/payouts/withholding-summary', requireStaff('payouts'), (req, res) =
     FROM payouts p JOIN users u ON u.id = p.user_id
     WHERE substr(p.month, 1, 4) = ? AND p.status = 'paid'
     GROUP BY u.id, p.income_type ORDER BY u.name`).all(year));
+});
+
+// ---- 勞務報酬單：自動拆成數筆低於扣繳門檻的給付 ----
+//
+// 單次給付達 20,010 元才代扣 10% 所得稅、達 20,000 元才扣 2.11% 補充保費（門檻可於設定調整），
+// 所方習慣把一次結算拆成數次給付，逐筆低於門檻。這裡把拆法算好、逐筆建立報酬單，
+// 並以 batch_id 記住它們原屬同一次結算，之後仍看得出總額是多少。
+//
+// 提醒：拆單只是把「給付」分次，不改變全年所得總額；年度扣繳憑單仍以全年累計申報，
+// 是否適用免扣繳請與記帳單位確認。
+
+// 拆單上限：預設取設定值，同時不得超過所得稅起扣點與補充保費門檻（各減 1 元）
+function splitCap(max) {
+  const taxMin = Number(getSetting('withholding_min', '20010'));
+  const nhiMin = Number(getSetting('nhi_supplement_min', '20000'));
+  const limit = Math.max(1, Math.min(taxMin - 1, nhiMin - 1));
+  const want = Math.floor(Number(max) || Number(getSetting('payout_split_max', '19999')));
+  return Math.max(1, Math.min(want > 0 ? want : limit, limit));
+}
+
+// 平均拆成 n 筆（n = 無條件進位的最少筆數），除不盡的餘數分給前面幾筆，
+// 因此每筆金額最多只差 1 元，且都不超過上限。
+function splitAmounts(gross, cap) {
+  const total = Math.max(0, Math.round(Number(gross) || 0));
+  if (!total) return [];
+  const n = Math.ceil(total / cap);
+  const base = Math.floor(total / n);
+  const rest = total - base * n;
+  return Array.from({ length: n }, (_, i) => base + (i < rest ? 1 : 0));
+}
+
+// 依起始日與間隔天數排出每筆的支領日期；未指定起始日時不填日期，留給人工填。
+function splitPlan(b) {
+  const cap = splitCap(b.max);
+  const incomeType = b.income_type || '9B';
+  const amounts = splitAmounts(b.gross, cap);
+  const start = String(b.start_date || '');
+  const step = Math.max(0, Math.floor(Number(b.interval_days === undefined || b.interval_days === ''
+    ? getSetting('payout_split_interval_days', '0') : b.interval_days) || 0));
+  const parts = amounts.map((amount, i) => {
+    const payDate = start ? addDays(start, step * i) : '';
+    return {
+      seq: i + 1,
+      pay_date: payDate,
+      month: payDate ? payDate.slice(0, 7) : String(b.month || today().slice(0, 7)),
+      gross: amount,
+      ...calcDeduction(amount, incomeType)
+    };
+  });
+  const sum = k => parts.reduce((a, r) => a + r[k], 0);
+  return {
+    cap,
+    income_type: incomeType,
+    parts,
+    total_gross: sum('gross'),
+    total_withholding: sum('withholding'),
+    total_nhi: sum('nhi_supplement'),
+    total_net: sum('net')
+  };
+}
+
+router.get('/payouts/split-preview', requireStaff('payouts'), (req, res) => {
+  res.json(splitPlan(req.query || {}));
+});
+
+router.post('/payouts/split', requireStaff('payouts'), (req, res) => {
+  const b = req.body || {};
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(b.user_id) || 0);
+  if (!u) return res.status(400).json({ error: '請選擇心理師' });
+  if (!Number(b.gross)) return res.status(400).json({ error: '請填寫給付總額' });
+  if (!b.month && !b.start_date) return res.status(400).json({ error: '請選擇給付月份或起始支領日' });
+  const plan = splitPlan(b);
+  if (!plan.parts.length) return res.status(400).json({ error: '給付總額須大於 0' });
+
+  const batchId = `PB${Date.now().toString(36).toUpperCase()}${u.id}`;
+  const item = b.item || '晤談鐘點';
+  const sessions = Number(b.sessions) || 0;
+  const ins = db.prepare(`INSERT INTO payouts
+    (user_id, month, item, sessions, gross, income_type, withholding, nhi_supplement, net, note,
+     pay_date, batch_id, batch_seq, batch_total)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const ids = db.transaction(() => plan.parts.map(p => ins.run(
+    u.id, p.month, item, p.seq === 1 ? sessions : 0, p.gross, plan.income_type,
+    p.withholding, p.nhi_supplement, p.net, String(b.note || ''),
+    p.pay_date, batchId, p.seq, plan.parts.length).lastInsertRowid))();
+
+  audit('staff', req.user.id, req.user.name, '拆單建立報酬單', u.name,
+    { batchId, parts: plan.parts.length, total: plan.total_gross });
+  res.json({ batch_id: batchId, ids, ...plan });
+});
+
+// 同一批拆單一次付款／一次刪除，避免只處理到其中幾筆
+router.post('/payouts/batch/:batchId/pay', requireStaff('payouts'), (req, res) => {
+  const rows = db.prepare('SELECT * FROM payouts WHERE batch_id = ?').all(req.params.batchId);
+  if (!rows.length) return res.status(404).json({ error: '找不到此批報酬單' });
+  const paid = rows.some(r => r.status !== 'paid');
+  db.prepare('UPDATE payouts SET status = ?, paid_at = ? WHERE batch_id = ?')
+    .run(paid ? 'paid' : 'pending', paid ? today() : '', req.params.batchId);
+  audit('staff', req.user.id, req.user.name, paid ? '報酬付款（整批）' : '取消報酬付款（整批）',
+    String(rows[0].user_id), { batchId: req.params.batchId, count: rows.length });
+  res.json({ ok: true, count: rows.length });
+});
+
+router.delete('/payouts/batch/:batchId', requireStaff('payouts'), (req, res) => {
+  const rows = db.prepare('SELECT * FROM payouts WHERE batch_id = ?').all(req.params.batchId);
+  if (!rows.length) return res.status(404).json({ error: '找不到此批報酬單' });
+  if (rows.some(r => r.status === 'paid')) return res.status(400).json({ error: '已付款的報酬單不可刪除' });
+  db.prepare('DELETE FROM payouts WHERE batch_id = ?').run(req.params.batchId);
+  audit('staff', req.user.id, req.user.name, '刪除報酬單（整批）', String(rows[0].user_id),
+    { batchId: req.params.batchId, count: rows.length });
+  res.json({ ok: true, count: rows.length });
+});
+
+// ---- 勞務報酬單列印 ----
+const RESIDENCY_OPTIONS = [
+  ['local', '本國籍'],
+  ['local_abroad', '本國籍但未在台居住'],
+  ['foreign_183', '外國籍在台滿 183 天'],
+  ['foreign_lt183', '外國籍在台未滿 183 天']
+];
+
+function rocDate(d) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || ''));
+  if (!m) return '';
+  return `${Number(m[1]) - 1911} 年 ${Number(m[2])} 月 ${Number(m[3])} 日`;
+}
+
+function slipHtml(u, rows, opts) {
+  const esc = v => String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const money = n => Number(n || 0).toLocaleString('en-US');
+  const check = on => (on ? '■' : '□');
+  const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
+  const dateCell = r => rocDate(r.pay_date) || `${esc(r.month)}（日期待填）`;
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<title>勞務報酬單－${esc(u.name)}</title>
+<style>
+  @page { size: A4; margin: 16mm; }
+  body { font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; color: #1c2b2b; font-size: 13px; }
+  h1 { font-size: 20px; text-align: center; letter-spacing: 4px; margin: 0 0 12px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 10px; }
+  th, td { border: 1px solid #666; padding: 6px 8px; vertical-align: top; }
+  th { background: #eef3f3; width: 110px; text-align: left; font-weight: 600; }
+  .amt { text-align: right; }
+  .money th { width: auto; text-align: center; background: #eef3f3; }
+  .sign { margin-top: 22px; line-height: 2.4; }
+  .note { margin-top: 10px; font-size: 11.5px; color: #667; }
+  .bar { margin-bottom: 12px; }
+  @media print { .bar { display: none; } }
+</style></head><body>
+<div class="bar"><button onclick="window.print()">列印／另存為 PDF</button></div>
+<h1>勞務報酬單</h1>
+<table>
+  <tr><th>單位名稱</th><td>${esc(opts.centerName)}</td><th>統一編號</th><td>${esc(opts.taxId)}</td></tr>
+  <tr><th>單位地址</th><td colspan="3">${esc(opts.address)}</td></tr>
+  <tr><th>姓名</th><td>${esc(u.name)}</td><th>填表日期</th><td>${esc(rocDate(opts.formDate))}</td></tr>
+  <tr><th>身分別</th><td colspan="3">${RESIDENCY_OPTIONS.map(([k, label]) =>
+    `${check((u.residency || 'local') === k)} ${label}`).join('　')}
+    <div style="font-size:11.5px;color:#667">（天數以一年度為基準）</div></td></tr>
+  <tr><th>聯絡電話</th><td>${esc(u.phone)}</td><th>身分證字號</th><td>${esc(u.id_no)}</td></tr>
+  <tr><th>居留證／護照號碼</th><td>${esc(u.passport_no)}</td><th>所得類別</th><td>${esc(opts.incomeTypeLabel)}</td></tr>
+  <tr><th>戶籍地址</th><td colspan="3">${esc(u.household_address)}</td></tr>
+  <tr><th>通訊地址</th><td colspan="3">${u.mailing_address ? esc(u.mailing_address) : '■ 同戶籍地址'}</td></tr>
+  <tr><th>勞務內容</th><td colspan="3">${esc(opts.service)}${opts.item ? `　（${esc(opts.item)}）` : ''}</td></tr>
+</table>
+<table class="money">
+  <tr><th>領款金額</th><th>日期</th><th>支領金額</th><th>代扣所得稅</th><th>二代健保</th><th>支領淨額</th></tr>
+  ${rows.map((r, i) => `<tr>
+    <td class="amt">${i + 1}</td><td>${dateCell(r)}</td>
+    <td class="amt">${money(r.gross)} 元</td><td class="amt">${money(r.withholding)}</td>
+    <td class="amt">${money(r.nhi_supplement)}</td><td class="amt">${money(r.net)} 元</td></tr>`).join('')}
+  <tr><td colspan="2"><strong>合計</strong></td>
+    <td class="amt"><strong>${money(sum('gross'))} 元</strong></td>
+    <td class="amt"><strong>${money(sum('withholding'))}</strong></td>
+    <td class="amt"><strong>${money(sum('nhi_supplement'))}</strong></td>
+    <td class="amt"><strong>${money(sum('net'))} 元</strong></td></tr>
+</table>
+<table>
+  <tr><th>付款方式</th><td colspan="3">■ 匯款　　銀行：${esc(u.bank_name)}　　帳號：${esc(u.bank_account)}　　戶名：${esc(u.bank_holder || u.name)}</td></tr>
+</table>
+<div class="sign">上述資料經本人確認無誤，領款人：______________________（簽名）
+  <br>經手人：${esc(opts.handler)}</div>
+<div class="note">本單依所得稅法及全民健康保險補充保險費規定辦理；單次給付未達起扣門檻者免予扣繳，
+  年度所得仍以扣繳憑單全年累計金額為準。</div>
+<script>if (location.hash !== '#noprint') setTimeout(() => window.print(), 300);<\/script>
+</body></html>`;
+}
+
+// 列印勞務報酬單：可指定一批拆單（batch）或自行勾選的數筆（ids），同一位領款人印成一張
+router.get('/payouts/slip', requireStaff('payouts'), (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map(n => Number(n)).filter(Boolean);
+  const batch = String(req.query.batch || '');
+  if (!ids.length && !batch) return res.status(400).send('請指定要列印的報酬單');
+  const rows = batch
+    ? db.prepare('SELECT * FROM payouts WHERE batch_id = ? ORDER BY batch_seq, id').all(batch)
+    : db.prepare(`SELECT * FROM payouts WHERE id IN (${ids.map(() => '?').join(',')})
+        ORDER BY pay_date, id`).all(...ids);
+  if (!rows.length) return res.status(404).send('找不到報酬單');
+  // 行政人員只能印自己的（與 /payouts 清單同一道限制）
+  if (req.user.role === 'staff' && rows.some(r => r.user_id !== req.user.id)) {
+    return res.status(403).send('無權檢視他人的報酬單');
+  }
+  if (new Set(rows.map(r => r.user_id)).size > 1) {
+    return res.status(400).send('一次只能列印同一位領款人的報酬單');
+  }
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(rows[0].user_id);
+  const label = { '9A': '執行業務所得（9A）', '9B': '稿費講演鐘點費（9B）', 50: '薪資所得（50）' };
+  audit('staff', req.user.id, req.user.name, '列印勞務報酬單', u.name,
+    { ids: rows.map(r => r.id), batch });
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(slipHtml(u, rows, {
+    centerName: getSetting('center_name', '織心心理治療所'),
+    taxId: getSetting('center_tax_id', ''),
+    address: getSetting('center_address', ''),
+    service: getSetting('payout_slip_service', '心理治療（55 心理師）'),
+    handler: getSetting('payout_slip_handler', '') || req.user.name,
+    incomeTypeLabel: label[rows[0].income_type] || rows[0].income_type,
+    item: rows[0].item,
+    formDate: today()
+  }));
 });
 
 module.exports = router;

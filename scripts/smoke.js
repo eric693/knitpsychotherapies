@@ -160,7 +160,7 @@ function startServer() {
       out += d;
       if (out.includes('管理系統')) { clearTimeout(timer); resolve(); }
     });
-    server.stderr.on('data', d => { out += d; });
+    server.stderr.on('data', d => { out += d; if (process.env.SMOKE_VERBOSE) process.stderr.write(d); });
     server.on('exit', code => { clearTimeout(timer); reject(new Error(`伺服器結束（code ${code}）：\n${out}`)); });
   });
 }
@@ -1372,6 +1372,99 @@ function startServer() {
       body: JSON.stringify({ events: [] })
     });
     equal(r.status, 200, '應靜默忽略');
+  });
+
+  section('勞務報酬單拆單與心理師年報表');
+  await test('拆單試算：每筆都低於扣繳門檻，且合計等於總額', async () => {
+    const r = await admin.ok('GET', '/api/payouts/split-preview?gross=58000&income_type=9A&start_date=2026-01-05&interval_days=7');
+    equal(r.total_gross, 58000, '拆完合計應等於總額');
+    equal(r.parts.length, 3, '58,000 應拆成 3 筆');
+    assert(r.parts.every(p => p.gross <= r.cap), '每筆都不得超過上限');
+    assert(r.parts.every(p => p.withholding === 0 && p.nhi_supplement === 0), '低於門檻不應扣繳');
+    equal(r.parts[0].pay_date, '2026-01-05', '第一筆支領日');
+    equal(r.parts[1].pay_date, '2026-01-12', '第二筆間隔 7 天');
+  });
+  await test('未拆單的大額給付仍會扣所得稅與補充保費', async () => {
+    const r = await admin.ok('GET', '/api/payouts/preview?gross=58000&income_type=9A');
+    equal(r.withholding, 5800, '代扣 10%');
+    equal(r.nhi_supplement, Math.round(58000 * 0.0211), '補充保費 2.11%');
+  });
+  await test('拆單建立報酬單並可整批付款、列印勞務報酬單', async () => {
+    const lin = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    await admin.ok('PUT', `/api/users/${lin.id}`, {
+      id_no: 'A123456789', bank_name: '台中銀行', bank_account: '1234567890', residency: 'local'
+    });
+    const r = await admin.ok('POST', '/api/payouts/split', {
+      user_id: lin.id, month: '2026-01', item: '晤談鐘點', sessions: 20,
+      gross: 45000, income_type: '9A', start_date: '2026-01-05', interval_days: 7
+    });
+    equal(r.ids.length, 3, '應建立 3 筆');
+    const list = await admin.ok('GET', '/api/payouts?month=2026-01');
+    const batch = list.rows.filter(x => x.batch_id === r.batch_id);
+    equal(batch.length, 3, '清單查得到同批 3 筆');
+    equal(batch.reduce((a, b) => a + b.gross, 0), 45000, '同批合計等於原總額');
+    assert(batch.every(x => x.batch_total === 3 && x.pay_date), '每筆都記得同批筆數與支領日');
+    const slip = await admin.get(`/api/payouts/slip?batch=${r.batch_id}`);
+    equal(slip.status, 200, '應可列印勞務報酬單');
+    assert(slip.text.includes('勞務報酬單') && slip.text.includes('A123456789')
+      && slip.text.includes('45,000'), '報酬單應含抬頭、身分證字號與合計金額');
+    await admin.ok('POST', `/api/payouts/batch/${r.batch_id}/pay`, {});
+    const paid = (await admin.ok('GET', '/api/payouts?month=2026-01')).rows
+      .filter(x => x.batch_id === r.batch_id);
+    assert(paid.every(x => x.status === 'paid'), '整批付款應一次生效');
+    await admin.fails('DELETE', `/api/payouts/batch/${r.batch_id}`, undefined, '已付款');
+    await admin.ok('POST', `/api/payouts/batch/${r.batch_id}/pay`, {});
+    await admin.ok('DELETE', `/api/payouts/batch/${r.batch_id}`);
+    const gone = (await admin.ok('GET', '/api/payouts?month=2026-01')).rows
+      .filter(x => x.batch_id === r.batch_id);
+    equal(gone.length, 0, '整批刪除');
+  });
+  await test('行政人員不得列印他人的勞務報酬單', async () => {
+    const lin = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    const made = await admin.ok('POST', '/api/payouts', {
+      user_id: lin.id, month: '2026-02', item: '督導費', gross: 3000, income_type: '9A'
+    });
+    const r = await office.get(`/api/payouts/slip?ids=${made.id}`);
+    equal(r.status, 403, '行政只能印自己的');
+    await admin.ok('DELETE', `/api/payouts/${made.id}`);
+  });
+  await test('年報表：逐筆帶出編碼、費用拆帳與收據號，並依月份與方案彙總', async () => {
+    const year = ymd(new Date()).slice(0, 4);
+    const list = await admin.ok('GET', `/api/annual-report?year=${year}`);
+    assert(list.counselors.length, '該年度應有心理師服務量');
+    const cid = list.counselors[0].id;
+    const d = await admin.ok('GET', `/api/annual-report/${cid}?year=${year}`);
+    equal(d.months.length, 12, '應有 12 個月');
+    equal(d.rows.length, d.months.reduce((a, m) => a + m.rows.length, 0), '逐月列數應等於全年');
+    equal(d.total.fee, d.rows.reduce((a, r) => a + r.fee, 0), '費用合計');
+    assert(d.rows.every(r => r.center + r.share === r.fee), '所方 + 心理師報酬 = 費用');
+    assert(d.rows.every(r => /^\d{7}_/.test(r.case_code)), '每列都應有「民國初評日_次數」編碼');
+    assert(d.rows.some(r => r.receipt_no !== undefined), '應帶出收據欄');
+    equal(d.total.sessions, d.self_total.sessions + d.org_total.sessions, '自費＋機構＝全年人次');
+  });
+  await test('年報表匯出 Excel 與列印版', async () => {
+    const year = ymd(new Date()).slice(0, 4);
+    const cid = (await admin.ok('GET', `/api/annual-report?year=${year}`)).counselors[0].id;
+    const xls = await admin.get(`/api/annual-report/${cid}/export?year=${year}&format=xls`);
+    equal(xls.status, 200, 'Excel 匯出');
+    assert(xls.text.includes('<Worksheet ss:Name="年度彙總"') && xls.text.includes('ss:Name="1月"'),
+      '應有年度彙總與逐月分頁');
+    const pdf = await admin.get(`/api/annual-report/${cid}/export?year=${year}&format=pdf`);
+    equal(pdf.status, 200, '列印版');
+    assert(pdf.text.includes('年度心理師報表'), '列印版標題');
+  });
+  await test('治療摘要僅管理者、督導與本人看得到', async () => {
+    const year = ymd(new Date()).slice(0, 4);
+    const linUser = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    const mine = await lin.ok('GET', `/api/annual-report/${linUser.id}?year=${year}`);
+    assert(mine.can_see_summary, '心理師看自己的年報表應看得到摘要');
+    const others = (await admin.ok('GET', `/api/annual-report?year=${year}`)).counselors
+      .find(c => c.id !== linUser.id);
+    if (others) {
+      const d = await lin.ok('GET', `/api/annual-report/${others.id}?year=${year}`);
+      assert(!d.can_see_summary, '看別人的年報表不應顯示摘要');
+      assert(d.rows.every(r => !r.summary || r.summary.includes('＊')), '摘要應遮蔽');
+    }
   });
 
   section('Google 表單同步與 LINE 預約入口');

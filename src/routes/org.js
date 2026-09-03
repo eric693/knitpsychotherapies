@@ -312,6 +312,8 @@ router.get('/users', requireStaff('users'), (req, res) => {
   res.json(db.prepare(`SELECT id, username, name, role, title, license_type, license_no, license_expiry,
       specialty, phone, email, meeting_room_url, is_intern, supervisor_id, permissions, active,
       portal_bookable, online_only, intro,
+      id_no, passport_no, residency, household_address, mailing_address,
+      bank_name, bank_account, bank_holder,
       (SELECT name FROM users s WHERE s.id = users.supervisor_id) AS supervisor_name
     FROM users ORDER BY active DESC, id`)
     .all().map(u => ({ ...u, permissions: parsePermissions(u.permissions) })));
@@ -320,7 +322,10 @@ router.get('/users', requireStaff('users'), (req, res) => {
 const USER_FIELDS = ['name', 'role', 'title', 'license_type', 'license_no', 'license_expiry', 'specialty',
   'phone', 'email', 'meeting_room_url', 'is_intern', 'supervisor_id',
   // 線上預約表單相關：是否列入表單的心理師清單、是否只接線上通訊諮商、表單上的簡介
-  'portal_bookable', 'online_only', 'intro'];
+  'portal_bookable', 'online_only', 'intro',
+  // 勞務報酬單／扣繳憑單需載明的領款人資料
+  'id_no', 'passport_no', 'residency', 'household_address', 'mailing_address',
+  'bank_name', 'bank_account', 'bank_holder'];
 
 router.post('/users', requireStaff('users'), (req, res) => {
   const b = req.body || {};

@@ -288,6 +288,7 @@ function payoutDialog(p, month, onDone) {
     body: `<div class="form-grid">
         ${UI.select('user_id', '心理師', App.counselorOptions(), { value: d.user_id || App.me.id })}
         ${UI.input('month', '給付月份', { type: 'month', value: d.month })}
+        ${UI.input('pay_date', '支領日期', { type: 'date', value: d.pay_date || '' })}
         ${UI.input('item', '項目', { value: d.item || '' })}
         ${UI.input('sessions', '節數／場次', { type: 'number', value: d.sessions || '' })}
         ${UI.input('gross', '給付總額', { type: 'number', value: d.gross || '' })}
@@ -335,6 +336,62 @@ function payoutDialog(p, month, onDone) {
   });
 }
 
+// 勞務報酬單拆單：單次給付達門檻就得代扣所得稅與補充保費，
+// 所方習慣把一次結算拆成數次給付，逐筆低於門檻。這裡先試算拆法，確認後一次建立。
+function payoutSplitDialog(seed, month, onDone) {
+  const d = seed || {};
+  UI.modal({
+    title: '拆單建立報酬單',
+    wide: true,
+    submitText: '建立拆單',
+    body: `<div class="form-grid">
+        ${UI.select('user_id', '心理師', App.counselorOptions(), { value: d.user_id || App.me.id })}
+        ${UI.input('month', '給付月份', { type: 'month', value: d.month || month })}
+        ${UI.input('item', '項目', { value: d.item || '晤談鐘點' })}
+        ${UI.input('sessions', '節數／場次', { type: 'number', value: d.sessions || '' })}
+        ${UI.input('gross', '給付總額', { type: 'number', value: d.gross || '' })}
+        ${UI.select('income_type', '所得類別', INCOME_TYPES, { value: d.income_type || '9B' })}
+        ${UI.input('max', '每筆上限', { type: 'number', value: 19999 })}
+        ${UI.input('start_date', '起始支領日', { type: 'date', value: UI.today() })}
+        ${UI.input('interval_days', '每筆間隔天數', { type: 'number', value: 0 })}
+        ${UI.textarea('note', '備註', { value: d.note || '' })}
+      </div>
+      <div id="split" style="margin-top:12px"></div>`,
+    onOpen: el => {
+      const preview = async () => {
+        const f = UI.formData(el);
+        const box = el.querySelector('#split');
+        if (!Number(f.gross)) { box.innerHTML = ''; return; }
+        const q = new URLSearchParams({
+          gross: f.gross, income_type: f.income_type, max: f.max,
+          start_date: f.start_date || '', interval_days: f.interval_days || 0, month: f.month || ''
+        });
+        const r = await GET('/payouts/split-preview?' + q);
+        box.innerHTML = `${UI.table(['#', '支領日期', '給付月份', '支領金額', '代扣所得稅', '補充保費', '支領淨額'],
+          r.parts.map(p => `<tr><td>${p.seq}</td><td>${p.pay_date || '-'}</td><td>${p.month}</td>
+            <td>${UI.fmtMoney(p.gross)}</td><td>${UI.fmtMoney(p.withholding)}</td>
+            <td>${UI.fmtMoney(p.nhi_supplement)}</td><td><strong>${UI.fmtMoney(p.net)}</strong></td></tr>`))}
+          <div class="notice">拆成 <strong>${r.parts.length}</strong> 筆，每筆上限 ${UI.fmtMoney(r.cap)}；
+            合計給付 ${UI.fmtMoney(r.total_gross)}　實付 ${UI.fmtMoney(r.total_net)}。
+            拆單只是把給付分次，年度所得仍以全年累計申報。</div>`;
+      };
+      el.querySelectorAll('input,select').forEach(i => {
+        i.oninput = () => { clearTimeout(el._t); el._t = setTimeout(preview, 250); };
+        i.onchange = preview;
+      });
+      preview();
+    },
+    onSubmit: async el => {
+      const f = UI.formData(el);
+      if (!Number(f.gross)) throw new Error('請填寫給付總額');
+      const r = await POST('/payouts/split', f);
+      UI.toast(`已建立 ${r.ids.length} 筆`);
+      onDone && onDone();
+      window.open(`/api/payouts/slip?batch=${encodeURIComponent(r.batch_id)}`, '_blank');
+    }
+  });
+}
+
 App.page('payouts', {
   title: '報酬與扣繳',
   sub: '心理師鐘點給付、代扣所得稅與二代健保補充保費；年度彙總供申報扣繳憑單',
@@ -356,19 +413,36 @@ App.page('payouts', {
           <div class="stat"><div class="num warn">${UI.fmtMoney(d.total_nhi)}</div><div class="label">補充保費</div></div>
           <div class="stat"><div class="num">${UI.fmtMoney(d.total_net)}</div><div class="label">實付合計</div></div>
         </div>
-        <div class="card">${UI.table(['月份', '心理師', '項目', '節數', '給付總額', '所得類別', '代扣稅額', '補充保費', '實付', '狀態', ''],
+        <div class="card">${UI.table(['月份', '支領日', '心理師', '項目', '節數', '給付總額', '所得類別', '代扣稅額', '補充保費', '實付', '狀態', ''],
           d.rows.map(p => `<tr>
-            <td>${p.month}</td><td>${UI.esc(p.user_name)}</td><td>${UI.esc(p.item)}</td>
+            <td>${p.month}${p.batch_id ? ` <span class="tag">拆單 ${p.batch_seq}/${p.batch_total}</span>` : ''}</td>
+            <td>${p.pay_date || '-'}</td>
+            <td>${UI.esc(p.user_name)}</td><td>${UI.esc(p.item)}</td>
             <td>${p.sessions || '-'}</td><td>${UI.fmtMoney(p.gross)}</td><td>${p.income_type}</td>
             <td>${UI.fmtMoney(p.withholding)}</td><td>${UI.fmtMoney(p.nhi_supplement)}</td>
             <td><strong>${UI.fmtMoney(p.net)}</strong></td>
             <td>${p.status === 'paid' ? UI.tag('已付 ' + p.paid_at, 'ok') : UI.tag('待付款', 'warn')}</td>
             <td style="white-space:nowrap">
+              <button class="btn tiny secondary" data-slip="${p.batch_id || ''}" data-slip-id="${p.id}">報酬單</button>
               ${p.status === 'paid' ? `<button class="btn tiny secondary" data-unpay="${p.id}">取消付款</button>`
     : `<button class="btn tiny secondary" data-e="${p.id}">編輯</button>
                  <button class="btn tiny" data-pay="${p.id}">付款</button>
-                 <button class="btn tiny danger" data-d="${p.id}">刪除</button>`}</td></tr>`),
+                 <button class="btn tiny danger" data-d="${p.id}">刪除</button>`}
+              ${p.batch_id && p.batch_seq === 1 ? `<button class="btn tiny secondary" data-batch="${p.batch_id}">整批${p.status === 'paid' ? '取消付款' : '付款'}</button>` : ''}</td></tr>`),
           '此月份尚無報酬單')}</div>`;
+      // 拆單的整批一起印成一張勞務報酬單；單筆則只印該筆
+      el.querySelectorAll('[data-slip]').forEach(b => {
+        b.onclick = () => window.open(b.dataset.slip
+          ? `/api/payouts/slip?batch=${encodeURIComponent(b.dataset.slip)}`
+          : `/api/payouts/slip?ids=${b.dataset.slipId}`, '_blank');
+      });
+      el.querySelectorAll('[data-batch]').forEach(b => {
+        b.onclick = async () => {
+          if (!await UI.confirm('整批切換付款狀態？')) return;
+          await POST(`/payouts/batch/${b.dataset.batch}/pay`, {});
+          UI.toast('已更新'); draw();
+        };
+      });
       el.querySelectorAll('[data-e]').forEach(b => {
         b.onclick = () => payoutDialog(d.rows.find(x => x.id === Number(b.dataset.e)), month, draw);
       });
@@ -400,11 +474,13 @@ App.page('payouts', {
         <div class="spacer"></div>
         <button class="btn secondary" id="sum">年度扣繳彙總</button>
         <button class="btn secondary" id="gen">依當月晤談帶入</button>
+        <button class="btn secondary" id="split">拆單建立</button>
         <button class="btn" id="add">新增報酬單</button>
       </div><div id="list"></div>`;
     el.querySelector('#m').onchange = draw;
     el.querySelector('#st').onchange = draw;
     el.querySelector('#add').onclick = () => payoutDialog(null, el.querySelector('#m').value, draw);
+    el.querySelector('#split').onclick = () => payoutSplitDialog(null, el.querySelector('#m').value, draw);
 
     // 依當月已完成晤談自動帶出鐘點，省去人工加總；金額與扣繳仍可逐筆調整
     el.querySelector('#gen').onclick = async () => {
@@ -419,17 +495,22 @@ App.page('payouts', {
             <td><input type="checkbox" class="pk" data-i="${i}" checked></td>
             <td>${UI.esc(r.user_name)}</td><td>${r.sessions}</td><td>${UI.fmtMoney(r.fee_total)}</td>
             <td><input class="gross" data-i="${i}" type="number" value="${r.fee_total}" style="width:120px"></td></tr>`))}
+          <label style="display:block;margin-top:10px">
+            <input type="checkbox" id="autosplit" checked> 給付總額超過每筆上限（19,999）時自動拆成多筆</label>
           <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
             預設帶入當月晤談收費合計，請依實際拆帳比例調整給付總額；扣繳金額於建立時自動試算。</div>`,
         onSubmit: async e2 => {
           const picks = [...e2.querySelectorAll('.pk')].filter(c => c.checked).map(c => Number(c.dataset.i));
           if (!picks.length) throw new Error('請至少勾選一位');
+          const autoSplit = e2.querySelector('#autosplit').checked;
           for (const i of picks) {
             const g = Number(e2.querySelector(`.gross[data-i="${i}"]`).value) || 0;
-            await POST('/payouts', {
+            const data = {
               user_id: rows[i].user_id, month, item: '晤談鐘點',
               sessions: rows[i].sessions, gross: g, income_type: '9B'
-            });
+            };
+            if (autoSplit && g > 19999) await POST('/payouts/split', { ...data, start_date: month + '-05' });
+            else await POST('/payouts', data);
           }
           UI.toast(`已建立 ${picks.length} 筆`);
           draw();

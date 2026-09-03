@@ -49,6 +49,17 @@ ensureColumns('users', {
   is_intern: 'INTEGER NOT NULL DEFAULT 0',
   supervisor_id: 'INTEGER REFERENCES users(id)'
 });
+// 勞務報酬單需載明的領款人資料（扣繳憑單、匯款用；非必填）
+ensureColumns('users', {
+  id_no: "TEXT NOT NULL DEFAULT ''",                 // 身分證字號／居留證號
+  passport_no: "TEXT NOT NULL DEFAULT ''",           // 居留證／護照號碼（外籍者）
+  residency: "TEXT NOT NULL DEFAULT 'local'",        // local 本國籍 / local_abroad 本國籍未在台居住 / foreign_183 外籍滿183天 / foreign_lt183 外籍未滿183天
+  household_address: "TEXT NOT NULL DEFAULT ''",     // 戶籍地址
+  mailing_address: "TEXT NOT NULL DEFAULT ''",       // 通訊地址（同戶籍者留空）
+  bank_name: "TEXT NOT NULL DEFAULT ''",
+  bank_account: "TEXT NOT NULL DEFAULT ''",
+  bank_holder: "TEXT NOT NULL DEFAULT ''"
+});
 ensureColumns('session_notes', {
   // 覆核狀態：none 不需覆核（正式心理師）／pending 待督導覆核／approved 已覆核／returned 退回補正
   review_status: "TEXT NOT NULL DEFAULT 'none'",
@@ -150,6 +161,15 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at);`);
+
+// 報酬單拆單：同一筆報酬拆成數筆各低於扣繳門檻時，用 batch_* 記住它們原屬同一次結算
+ensureColumns('payouts', {
+  pay_date: "TEXT NOT NULL DEFAULT ''",              // 支領日期（列印勞務報酬單用）
+  batch_id: "TEXT NOT NULL DEFAULT ''",              // 同批拆單共用的識別碼
+  batch_seq: 'INTEGER NOT NULL DEFAULT 0',           // 該批中的第幾筆（1 起）
+  batch_total: 'INTEGER NOT NULL DEFAULT 0'          // 該批共幾筆
+});
+db.exec('CREATE INDEX IF NOT EXISTS idx_payout_batch ON payouts(batch_id)');
 
 // 心理衡鑑報告書（WAIS、MMPI、魏氏、投射測驗等）：屬晤談內容層級的高敏感資料，
 // 讀寫比照晤談紀錄的保密邊界（僅主責心理師、督導、管理者），定稿後不可修改。
@@ -269,6 +289,13 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     withholding_min: '20010',           // 單次給付達此金額才扣繳所得稅
     nhi_supplement_rate: '0.0211',
     nhi_supplement_min: '20000',        // 單次給付達此金額才扣補充保費
+    // 勞務報酬單：一次給付達門檻就得代扣，所方習慣把同一筆結算拆成數次給付。
+    // 上限預設 19999（同時低於所得稅起扣點 20010 與補充保費門檻 20000），
+    // 拆出的每筆間隔天數預設 0（同日多筆），可於設定調整。
+    payout_split_max: '19999',
+    payout_split_interval_days: '0',
+    payout_slip_service: '心理治療（55 心理師）',   // 勞務報酬單的勞務內容欄
+    payout_slip_handler: '',                        // 經手人（留空時印製表當下的操作者）
     // 對外提醒發送：填入 webhook 後由系統送出，留空則僅產生訊息供人工發送
     notify_webhook_url: '',
     notify_webhook_token: '',
@@ -784,6 +811,18 @@ ensureColumns('appointments', {
 ensureColumns('invoices', {
   plan_id: 'INTEGER REFERENCES service_plans(id)',
   topic_id: 'INTEGER REFERENCES plan_topics(id)'
+});
+
+// 年報表（督考用）欄位：
+// report_code 是所方在年報表「類別」欄填的代碼（如 0 指定案／1 派案／3 機構案／30 機構指定／31 機構派案），
+// code_prefix 則是個案編碼中接在初評日期後的標記（如「青壯」「國軍」；自費案留空）。
+ensureColumns('service_plans', {
+  report_code: "TEXT NOT NULL DEFAULT ''",
+  code_prefix: "TEXT NOT NULL DEFAULT ''"
+});
+ensureColumns('plan_topics', {
+  report_code: "TEXT NOT NULL DEFAULT ''",
+  code_prefix: "TEXT NOT NULL DEFAULT ''"
 });
 
 // 「線上預約申請」原本併在「預約排程」權限底下，拆成獨立模組後，
