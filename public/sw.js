@@ -39,7 +39,12 @@ self.addEventListener('fetch', e => {
       const fresh = await fetch(req);
       if (fresh && fresh.ok) {
         const cache = await caches.open(CACHE);
-        cache.put(req, fresh.clone());
+        await cache.put(req, fresh.clone());
+        // 靜態檔網址會帶版本號（/js/app.js?v=…），每次改版都是一個新網址；
+        // 若不清掉同一支檔案的舊版本，快取會隨著部署次數一路長大。
+        const same = (await cache.keys())
+          .filter(k => new URL(k.url).pathname === url.pathname && k.url !== req.url);
+        await Promise.all(same.map(k => cache.delete(k)));
       }
       return fresh;
     } catch (err) {
