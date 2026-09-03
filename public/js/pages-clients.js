@@ -104,10 +104,55 @@ function duplicatesDialog(onDone) {
             <td>${c.appointments}</td><td>${c.notes}</td><td>${c.invoices}</td>
             <td>${UI.esc(c.last_appointment || '-')}</td>
             <td style="white-space:nowrap">
+              <button class="btn tiny" data-keep="${c.id}" data-group="${UI.esc(g.key)}">合併到這筆</button>
               <button class="btn tiny secondary" data-off="${c.id}">停用</button>
               ${!c.appointments && !c.notes && !c.invoices
     ? `<button class="btn tiny danger" data-purge="${c.id}">永久刪除</button>` : ''}</td></tr>`))}
-        </div>`).join('')}`;
+        </div>`).join('')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          「合併到這筆」會把同組其他個案的預約、紀錄、收費、收據等全部改掛到你選的那一筆，
+          被併走的個案停用但仍查得到；合併後可在下方「合併紀錄」還原。</div>
+        <div style="margin-top:10px"><button class="btn tiny secondary" id="dup-log">合併紀錄／還原</button></div>`;
+
+      // 合併：挑一筆留下，同組其他筆全部併過去
+      box.querySelectorAll('[data-keep]').forEach(b => {
+        b.onclick = async () => {
+          const keep = Number(b.dataset.keep);
+          const group = d.groups.find(g => g.key === b.dataset.group);
+          const others = group.clients.filter(c => c.id !== keep);
+          if (!await UI.confirm(`把其他 ${others.length} 筆合併到這一筆？資料會全部改掛過來，之後可還原。`)) return;
+          try {
+            for (const o of others) await POST(`/clients/${keep}/merge`, { merged_id: o.id });
+            UI.toast('已合併');
+            close();
+            onDone && onDone();
+          } catch (e) { UI.err(e); }
+        };
+      });
+      box.querySelector('#dup-log').onclick = async () => {
+        const list = await GET('/client-merges');
+        UI.modal({
+          title: '個案合併紀錄', wide: true, hideFooter: true,
+          body: `${UI.table(['時間', '被併走', '併到', '搬動筆數', '操作者', ''], list.map(m => `<tr>
+              <td>${UI.esc(m.created_at)}</td>
+              <td>${UI.esc(m.merged_code)} ${UI.esc(m.merged_name)}</td>
+              <td>${UI.esc(m.kept_code)}</td>
+              <td>${Object.values(m.moved).reduce((a, x) => a + x.length, 0)} 筆
+                <span style="font-size:12px;color:var(--muted)">${Object.keys(m.moved).length} 張表</span></td>
+              <td>${UI.esc(m.operator_name || '')}</td>
+              <td>${m.undone_at ? UI.tag('已還原 ' + m.undone_at.slice(0, 10), 'ok')
+    : `<button class="btn tiny secondary" data-undo="${m.id}">↺ 還原</button>`}</td></tr>`), '尚無合併紀錄')}`,
+          onOpen: (b2, close2) => {
+            b2.querySelectorAll('[data-undo]').forEach(u => {
+              u.onclick = async () => {
+                if (!await UI.confirm('還原這次合併？搬過去的資料會原樣搬回原個案，個案重新啟用。')) return;
+                try { await POST(`/client-merges/${u.dataset.undo}/undo`, {}); UI.toast('已還原'); close2(); onDone && onDone(); }
+                catch (e) { UI.err(e); }
+              };
+            });
+          }
+        });
+      };
       box.querySelectorAll('[data-off]').forEach(b => {
         b.onclick = async () => {
           if (!await UI.confirm('停用這筆個案？資料保留，但不再出現在排約清單。')) return;

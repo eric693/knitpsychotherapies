@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
-const { db, audit, today, nextClientCode, ageYears, getSetting, UPLOAD_DIR } = require('../db');
+const { db, audit, today, nowStamp, nextClientCode, ageYears, getSetting, UPLOAD_DIR } = require('../db');
 const { requireStaff, requireAdmin, canViewClientNotes, clientIp } = require('../auth');
 
 const { createCloseFollowUps } = require('./aftercare');
@@ -100,14 +100,14 @@ router.get('/clients/options', requireStaff('clients'), (req, res) => {
 // 重複個案：舊資料匯入時同一個人被開了兩個以上案號，排約時要挑很久，
 // 統計與額度也會被拆開算。這支把疑似重複的整理出來，附各自的預約與紀錄筆數供人工判斷。
 router.get('/clients/duplicates', requireStaff('clients'), (req, res) => {
-  const rows = db.prepare(`SELECT c.id, c.code, c.name, c.phone, c.birth_date, c.status,
+  const rows = db.prepare(`SELECT c.id, c.code, c.name, c.phone, c.id_no, c.birth_date, c.status,
       c.counselor_id, u.name AS counselor_name,
       (SELECT COUNT(*) FROM appointments a WHERE a.client_id = c.id) AS appointments,
       (SELECT COUNT(*) FROM session_notes n WHERE n.client_id = c.id) AS notes,
       (SELECT COUNT(*) FROM invoices i WHERE i.client_id = c.id) AS invoices,
       (SELECT MAX(a.date) FROM appointments a WHERE a.client_id = c.id) AS last_appointment
     FROM clients c LEFT JOIN users u ON u.id = c.counselor_id
-    WHERE c.active = 1 ORDER BY c.name, c.code`).all();
+    WHERE c.active = 1 AND c.merged_into IS NULL ORDER BY c.name, c.code`).all();
   const groups = [];
   const push = (key, kind, list) => {
     if (list.length < 2) return;
@@ -115,11 +115,15 @@ router.get('/clients/duplicates', requireStaff('clients'), (req, res) => {
   };
   const byName = new Map();
   const byPhone = new Map();
+  const byIdNo = new Map();
   for (const c of rows) {
     if (c.name) byName.set(c.name, (byName.get(c.name) || []).concat(c));
     const ph = String(c.phone || '').replace(/\D/g, '');
     if (ph.length >= 8) byPhone.set(ph, (byPhone.get(ph) || []).concat(c));
+    if (c.id_no) byIdNo.set(c.id_no, (byIdNo.get(c.id_no) || []).concat(c));
   }
+  // 身分證字號一樣幾乎可以確定是同一人，優先列出
+  for (const [idno, list] of byIdNo) push(idno, '同身分證字號', list);
   for (const [name, list] of byName) push(name, '同姓名', list);
   for (const [phone, list] of byPhone) {
     // 同手機但不同姓名才另外列（同姓名的已在上面）
@@ -370,6 +374,84 @@ function consentFits(t, group) {
   if (a === 'minor') return group === 'child' || group === 'teen';
   return a === group;
 }
+
+// ---- 重複個案合併 ----
+//
+// 線上表單一個人用不同電話送兩次就會變成兩筆個案，紀錄與收費各自散在兩邊。
+// 合併＝把「要併走的那筆」底下的資料全部改掛到「要留下的那筆」，
+// 並把搬過哪幾列記在 client_merges.moved，需要時整批搬回去（還原）。
+//
+// 只搬資料、不刪除個案：被併走的個案改為停用並標記 merged_into，仍查得到。
+const MERGE_TABLES = ['appointments', 'session_notes', 'treatment_plans', 'assessments', 'assessment_tasks',
+  'risk_events', 'supervisions', 'consents', 'packages', 'invoices', 'messages', 'intakes',
+  'group_members', 'group_attendance', 'attachments', 'notifications', 'assessment_reports',
+  'safety_plans', 'referrals', 'follow_ups', 'refunds', 'plan_usage_adjustments', 'receipts',
+  'booking_requests', 'line_bindings', 'certificates'];
+
+router.post('/clients/:id/merge', requireStaff('clients'), (req, res) => {
+  const keptId = Number(req.params.id);
+  const mergedId = Number((req.body || {}).merged_id) || 0;
+  if (keptId === mergedId) return res.status(400).json({ error: '不能跟自己合併' });
+  const kept = db.prepare('SELECT * FROM clients WHERE id = ?').get(keptId);
+  const merged = db.prepare('SELECT * FROM clients WHERE id = ?').get(mergedId);
+  if (!kept || !merged) return res.status(404).json({ error: '找不到個案' });
+  if (merged.merged_into) return res.status(400).json({ error: '這筆已經被合併過了' });
+
+  const moved = {};
+  db.transaction(() => {
+    for (const t of MERGE_TABLES) {
+      const ids = db.prepare(`SELECT id FROM ${t} WHERE client_id = ?`).all(mergedId).map(r => r.id);
+      if (!ids.length) continue;
+      db.prepare(`UPDATE ${t} SET client_id = ? WHERE client_id = ?`).run(keptId, mergedId);
+      moved[t] = ids;
+    }
+    // 留下的那筆若缺欄位，用被併走的補齊（不覆蓋已填的）
+    const fill = ['phone', 'email', 'address', 'id_no', 'birth_date', 'gender', 'guardian_name',
+      'guardian_phone', 'emergency_name', 'emergency_phone', 'school', 'grade'];
+    const patch = {};
+    for (const f of fill) if (!kept[f] && merged[f]) patch[f] = merged[f];
+    if (Object.keys(patch).length) {
+      db.prepare(`UPDATE clients SET ${Object.keys(patch).map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
+        .run(...Object.values(patch), keptId);
+    }
+    db.prepare(`UPDATE clients SET active = 0, merged_into = ?, portal_enabled = 0,
+        note = ? WHERE id = ?`)
+      .run(keptId, (merged.note ? merged.note + '；' : '') + `已合併至 ${kept.code}`, mergedId);
+    db.prepare(`INSERT INTO client_merges (kept_id, merged_id, kept_code, merged_code, merged_name, moved, operator_id)
+      VALUES (?,?,?,?,?,?,?)`)
+      .run(keptId, mergedId, kept.code, merged.code, merged.name, JSON.stringify(moved), req.user.id);
+  })();
+
+  const counts = Object.fromEntries(Object.entries(moved).map(([k, v]) => [k, v.length]));
+  audit('staff', req.user.id, req.user.name, '合併個案', `${merged.code} → ${kept.code}`, counts);
+  res.json({ ok: true, moved: counts });
+});
+
+router.get('/client-merges', requireStaff('clients'), (req, res) => {
+  res.json(db.prepare(`SELECT m.*, u.name AS operator_name FROM client_merges m
+    LEFT JOIN users u ON u.id = m.operator_id ORDER BY m.id DESC LIMIT 100`).all()
+    .map(m => ({ ...m, moved: JSON.parse(m.moved || '{}') })));
+});
+
+// 還原合併：把當初搬過去的那幾列原樣搬回來，個案重新啟用
+router.post('/client-merges/:id/undo', requireStaff('clients'), (req, res) => {
+  const m = db.prepare('SELECT * FROM client_merges WHERE id = ?').get(req.params.id);
+  if (!m) return res.status(404).json({ error: '找不到此合併紀錄' });
+  if (m.undone_at) return res.status(400).json({ error: '此合併已還原過' });
+  let moved = {};
+  try { moved = JSON.parse(m.moved || '{}'); } catch { moved = {}; }
+  db.transaction(() => {
+    for (const [t, ids] of Object.entries(moved)) {
+      if (!MERGE_TABLES.includes(t) || !Array.isArray(ids) || !ids.length) continue;
+      db.prepare(`UPDATE ${t} SET client_id = ? WHERE id IN (${ids.map(() => '?').join(',')})`)
+        .run(m.merged_id, ...ids);
+    }
+    db.prepare("UPDATE clients SET active = 1, merged_into = NULL WHERE id = ?").run(m.merged_id);
+    db.prepare('UPDATE client_merges SET undone_at = ? WHERE id = ?').run(nowStamp(), m.id);
+  })();
+  audit('staff', req.user.id, req.user.name, '還原個案合併', `${m.merged_code} ← ${m.kept_code}`);
+  res.json({ ok: true });
+});
 
 // ---- 同意書列印／匯出 ----
 //

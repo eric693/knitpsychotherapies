@@ -1171,6 +1171,25 @@ ensureColumns('service_plans', {
   register_url: "TEXT NOT NULL DEFAULT ''",
   signin_url: "TEXT NOT NULL DEFAULT ''"
 });
+// 個案合併紀錄：同一個人用不同電話重複建檔時，把資料併到留下的那筆，
+// 並記下「哪張表的哪幾列被搬過」，需要時可以整批還原。
+db.exec(`CREATE TABLE IF NOT EXISTS client_merges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kept_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  merged_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  kept_code TEXT NOT NULL DEFAULT '',
+  merged_code TEXT NOT NULL DEFAULT '',
+  merged_name TEXT NOT NULL DEFAULT '',
+  moved TEXT NOT NULL DEFAULT '{}',            -- 各資料表被搬動的列 id（JSON）
+  undone_at TEXT NOT NULL DEFAULT '',
+  operator_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_merge_kept ON client_merges(kept_id);`);
+ensureColumns('clients', {
+  merged_into: 'INTEGER REFERENCES clients(id)'   // 被併走的個案指向留下的那筆
+});
+
 // 機構核銷：每家合作單位的核銷頻率與該附哪些資料，
 // 櫃檯每個月照「機構核銷」總表就知道這個月要跟誰請款、要準備什麼。
 ensureColumns('partners', {

@@ -151,6 +151,7 @@ function sameYearMondays(count, minDaysAhead = 60) {
 }
 
 let certIdEmployment = 0, certIdTreatment = 0;
+let mergeKeepId = 0, mergeDupId = 0, mergeApptId = 0;
 let server;
 function startServer() {
   return new Promise((resolve, reject) => {
@@ -2053,6 +2054,49 @@ function startServer() {
     const dup = await admin.ok('GET', '/api/bookings/duplicates');
     assert(Array.isArray(dup), '應回傳清單');
     assert(dup.every(r => r.client_match || r.same_phone || r.same_name), '只列出有重複疑慮的');
+  });
+
+  section('重複個案合併與還原');
+  await test('合併把資料搬到留下的那筆，被併走的停用但查得到', async () => {
+    const mk = async (name, phone) => (await admin.ok('POST', '/api/clients',
+      { name, phone, birth_date: '1990-03-03', counselor_id: (await admin.ok('GET', '/api/me')).id })).id;
+    const keep = await mk('重複測試', '0966000111');
+    const dup = await mk('重複測試', '0966000222');
+    const me = await admin.ok('GET', '/api/me');
+    const appt = await admin.ok('POST', '/api/appointments',
+      { client_id: dup, counselor_id: me.id, date: nextWeekday(5, 240), start_time: '07:00', fee: 1500, override: true });
+    const inv = await admin.ok('POST', '/api/invoices',
+      { client_id: dup, date: ymd(new Date()), item: '合併測試', amount: 1500 });
+    const r = await admin.ok('POST', `/api/clients/${keep}/merge`, { merged_id: dup });
+    assert(r.moved.appointments >= 1 && r.moved.invoices >= 1, '預約與收費單都要搬過去：' + JSON.stringify(r.moved));
+    const kept = await admin.ok('GET', `/api/clients/${keep}`);
+    assert(kept.appointments.some(a => a.id === appt.id), '預約掛到留下的個案');
+    assert(kept.invoices.some(i => i.id === inv.id), '收費單掛到留下的個案');
+    equal(kept.phone, '0966000111', '留下的資料不被覆蓋');
+    const gone = await admin.ok('GET', `/api/clients/${dup}`);
+    equal(gone.active, 0, '被併走的停用');
+    equal(gone.merged_into, keep, '標記併到哪一筆');
+    await admin.fails('POST', `/api/clients/${keep}/merge`, { merged_id: dup }, '已經被合併過');
+    mergeKeepId = keep; mergeDupId = dup; mergeApptId = appt.id;
+  });
+  await test('合併可還原，資料原樣搬回去', async () => {
+    const list = await admin.ok('GET', '/api/client-merges');
+    const m = list.find(x => x.kept_id === mergeKeepId && x.merged_id === mergeDupId);
+    assert(m, '要有合併紀錄');
+    await admin.ok('POST', `/api/client-merges/${m.id}/undo`, {});
+    const back = await admin.ok('GET', `/api/clients/${mergeDupId}`);
+    equal(back.active, 1, '重新啟用');
+    assert(!back.merged_into, '不再標記已合併');
+    assert(back.appointments.some(a => a.id === mergeApptId), '預約搬回原個案');
+    const kept = await admin.ok('GET', `/api/clients/${mergeKeepId}`);
+    assert(!kept.appointments.some(a => a.id === mergeApptId), '留下的那筆不再有這筆預約');
+    await admin.fails('POST', `/api/client-merges/${m.id}/undo`, {}, '已還原過');
+  });
+  await test('重複個案清單排除已合併者，並支援身分證字號比對', async () => {
+    const d = await admin.ok('GET', '/api/clients/duplicates');
+    assert(Array.isArray(d.groups), '應回傳分組清單');
+    assert(d.groups.every(g => g.clients.length > 1 && g.kind), '每組至少兩筆且說明比對方式');
+    assert(d.groups.every(g => g.clients.every(c => !c.merged_into)), '已合併的不再列入');
   });
 
   section('Google 表單同步與 LINE 預約入口');
