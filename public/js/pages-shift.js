@@ -82,7 +82,8 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
         <button class="btn secondary small" id="q-custom">自訂時段</button>
         <button class="btn secondary small" id="q-clear">全部清空</button>
         <div class="spacer"></div>
-        <button class="btn" id="save">${week ? '儲存這一週' : '儲存固定班'}</button>
+        <span id="save-state" style="font-size:12.5px;color:var(--muted)">點格子即存檔</span>
+        <button class="btn secondary small" id="undo" disabled>復原上一步</button>
       </div>
       <div class="toolbar" style="margin-top:-4px">
         <button class="btn ${week ? 'secondary' : ''} small" id="w-fixed">每週固定班</button>
@@ -101,7 +102,8 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
     : ''}</th>`).join('')}</tr></thead>
           <tbody>${rows.join('')}</tbody></table></div>
         <div style="font-size:12.5px;color:var(--muted);margin-top:10px">
-          點一下切換單格，按住拖曳（手機可直接用手指滑過格子）可整段刷選；
+          點一下切換單格，按住拖曳（手機可直接用手指滑過格子）可整段刷選，<strong>改完即自動儲存</strong>，
+          誤觸可按右上角「復原上一步」；
           手機要左右捲動看週六週日時，請從<strong>最左邊的時間欄或表頭</strong>滑動；表格範圍（目前 ${shiftFmt(cfg.start)}–${shiftFmt(cfg.end)}、每格 ${cfg.step} 分鐘）
           與快填按鈕可於系統設定調整。不在格線上的時間請用「自訂時段」。
           已被預約或請假的時間會自動從可預約清單扣除，不必在這裡調整。<br>
@@ -114,21 +116,30 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
       ${cid === App.me.id ? `<div class="card"><h3>訂閱到手機日曆</h3><div id="cal-sub"><div class="empty">載入中...</div></div></div>` : ''}`;
 
     const table = el.querySelector('.shift-table');
-    let dragging = false, mode = true;
+    let dragging = false, mode = true, mouseHandled = false;
     // 改過還沒存就切走，刷了半天的班表會整個不見，因此記錄有無未存變更
     let dirty = false;
+    // autoSave 由下方的自動儲存區塊指派；在那之前的初始繪製不會觸發存檔
+    let autoSave = null;
     const toggle = (td, on) => {
       const key = `${td.dataset.wd}|${td.dataset.min}`;
       const was = picked.has(key);
       if (on) { picked.add(key); td.classList.add('on'); } else { picked.delete(key); td.classList.remove('on'); }
-      if (was !== on) dirty = true;
+      if (was !== on) { dirty = true; if (autoSave) autoSave(); }
     };
-    const leaveOk = async () => !dirty || UI.confirm('排班有尚未儲存的變更，離開會失效。確定不儲存就離開？');
+    // 切換心理師或週次前，把還在等待送出的變更先存掉（自動儲存是延遲 0.6 秒送出的）
+    const leaveOk = async () => {
+      if (!dirty) return true;
+      clearTimeout(saveTimer);
+      await doSave();
+      return true;
+    };
     table.addEventListener('mousedown', e => {
       const td = e.target.closest('.shift-cell');
       if (!td) return;
       e.preventDefault();
       dragging = true;
+      mouseHandled = true;
       mode = !td.classList.contains('on');
       toggle(td, mode);
     });
@@ -138,10 +149,12 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
       if (td) toggle(td, mode);
     });
     document.addEventListener('mouseup', () => { dragging = false; });
-    // 手機沒有 hover，改成單點切換
+    // 滑鼠單擊時，mousedown 已經切換過一次，click 不能再切一次（否則點一下等於沒動）；
+    // 觸控與鍵盤操作不會走 mousedown，才由 click 負責切換。
     table.addEventListener('click', e => {
       const td = e.target.closest('.shift-cell');
-      if (td && !dragging) toggle(td, !td.classList.contains('on'));
+      if (!td || dragging || mouseHandled) { mouseHandled = false; return; }
+      toggle(td, !td.classList.contains('on'));
     });
     // 手機刷選：touchmove 只給座標，要自己找出手指下的格子；
     // 同時擋掉預設捲動，否則一拖就變成整頁上下滑，格子選不動。
@@ -160,7 +173,7 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
       const td = el2 && el2.closest && el2.closest('.shift-cell');
       if (td) { e.preventDefault(); toggle(td, touchMode); }
     }, { passive: false });
-    const endTouch = () => { touching = false; };
+    const endTouch = () => { touching = false; mouseHandled = true; };
     table.addEventListener('touchend', endTouch);
     table.addEventListener('touchcancel', endTouch);
 
@@ -182,6 +195,7 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
       el.querySelectorAll('.shift-cell').forEach(td => toggle(td, false));
       custom = [];
       drawCustom();
+      if (autoSave) autoSave();
     };
 
     // 自訂時段：任意起訖時間，可一次套用到多個星期；不受格線限制
@@ -195,7 +209,11 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
           <td>${UI.esc(c.note || '')}</td>
           <td><button class="btn tiny danger" data-cx="${i}">刪除</button></td></tr>`))}`;
       box.querySelectorAll('[data-cx]').forEach(b => {
-        b.onclick = () => { custom.splice(Number(b.dataset.cx), 1); dirty = true; drawCustom(); };
+        b.onclick = () => {
+          custom.splice(Number(b.dataset.cx), 1);
+          dirty = true; drawCustom();
+          if (autoSave) autoSave();
+        };
       });
     };
     drawCustom();
@@ -231,7 +249,8 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
         }
         drawCustom();
         dirty = true;
-        UI.toast('已加入，記得按「儲存排班」');
+        if (autoSave) autoSave();
+        UI.toast('已加入並自動儲存');
       }
     });
     if (canPickOther) el.querySelector('#sc').onchange = async e => {
@@ -255,15 +274,52 @@ async function renderShiftPanel(el, arg, onChange, weekArg) {
       } catch (e) { UI.err(e); }
     };
 
-    el.querySelector('#save').onclick = async () => {
+    // 點一下就存：改完不必再按儲存鈕。連續刷選會等手放開後 0.6 秒才送出，
+    // 避免拖一整排就打幾十次 API；存檔前先留一份上一版，誤觸可按「復原上一步」還原。
+    const state = el.querySelector('#save-state');
+    const undoBtn = el.querySelector('#undo');
+    let prevBlocks = shiftBlocks(picked, cfg).concat(custom);
+    let saving = false, saveTimer = null;
+    const doSave = async () => {
       const blocks = shiftBlocks(picked, cfg).concat(custom);
-      if (!blocks.length && !await UI.confirm(week
-        ? `這一週沒有任何時段，存檔後 ${week} 當週將完全不開放預約，確定嗎？`
-        : '固定班沒有任何時段，存檔後所有週次都不會開放預約，確定嗎？')) return;
+      const before = prevBlocks;
+      saving = true;
+      state.textContent = '儲存中…';
       try {
         const r = await POST('/availability/bulk', { counselor_id: cid, blocks, week_start: week });
+        prevBlocks = blocks;
         dirty = false;
-        UI.toast(week ? `已儲存 ${week} 當週的 ${r.count} 個時段` : `已儲存固定班 ${r.count} 個時段`);
+        undoBtn.disabled = false;
+        undoBtn._before = before;
+        state.textContent = `已自動儲存　${UI.nowTime ? UI.nowTime() : new Date().toTimeString().slice(0, 5)}　共 ${r.count} 個時段`;
+      } catch (e) {
+        state.textContent = '儲存失敗，請再試一次';
+        UI.err(e);
+      } finally { saving = false; }
+    };
+    const scheduleSave = () => {
+      dirty = true;
+      state.textContent = '尚未儲存…';
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(doSave, 600);
+    };
+    autoSave = scheduleSave;
+    // 直接關掉分頁時，把等待中的變更立刻送出（beacon 不受頁面關閉影響）
+    window.addEventListener('beforeunload', () => {
+      if (!dirty || saving) return;
+      const blocks = shiftBlocks(picked, cfg).concat(custom);
+      try {
+        navigator.sendBeacon('/api/availability/bulk',
+          new Blob([JSON.stringify({ counselor_id: cid, blocks, week_start: week })],
+            { type: 'application/json' }));
+      } catch { /* 送不出去就算了，畫面上仍顯示尚未儲存 */ }
+    });
+    undoBtn.onclick = async () => {
+      const before = undoBtn._before;
+      if (!before) return;
+      try {
+        await POST('/availability/bulk', { counselor_id: cid, blocks: before, week_start: week });
+        UI.toast('已復原上一步');
         reload(week);
       } catch (e) { UI.err(e); }
     };
