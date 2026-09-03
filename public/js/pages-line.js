@@ -2,6 +2,25 @@
 
 const BOOKING_STATUS = { new: '待處理', confirmed: '已成立', rejected: '未成立', cancelled: '已取消' };
 
+// Google 表單的問題會增刪，同步時整份回應都留了一份；
+// 這裡原樣攤開來，櫃檯不必回 Google 後台就看得到個案填的每一個字。
+function formAnswers(b) {
+  if (!b.form_answers) return '';
+  let obj;
+  try { obj = JSON.parse(b.form_answers); } catch (e) { return ''; }
+  const rows = Object.entries(obj)
+    .filter(([, v]) => String(v == null ? '' : v).trim())
+    .map(([k, v]) => `<div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid var(--border)">
+        <div style="flex:0 0 40%;color:var(--muted)">${UI.esc(k)}</div>
+        <div style="flex:1">${UI.nl2br(String(Array.isArray(v) ? v.join('、') : v))}</div>
+      </div>`).join('');
+  if (!rows) return '';
+  return `<details style="margin-top:10px;font-size:13px">
+      <summary style="cursor:pointer;color:var(--primary)">個案在預約表單填的完整內容（${Object.keys(obj).length} 題）</summary>
+      <div style="margin-top:6px">${rows}</div>
+    </details>`;
+}
+
 async function bookingDialog(id, onDone) {
   const b = await GET(`/bookings/${id}`);
   const slotBtns = (b.slots || []).map(s =>
@@ -34,10 +53,15 @@ async function bookingDialog(id, onDone) {
         <div><div class="dg-label">形式</div>${b.mode === 'online' ? '線上視訊' : '到所'}</div>
         <div><div class="dg-label">費用</div>${UI.fmtMoney(b.fee_choice)}</div>
         <div><div class="dg-label">送出時間</div>${UI.esc(b.created_at)}</div>
+        ${b.category ? `<div><div class="dg-label">預約類別</div>${UI.esc(b.category)}</div>` : ''}
+        ${b.education ? `<div><div class="dg-label">教育程度</div>${UI.esc(b.education)}</div>` : ''}
+        ${b.guardian_phone ? `<div><div class="dg-label">家長電話</div>${UI.esc(b.guardian_phone)}${b.guardian_name ? `（${UI.esc(b.guardian_name)}）` : ''}</div>` : ''}
       </div>
       ${b.main_issue ? `<div style="margin-top:10px;font-size:13.5px"><strong>主訴：</strong>${UI.nl2br(b.main_issue)}</div>` : ''}
       ${b.expectation ? `<div style="font-size:13.5px"><strong>期待：</strong>${UI.nl2br(b.expectation)}</div>` : ''}
       ${b.alt_note ? `<div style="font-size:13.5px"><strong>其他可配合時段：</strong>${UI.nl2br(b.alt_note)}</div>` : ''}
+      ${b.reply_note ? `<div style="font-size:13.5px;color:#b8860b"><strong>同步時的提醒：</strong>${UI.nl2br(b.reply_note)}</div>` : ''}
+      ${formAnswers(b)}
       ${errs || warns ? `<div style="margin-top:10px;padding:10px;background:var(--primary-light);border-radius:8px;font-size:13px">${errs}${warns}</div>` : ''}
       <div class="form-grid" style="margin-top:12px">
         ${UI.select('counselor_id', '心理師', App.counselorOptions(), { value: b.counselor_id || '' })}

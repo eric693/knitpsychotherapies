@@ -1385,42 +1385,89 @@ function startServer() {
   await test('產生密鑰後可收表單回應並自動對應方案與心理師', async () => {
     const gen = await admin.ok('PUT', '/api/integrations/google-form', { regenerate: true });
     assert(gen.secret && gen.secret.length > 20, '應產生密鑰');
+    // 題目標題與選項文字照抄本所的「織心心理治療所 預約表單」，含全形數字與括號註解
     const payload = {
       secret: gen.secret,
       response_id: 'smoke-resp-1',
       answers: {
-        姓名: '陳表單', 信箱: 'form@example.com', 聯絡電話: '0955-123-456', 生理性別: '女',
-        出生年月日: '1995/06/15', 地址: '台中市太平區測試路 1 號', 身分證字號: 'a123456789',
-        緊急聯絡人: '陳母', 緊急聯絡人電話: '0912345000', 緊急聯絡人關係: '母子',
-        '諮商方案 ': '成人個別心理治療／諮商（50分鐘2000元）',
-        諮商主題: '情緒困擾',
-        '預約之心理師          織心心理治療所心理師介紹': '鍾芯瑜 臨床心理師',
-        欲安排之諮商時間: '星期一09:00-11:00、星期三14:00-16:00、星期五13:00-17:00'
+        預約類別: '成人',
+        '預約項目（可申請療育補助）': '個別治療／諮商(２０００／５０分鐘)',
+        '就診者姓名\n(註：我們只提供自費心理治療/諮商，沒有提供開藥服務，謝謝~)': '陳表單',
+        生理性別: '女',
+        出生年月日: '1995-06-15',
+        您的電話: '0955-123-456',
+        您的email: 'form@example.com',
+        教育程度: '大學',
+        '請簡述您想尋求協助的主要原因：': '近三個月失眠、情緒低落',
+        '請簡述您期待得到的幫忙(如果需要EMDR眼動減敏療法請備註)': '希望能穩定睡眠，需要 EMDR',
+        '預約時間（星期一至星期五１４：００－２１：００；星期六９：００－１７：００）請填寫三個方便的時段，如禮拜五19:00（若需要其他時段請透過助理詢問）': '禮拜一19:00、禮拜三20:00、禮拜五19:00',
+        是否指定心理師: '鍾芯瑜心理師',
+        '': '我已加入官方LINE並主動傳送姓名'
       }
     };
     const r = await fetch(BASE + '/api/integrations/google-form', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      method: 'post'.toUpperCase(), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
     });
     const d = await r.json();
     assert(r.ok, '同步失敗：' + JSON.stringify(d));
-    equal(d.matched.plan, '成人個別心理治療／諮商（50 分鐘）', '方案對應');
-    equal(d.matched.topic, '情緒困擾', '主題對應');
+    equal(d.matched.plan, '個別治療／諮商（50 分鐘）', '方案對應（選項含全形價目說明）');
     equal(d.matched.counselor, '鍾芯瑜', '心理師對應');
+    assert((await admin.ok('GET', '/api/bookings')).some(x => x.id === d.id), '應寫進線上預約申請');
+    const full = await admin.ok('GET', `/api/bookings/${d.id}`);
+    equal(full.phone, '0955123456', '電話');
+    equal(full.email, 'form@example.com', 'Email');
+    equal(full.birth_date, '1995-06-15', '出生年月日');
+    equal(full.gender, 'female', '生理性別');
+    equal(full.category, '成人', '預約類別');
+    equal(full.education, '大學', '教育程度');
+    assert(/失眠/.test(full.main_issue), '主要原因');
+    assert(/EMDR/.test(full.expectation), '期待得到的幫忙');
+    assert(/禮拜一19:00/.test(full.alt_note), '預約時間');
+    equal(Object.keys(JSON.parse(full.form_answers)).length, Object.keys(payload.answers).length, '完整回應題數');
+    // 兒青段：孩子姓名＋家長電話，且家長電話另存一份
+    const child = await (await fetch(BASE + '/api/integrations/google-form', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret: gen.secret, response_id: 'smoke-resp-child', answers: {
+        預約類別: '兒童青少年',
+        '預約項目（可申請療育補助）': '兒青團體治療(１０００／５０分鐘；須至少進行一次個別課程)',
+        '孩子姓名\n(註：我們只提供自費心理治療/諮商，沒有提供開藥服務，謝謝~)': '李小安',
+        生理性別: '男', 出生年月日: '2014/03/02',
+        '家長的電話': '0912-000-111', '家長EMAIL（若沒有電子郵件請填無）': '無',
+        孩子教育程度: '國小四年級',
+        '請簡述您想尋求協助的主要原因：': '學校適應困難',
+        '請簡述您期待得到的幫忙': '希望能交到朋友',
+        是否指定心理師: '不指定，由所方媒合專業及可配合時間的心理師'
+      } })
+    })).json();
+    equal(child.matched.plan, '兒青團體治療（50 分鐘）', '兒青方案對應');
+    equal(child.matched.counselor, null, '不指定心理師不應誤配');
+    const childRow = await admin.ok('GET', `/api/bookings/${child.id}`);
+    equal(childRow.phone, '0912000111', '兒青案以家長電話為聯絡電話');
+    equal(childRow.guardian_phone, '0912000111', '家長電話另存');
+    equal(childRow.education, '國小四年級', '孩子教育程度');
+    // 由申請建檔時，表單資料要一路帶進個案
+    const made = await admin.ok('POST', `/api/bookings/${child.id}/create-client`);
+    const madeClient = await admin.ok('GET', `/api/clients/${made.client_id}`);
+    equal(madeClient.education, '國小四年級', '教育程度帶進個案');
+    equal(madeClient.guardian_phone, '0912000111', '家長電話帶進個案');
+    equal(madeClient.is_minor, 1, '未成年判定');
+    assert(/交到朋友/.test(madeClient.note), '期待帶進個案備註');
+
     // 同一份回應重送不應產生第二筆
     const again = await (await fetch(BASE + '/api/integrations/google-form', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
     })).json();
     equal(again.id, d.id, '重送應回同一筆');
     const rows = await admin.ok('GET', '/api/bookings?status=new');
-    const row = rows.find(x => x.id === d.id);
-    assert(row && row.phone === '0955123456', '電話應正規化');
-    assert(/星期一/.test(row.alt_note), '欲安排時間應存入');
-    // 建檔時把地址、身分證與緊急聯絡人一併帶進個案資料
+    assert(rows.some(x => x.id === d.id), '待處理清單應含此申請');
+    // 成人段建檔：主訴與指定心理師一併帶進個案
     const c = await admin.ok('POST', `/api/bookings/${d.id}/create-client`);
     const client = await admin.ok('GET', `/api/clients/${c.client_id}`);
-    equal(client.id_no, 'A123456789', '身分證字號');
-    equal(client.emergency_phone, '0912345000', '緊急聯絡人電話');
-    assert(client.address.includes('太平'), '地址');
+    equal(client.phone, '0955123456', '電話應正規化');
+    equal(client.email, 'form@example.com', 'Email 帶進個案');
+    equal(client.education, '大學', '教育程度帶進個案');
+    assert(/失眠/.test(client.main_issue), '主訴帶進個案');
+    equal(client.source, 'Google 預約表單', '來源標為表單')
   });
   await test('表單同步設定頁提供 Apps Script 程式碼', async () => {
     const d = await admin.ok('GET', '/api/integrations/google-form');

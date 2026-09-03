@@ -296,7 +296,7 @@ router.get('/bookings/:id', requireStaff('bookings'), (req, res) => {
 // 已成立的申請不再開放修改，該改的是排程上的那筆晤談。
 const BOOKING_EDIT_FIELDS = ['name', 'phone', 'email', 'gender', 'birth_date', 'plan_id', 'topic_id',
   'counselor_id', 'date', 'start_time', 'alt_note', 'mode', 'fee_choice', 'partner_name',
-  'main_issue', 'expectation', 'reply_note'];
+  'main_issue', 'expectation', 'reply_note', 'education', 'guardian_name', 'guardian_phone'];
 router.put('/bookings/:id', requireStaff('bookings'), (req, res) => {
   const b = db.prepare('SELECT * FROM booking_requests WHERE id = ?').get(req.params.id);
   if (!b) return res.status(404).json({ error: '找不到此預約申請' });
@@ -352,15 +352,20 @@ router.post('/bookings/:id/create-client', requireStaff('clients'), (req, res) =
   const digits = String(b.phone || '').replace(/\D/g, '');
   const pwHash = digits.length >= 6 ? bcrypt.hashSync(digits.slice(-6), 10) : '';
   const info = db.prepare(`INSERT INTO clients
-    (code, name, gender, birth_date, phone, email, address, id_no,
+    (code, name, gender, birth_date, phone, email, address, id_no, education,
      emergency_name, emergency_phone, emergency_relationship,
-     counselor_id, status, main_issue, source, is_minor, intake_date,
+     guardian_name, guardian_phone,
+     counselor_id, status, main_issue, note, source, is_minor, intake_date,
      password_hash, must_change_password)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'intake',?,?,?,?,?,?)`).run(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'intake',?,?,?,?,?,?,?)`).run(
     code, b.name, b.gender || '', b.birth_date || '', b.phone, b.email || '',
-    b.address || '', b.id_no || '',
+    b.address || '', b.id_no || '', b.education || '',
     b.emergency_name || '', b.emergency_phone || '', b.emergency_relationship || '',
-    b.counselor_id || null, b.main_issue || '', b.source === 'google_form' ? 'Google 預約表單' : '線上預約表單',
+    b.guardian_name || '', b.guardian_phone || '',
+    b.counselor_id || null, b.main_issue || '',
+    // 表單問的「期待得到的幫忙」沒有對應的個案欄位，接進備註才不會在建檔時掉掉
+    b.expectation ? `個案於預約表單填寫的期待：${b.expectation}` : '',
+    b.source === 'google_form' ? 'Google 預約表單' : '線上預約表單',
     age !== null && age < adultAge ? 1 : 0, today(), pwHash, pwHash ? 1 : 0);
   db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(info.lastInsertRowid, b.id);
   audit('staff', req.user.id, req.user.name, '由預約申請建檔', code);

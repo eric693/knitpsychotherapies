@@ -18,12 +18,17 @@ const line = require('../line');
 const router = express.Router();
 const ingestLimit = rateLimit({ windowMs: 60 * 1000, max: 60, prefix: 'gform:' });
 
-// 選項文字對回資料庫：去掉全形括號內的價目說明與空白後比對，
-// 例如「個別心理諮商（50分鐘2000元）」→ 對到方案「個別心理諮商（50 分鐘）」。
+// 表單選項常混用全形字（「(２０００／５０分鐘)」），先轉成半形再比對，
+// 否則括號裡的價目說明因為 \d 對不到全形數字而不會被剝掉。
+function toHalf(t) {
+  return String(t || '').replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+}
+// 選項文字對回資料庫：去掉括號內的價目說明與空白後比對，
+// 例如「個別治療／諮商(２０００／５０分鐘)」→ 對到方案「個別治療／諮商（50 分鐘）」。
 function normalize(t) {
-  return String(t || '')
-    .replace(/[（(][^）)]*[）)]/g, m => (/\d/.test(m) && /元|分鐘|次|場地費/.test(m) ? '' : m))
-    .replace(/\s|　|\/|／|-|－/g, '')
+  return toHalf(t)
+    .replace(/[（(][^）)]*[）)]/g, m => (/\d/.test(m) && /元|分鐘|次|場地費|免費/.test(m) ? '' : m))
+    .replace(/\s|　|\/|／|-|－|、|,|，/g, '')
     .toLowerCase();
 }
 function matchPlan(text) {
@@ -39,10 +44,10 @@ function matchTopic(planId, text) {
   const rows = db.prepare('SELECT * FROM plan_topics WHERE plan_id = ? AND active = 1').all(planId);
   return rows.find(t => normalize(t.name) === key) || null;
 }
-// 「鍾芯瑜 臨床心理師」→ 取姓名部分比對；「由諮商所安排合適之心理師」→ 不指定
+// 「鍾芯瑜心理師」→ 取姓名部分比對；「不指定，由所方媒合…」→ 不指定
 function matchCounselor(text) {
   const raw = String(text || '').trim();
-  if (!raw || /安排/.test(raw)) return null;
+  if (!raw || /安排|媒合|不指定/.test(raw)) return null;
   const rows = db.prepare("SELECT * FROM users WHERE active = 1 AND role IN ('counselor','supervisor','admin')").all();
   return rows.find(u => raw.startsWith(u.name)) || rows.find(u => raw.includes(u.name)) || null;
 }
@@ -80,16 +85,22 @@ router.post('/integrations/google-form', ingestLimit, async (req, res) => {
   }
   const f = b.answers || b;   // 允許直接把答案物件送上來
 
-  const pick = (...keys) => {
-    for (const k of keys) {
-      const hit = Object.keys(f).find(x => x.replace(/\s|　/g, '').includes(k));
+  // 表單的問題標題常帶括號註解與換行（「就診者姓名\n(註：…)」），
+  // 因此以「去掉空白後包含關鍵字」比對，並依傳入順序優先取用。
+  const keys = Object.keys(f);
+  const flat = k => String(k).replace(/\s|　/g, '').toLowerCase();
+  const pick = (...want) => {
+    for (const w of want) {
+      const hit = keys.find(x => flat(x).includes(flat(w)));
       if (hit && String(f[hit]).trim()) return String(f[hit]).trim();
     }
     return '';
   };
 
-  const name = pick('姓名');
-  const phone = normPhone(pick('聯絡電話', '電話', '手機'));
+  // 姓名／電話：成人段是「就診者姓名」「您的電話」，兒青段是「孩子姓名」「家長的電話」
+  const name = pick('就診者姓名', '孩子姓名', '您的姓名', '姓名');
+  const childPhone = normPhone(pick('家長的電話'));
+  const phone = normPhone(pick('您的電話', '聯絡電話', '手機', '電話')) || childPhone;
   if (!name || !phone) return res.status(400).json({ error: '缺少姓名或聯絡電話' });
 
   // 同一份回應重送不會產生第二筆（Apps Script 重試、手動補送都可能發生）
@@ -99,37 +110,49 @@ router.post('/integrations/google-form', ingestLimit, async (req, res) => {
     if (dup) return res.json({ ok: true, id: dup.id, duplicated: true });
   }
 
-  const planText = pick('諮商方案', '方案');
+  const category = pick('預約類別');
+  const planText = pick('預約項目', '諮商方案', '方案');
   const plan = matchPlan(planText);
   const topicText = pick('諮商主題', '主題');
   const topic = plan ? matchTopic(plan.id, topicText) : null;
-  const counselorText = pick('心理師');
+  const counselorText = pick('是否指定心理師', '心理師');
   const counselor = matchCounselor(counselorText);
   const birth = normDate(pick('出生年月日', '生日'));
   const client = db.prepare('SELECT * FROM clients WHERE phone = ? AND active = 1 ORDER BY id DESC LIMIT 1').get(phone) || null;
 
   // 表單沒有選時段的機制，個案填的是「方便預約之時段」文字，一律進 alt_note 由櫃檯排
-  const preferred = pick('欲安排之諮商時間', '諮商時間', '時段');
+  const preferred = pick('預約時間', '欲安排之諮商時間', '諮商時間', '時段');
+  const mainIssue = pick('主要原因', '主訴', '困擾', '想談');
+  const expectation = pick('期待');
+  const education = pick('教育程度');
 
+  // 對不到的選項不擋收件，改成櫃檯看得到的提醒；資料照收，人工指定即可
   const notes = [];
   if (planText && !plan) notes.push(`方案未對應：${planText}`);
   if (topicText && !topic) notes.push(`主題未對應：${topicText}`);
-  if (counselorText && !counselor && !/安排/.test(counselorText)) notes.push(`心理師未對應：${counselorText}`);
+  if (counselorText && !counselor && !/安排|媒合|不指定/.test(counselorText)) notes.push(`心理師未對應：${counselorText}`);
+  if (/國軍/.test(planText) && !/已完成/.test(pick('國軍方案'))) notes.push('國軍方案：尚未確認已完成國防部預先審核');
+  if (!/已加入/.test(pick('我已加入', '官方LINE', 'LINE'))) notes.push('尚未確認已加入官方 LINE 並傳送姓名');
 
   const info = db.prepare(`INSERT INTO booking_requests
     (name, phone, email, gender, birth_date, is_new, client_id, plan_id, topic_id, counselor_id,
-     date, start_time, alt_note, mode, fee_choice, main_issue, source, consent,
-     topic_other, address, id_no, emergency_name, emergency_phone, emergency_relationship, external_id, reply_note)
-    VALUES (?,?,?,?,?,?,?,?,?,?,'','',?,?,?,?,'google_form',1,?,?,?,?,?,?,?,?)`).run(
-    name, phone, pick('信箱', 'email', 'Email'), normGender(pick('生理性別', '性別')), birth,
+     date, start_time, alt_note, mode, fee_choice, main_issue, expectation, source, consent,
+     topic_other, address, id_no, emergency_name, emergency_phone, emergency_relationship,
+     category, education, guardian_name, guardian_phone, form_answers, external_id, reply_note)
+    VALUES (?,?,?,?,?,?,?,?,?,?,'','',?,?,?,?,?,'google_form',1,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    name, phone, pick('您的email', '家長email', '信箱', 'email'),
+    normGender(pick('生理性別', '性別')), birth,
     client ? 0 : 1, client ? client.id : null,
     plan ? plan.id : null, topic ? topic.id : null, counselor ? counselor.id : null,
     preferred, plan && plan.default_mode === 'online' ? 'online' : 'onsite',
-    plan ? plan.fee : 0, pick('主訴', '困擾', '想談'),
+    plan ? plan.fee : 0, mainIssue, expectation,
     topicText && !topic ? topicText : '',
     pick('地址'), pick('身分證字號', '身分證').toUpperCase(),
     pick('緊急聯絡人姓名', '緊急聯絡人'), normPhone(pick('緊急聯絡人電話')),
-    pick('緊急聯絡人關係'), externalId, notes.join('；'));
+    pick('緊急聯絡人關係'),
+    category, education, pick('家長姓名'), childPhone,
+    // 表單問題會增刪，整份回應原封不動留一份，櫃檯在申請頁展開就看得到
+    JSON.stringify(f), externalId, notes.join('；'));
 
   const id = info.lastInsertRowid;
   audit('system', null, 'Google 表單', '表單預約同步', String(id), { name, plan: planText, matched: !!plan });

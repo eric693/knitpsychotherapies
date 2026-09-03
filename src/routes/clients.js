@@ -10,7 +10,7 @@ const { createCloseFollowUps } = require('./aftercare');
 const router = express.Router();
 
 const CLIENT_FIELDS = [
-  'name', 'id_no', 'gender', 'birth_date', 'phone', 'email', 'address', 'occupation', 'marital',
+  'name', 'id_no', 'gender', 'birth_date', 'phone', 'email', 'address', 'occupation', 'education', 'marital',
   'source', 'referrer', 'partner_id', 'counselor_id', 'status', 'risk_level', 'main_issue', 'history', 'diagnosis',
   'is_minor', 'guardian_name', 'guardian_relationship', 'guardian_phone',
   'emergency_name', 'emergency_relationship', 'emergency_phone', 'note',

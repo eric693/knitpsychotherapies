@@ -731,7 +731,18 @@ ensureColumns('booking_requests', {
   emergency_name: "TEXT NOT NULL DEFAULT ''",
   emergency_phone: "TEXT NOT NULL DEFAULT ''",
   emergency_relationship: "TEXT NOT NULL DEFAULT ''",
-  external_id: "TEXT NOT NULL DEFAULT ''"            // 來自 Google 表單時的回應識別碼（避免重複匯入）
+  external_id: "TEXT NOT NULL DEFAULT ''",           // 來自 Google 表單時的回應識別碼（避免重複匯入）
+  // 本所 Google 預約表單另有的欄位。表單問題會增刪，所以除了下列固定欄位，
+  // 整份回應也原封不動存進 form_answers，櫃檯在申請頁看得到，一個字都不會漏。
+  category: "TEXT NOT NULL DEFAULT ''",              // 預約類別（成人／兒童青少年）
+  education: "TEXT NOT NULL DEFAULT ''",             // 教育程度／孩子教育程度
+  guardian_name: "TEXT NOT NULL DEFAULT ''",         // 兒青案的家長姓名（表單只問電話時留空）
+  guardian_phone: "TEXT NOT NULL DEFAULT ''",        // 兒青案填的家長電話
+  form_answers: "TEXT NOT NULL DEFAULT ''"           // 完整表單回應（JSON：問題 → 作答）
+});
+
+ensureColumns('clients', {
+  education: "TEXT NOT NULL DEFAULT ''"              // 教育程度（預約表單有問，建檔時一併帶入）
 });
 
 // LINE 一次性預約連結：個案在官方帳號輸入「預約」即取得專屬網址，

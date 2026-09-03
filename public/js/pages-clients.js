@@ -14,6 +14,7 @@ async function clientDialog(c, onDone) {
       ${UI.input('phone', '手機（個案端登入帳號）', { value: d.phone || '' })}
       ${UI.input('email', 'Email', { value: d.email || '' })}
       ${UI.input('occupation', '職業／就讀學校', { value: d.occupation || '' })}
+      ${UI.input('education', '教育程度', { value: d.education || '' })}
       ${UI.inputList('source', '轉介來源', App.meta.source_options || [], { value: d.source || '' })}
       ${UI.input('referrer', '轉介單位／人', { value: d.referrer || '' })}
       ${UI.select('partner_id', '合作單位（費用由單位支付時填）', [['', '無（自費）']].concat((App.meta.partners || []).map(p => [p.id, p.name])), { value: d.partner_id || '' })}
@@ -467,7 +468,7 @@ App.page('client', {
         body.innerHTML = `<div class="card"><h3>基本資料</h3><div class="detail-grid">
             ${g('個案編號', c.code)}${g('姓名', c.name)}${g('身分證統一編號', c.id_no)}${g('性別', TW.gender[c.gender])}
             ${g('出生日期', c.birth_date)}${g('年齡', c.age !== null ? c.age + ' 歲' : '')}
-            ${g('手機', c.phone)}${g('Email', c.email)}${g('職業／就學', c.occupation)}
+            ${g('手機', c.phone)}${g('Email', c.email)}${g('職業／就學', c.occupation)}${g('教育程度', c.education)}
             ${g('地址', c.address)}${g('轉介來源', c.source)}${g('轉介單位／人', c.referrer)}
             ${g('合作單位', c.partner_name)}${g('初談日期', c.intake_date)}
             ${g('結案日期', c.close_date)}${g('結案原因', c.close_reason)}

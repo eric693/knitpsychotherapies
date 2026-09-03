@@ -26,28 +26,37 @@ const COUNSELORS = [
 const TOPICS = ['自我探索', '情緒困擾', '壓力調適', '親密關係', '原生家庭/親子關係',
   '人際關係', '生涯議題', '心理疾患', '創傷與失落', '兒童青少年適應', '其他'];
 
-// ---- 服務方案（官網服務項目）----
-// 金額為暫定值，請於後台調整；如日後承接政府補助方案，於後台新增 kind = 'subsidy' 的方案即可。
-const VENUE_FEE = 200;
+// ---- 服務方案 ----
+// 方案名稱刻意與「織心心理治療所 預約表單」的「預約項目」選項同名，
+// 表單同步才對得回來（比對時會自動去掉選項後面括號裡的價目說明）。
+// 表單沒有的方案（通訊諮商、EMDR、初次評估）一樣留著，供後台自行排約使用。
+const VENUE_FEE = 0;   // 目前兩個補助方案都不收場地費，個案 0 元
 const PLANS = [
-  { name: '成人個別心理治療／諮商（50 分鐘）', kind: 'self', appt_type: 'individual',
+  { name: '個別治療／諮商（50 分鐘）', kind: 'self', appt_type: 'individual',
     fee: 2000, session_minutes: 50 },
-  { name: '兒童、青少年個別心理治療（50 分鐘）', kind: 'self', appt_type: 'individual',
+  { name: '兒青個別治療／諮商（50 分鐘）', kind: 'self', appt_type: 'individual',
     fee: 2000, session_minutes: 50, age_max: 18 },
-  { name: '兒童、青少年團體治療', kind: 'self', appt_type: 'group',
-    fee: 1200, session_minutes: 90, age_max: 18,
-    intro: '需先完成個別評估後才可入團。' },
-  { name: '伴侶諮商（80 分鐘）', kind: 'self', appt_type: 'couple',
-    fee: 3000, session_minutes: 80 },
+  { name: '兒青團體治療（50 分鐘）', kind: 'self', appt_type: 'group',
+    fee: 1000, session_minutes: 50, age_max: 18,
+    intro: '須至少先進行一次個別課程。' },
   { name: '親職諮詢（50 分鐘）', kind: 'self', appt_type: 'family',
     fee: 2000, session_minutes: 50 },
+  { name: '伴侶諮商', kind: 'self', appt_type: 'couple',
+    fee: 0, session_minutes: 80,
+    intro: '費用請傳訊至官方 LINE，由專員向您說明。' },
+  { name: '國軍方案（40 分鐘）', kind: 'subsidy', appt_type: 'individual',
+    fee: 1800, session_minutes: 40, quota_per_year: 6,
+    subsidy_program: '國軍心理健康支持方案',
+    intro: '國防部所屬人員六次免費，需先於國防部系統完成預先審核。' },
+  { name: '青壯方案（50 分鐘）', kind: 'subsidy', appt_type: 'individual',
+    fee: 1800, session_minutes: 50, age_min: 15, age_max: 45, quota_per_year: 3,
+    subsidy_program: '青壯世代心理健康支持方案',
+    intro: '15-45 歲三次免費。' },
   { name: '通訊（視訊）諮商（50 分鐘）', kind: 'self', appt_type: 'individual',
     fee: 2000, session_minutes: 50, default_mode: 'online' },
   { name: 'EMDR 眼動減敏重整療法（80 分鐘）', kind: 'self', appt_type: 'individual',
     fee: 3000, session_minutes: 80,
-    intro: '需先完成初次評估，由受訓心理師執行。' },
-  { name: '初次評估會談（50 分鐘）', kind: 'self', appt_type: 'individual',
-    fee: 2500, session_minutes: 50 }
+    intro: '需先完成初次評估，由受訓心理師執行。' }
 ];
 
 const SHARE_PERCENT = 0.6;   // 心理師抽成預設值，後台可逐方案／逐心理師調整
