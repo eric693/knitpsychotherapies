@@ -60,6 +60,7 @@ function cleanMeetingUrl(raw) {
 
 const LIST_SQL = `SELECT a.*, c.name AS client_name, c.code AS client_code, c.risk_level, c.phone AS client_phone,
     u.name AS counselor_name, r.name AS room_name, sp.name AS plan_name, pt.name AS topic_name,
+    sp.register_url AS plan_register_url, sp.signin_url AS plan_signin_url,
     (SELECT COUNT(*) FROM session_notes n WHERE n.appointment_id = a.id) AS has_note
   FROM appointments a
   LEFT JOIN clients c ON c.id = a.client_id

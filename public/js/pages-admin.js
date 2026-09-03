@@ -1435,6 +1435,8 @@ App.page('settings', {
         title: '編輯同意書範本', wide: true,
         body: `<div class="form-grid">${UI.input('title', '標題', { value: t.title, full: true })}
           ${UI.textarea('body', '內容', { value: t.body, rows: 16 })}
+          ${UI.textarea('sign_block', '紙本簽署欄（留空用預設的本人／心理師簽名兩行）',
+    { value: t.sign_block || '', rows: 6 })}
           ${UI.checkbox('required', '必要同意書', t.required)}
           ${UI.checkbox('allow_decline', '允許選擇不同意', t.allow_decline)}
           ${UI.checkbox('minor_only', '僅未成年個案需簽', t.minor_only)}</div>`,

@@ -14,7 +14,9 @@ const PLAN_FIELDS = ['name', 'kind', 'appt_type', 'fee_mode', 'fee', 'fee_option
   'counselor_week_limit', 'counselor_month_limit', 'share_mode', 'share_percent', 'share_fixed',
   'portal_visible', 'require_review', 'note', 'intro', 'sort', 'active', 'default_mode', 'venue_fee',
   // 年報表用：類別代碼（如 0 指定／1 派案／3 機構／30 機構指定／31 機構派案）與個案編碼標記（如「青壯」「國軍」）
-  'report_code', 'code_prefix'];
+  'report_code', 'code_prefix',
+  // 方案的外部作業網址（如國軍方案的個案註冊與晤談簽到）
+  'register_url', 'signin_url'];
 
 function normalizePlan(b, base = {}) {
   const d = { ...base };
@@ -33,7 +35,8 @@ function normalizePlan(b, base = {}) {
     d[n] = Math.max(0, Math.round(Number(d[n]) || 0));
   }
   for (const n of ['portal_visible', 'require_review', 'active']) d[n] = d[n] ? 1 : 0;
-  for (const s of ['subsidy_program', 'note', 'intro', 'report_code', 'code_prefix']) d[s] = String(d[s] || '').trim();
+  for (const s of ['subsidy_program', 'note', 'intro', 'report_code', 'code_prefix',
+    'register_url', 'signin_url']) d[s] = String(d[s] || '').trim();
   d.appt_type = String(d.appt_type || 'individual');
   d.default_mode = d.default_mode === 'online' ? 'online' : 'onsite';
   return d;

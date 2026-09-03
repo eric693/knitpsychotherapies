@@ -306,6 +306,11 @@ App.page('schedule', {
           ${a.mode === 'online' && a.meeting_url ? `<div style="margin-top:10px;font-size:14px">
             視訊連結：<a href="${UI.esc(a.meeting_url)}" target="_blank" rel="noopener noreferrer">${UI.esc(a.meeting_url)}</a></div>` : ''}
           ${a.note ? `<div style="margin-top:10px;font-size:14px">備註：${UI.nl2br(a.note)}</div>` : ''}
+          ${a.plan_register_url || a.plan_signin_url ? `<div class="notice" style="margin-top:10px">
+            ${UI.esc(a.plan_name || '本方案')}需另於補助單位系統作業：
+            ${a.plan_signin_url ? `<a class="btn tiny" href="${UI.esc(a.plan_signin_url)}" target="_blank" rel="noopener noreferrer">晤談簽到</a>` : ''}
+            ${a.plan_register_url ? `<a class="btn tiny secondary" href="${UI.esc(a.plan_register_url)}" target="_blank" rel="noopener noreferrer">個案註冊</a>` : ''}
+          </div>` : ''}
           <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
             ${a.mode === 'online' && a.meeting_url
     ? `<a class="btn" href="${UI.esc(a.meeting_url)}" target="_blank" rel="noopener noreferrer">進入視訊</a>` : ''}

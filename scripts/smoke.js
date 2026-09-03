@@ -1591,6 +1591,39 @@ function startServer() {
     const doc = await admin.get('/api/consent-templates/counseling/print?format=doc');
     equal(doc.status, 200, 'Word 匯出');
   });
+  await test('國軍方案權益須知同意書：自訂簽署欄一併印出', async () => {
+    const t = (await admin.ok('GET', '/api/consent-templates')).find(x => x.key === 'military');
+    assert(t, '應內建國軍方案同意書');
+    assert(t.body.includes('6 次為限') && t.sign_block.includes('級職'), '應含方案條款與立書同意人欄位');
+    const html = await admin.get('/api/consent-templates/military/print');
+    assert(html.text.includes('級職') && html.text.includes('心理輔導人員'), '簽署欄應印出');
+    assert(!html.text.includes('諮商／臨床心理師簽名'), '自訂簽署欄時不再印預設兩行');
+    // 簽署欄可自行改寫
+    await admin.ok('PUT', `/api/consent-templates/${t.id}`, { sign_block: t.sign_block + '\n服務機構：織心心理治療所' });
+    const after = await admin.get('/api/consent-templates/military/print');
+    assert(after.text.includes('服務機構'), '改寫後的簽署欄應印出');
+  });
+  await test('國軍方案的註冊與簽到網址帶進方案與個案畫面', async () => {
+    const plan = (await admin.ok('GET', '/api/service-plans')).find(p => p.active && p.kind === 'subsidy');
+    await admin.ok('PUT', `/api/service-plans/${plan.id}`, {
+      ...plan,
+      register_url: 'https://gpwd-mhcp.mnd.gov.tw/registerpage?id=93&token=demo',
+      signin_url: 'https://gpwd-mhcp.mnd.gov.tw/signpage?id=93&token=demo'
+    });
+    const me = await admin.ok('GET', '/api/me');
+    const date = nextWeekday(3, 210);
+    const appt = await admin.ok('POST', '/api/appointments', {
+      client_id: clientId, counselor_id: me.id, date, start_time: '07:00',
+      plan_id: plan.id, override: true
+    });
+    const list = await admin.ok('GET', `/api/appointments?client_id=${clientId}`);
+    const got = list.find(a => a.id === appt.id);
+    assert(got.plan_signin_url && got.plan_signin_url.includes('signpage'), '預約明細應帶出簽到網址');
+    const c = await admin.ok('GET', `/api/clients/${clientId}`);
+    assert(c.plan_links.some(p => p.signin_url.includes('signpage')), '個案總覽應帶出方案作業連結');
+    await admin.del(`/api/appointments/${appt.id}`);
+    await admin.ok('PUT', `/api/service-plans/${plan.id}`, { ...plan, register_url: '', signin_url: '' });
+  });
   await test('已簽署的同意書印出簽署當下的全文與簽名', async () => {
     await admin.ok('POST', `/api/clients/${clientId}/consents`, {
       key: 'teletherapy', agreed: 1, signer_name: '冒煙測試', signer_role: 'client',

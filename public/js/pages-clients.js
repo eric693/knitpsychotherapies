@@ -430,7 +430,12 @@ App.page('client', {
       ${c.unpaid ? UI.tag('未收款 ' + UI.fmtMoney(c.unpaid), 'warn') : ''}
       ${c.pending_consents.length ? UI.tag('待簽同意書 ' + c.pending_consents.length, 'danger') : ''}
       <button class="btn small danger" id="deact">停用個案</button>
-    </div>`;
+    </div>
+    ${(c.plan_links || []).map(p => `<div class="notice" style="margin-bottom:10px">
+      ${UI.esc(p.name)}需另於補助單位系統作業：
+      ${p.signin_url ? `<a class="btn tiny" href="${UI.esc(p.signin_url)}" target="_blank" rel="noopener noreferrer">晤談簽到</a>` : ''}
+      ${p.register_url ? `<a class="btn tiny secondary" href="${UI.esc(p.register_url)}" target="_blank" rel="noopener noreferrer">個案註冊</a>` : ''}
+    </div>`).join('')}`;
     el.innerHTML = '';
     el.appendChild(head);
     head.querySelector('#edit').onclick = () => clientDialog(c, () => App.go('client/' + id));

@@ -35,6 +35,10 @@ function planDialog(p, onDone) {
       ${UI.textarea('note', '內部備註', { value: d.note || '' })}
       ${UI.checkbox('portal_visible', '開放線上預約表單顯示此方案', d.portal_visible)}
       ${UI.checkbox('require_review', '線上預約需櫃檯確認才成立', d.require_review)}
+      ${UI.input('register_url', '方案註冊網址（如國軍方案的個案註冊）',
+    { value: d.register_url || '', full: true, placeholder: 'https://…（留空則不顯示按鈕）' })}
+      ${UI.input('signin_url', '方案簽到網址（每次晤談上系統簽到）',
+    { value: d.signin_url || '', full: true, placeholder: 'https://…' })}
       ${UI.input('report_code', '年報表類別代碼（指定案；派案自動 +1）',
     { value: d.report_code || '', placeholder: '自費填 0（派案印 1）、機構填 30（派案印 31）' })}
       ${UI.input('code_prefix', '年報表編碼標記', { value: d.code_prefix || '', placeholder: '如 青壯、國軍；自費案留空' })}

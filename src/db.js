@@ -68,6 +68,11 @@ ensureColumns('users', {
   bank_account: "TEXT NOT NULL DEFAULT ''",
   bank_holder: "TEXT NOT NULL DEFAULT ''"
 });
+// 同意書列印時的簽署欄：留空用預設兩行（本人簽名、心理師簽名），
+// 國軍方案這類需要填單位、級職、身分證字號的，就把整段簽署欄寫在這裡。
+ensureColumns('consent_templates', {
+  sign_block: "TEXT NOT NULL DEFAULT ''"
+});
 ensureColumns('session_notes', {
   // 覆核狀態：none 不需覆核（正式心理師）／pending 待督導覆核／approved 已覆核／returned 退回補正
   review_status: "TEXT NOT NULL DEFAULT 'none'",
@@ -495,13 +500,45 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 （十）本人同意由機構執業心理師依專業判斷是否合適，並簽署同意書後，接受通訊心理諮商。
 
 ※ 本人已經詳細閱讀前述文字並了解其內容，有疑問時可洽詢本所。`
+    },
+    {
+      key: 'military', title: '國軍心理健康照護方案權益須知同意書', sort: 8, required: 0, allow_decline: 0, minor_only: 0,
+      sign_block: `立書同意人：
+　單位：＿＿＿＿＿＿＿＿　級職：＿＿＿＿＿＿＿＿　姓名：＿＿＿＿＿＿＿＿
+　身分證字號：＿＿＿＿＿＿＿＿＿＿＿＿
+
+心理輔導人員：＿＿＿＿＿＿＿＿＿＿
+
+中華民國　＿＿＿　年　＿＿　月　＿＿　日
+
+（本同意書一式兩份，一份個案留存，一份留於合作機構）`,
+      body: `一、我的身分符合「國軍心理健康照護方案」補助對象，每次晤談前會主動出示相關身分證明文件，確保我接受服務的資格。
+
+二、我在輔導過程所說的內容，會依相關法規得到專業的保密，但我瞭解我所談的內容在遇到下列情形時，輔導人員會與我討論並且通報相關單位及國防部心理衛生中心（0932-493985），以連結其他系統一起協助我：
+　（一）危及自己或他人生命、自由、財產及安全的情況，例如：想自殺或傷害他人。
+　（二）涉及相關法律責任，例如：兒童及少年相關法規、性侵害犯罪防治法、家庭暴力防治法……等。
+
+三、為了避免合作方式不同而互相影響，若我有在其他地方同時接受諮商輔導服務，我會主動向服務機構的輔導人員說明。
+
+四、我瞭解同一年度使用本方案以 6 次為限，增加次數由自己付費。
+
+五、若我希望停止諮商輔導服務，我可以隨時提出，但為了保障我的權益，我會主動告知提供服務的機構。
+
+六、我瞭解已預約輔導時間，若須請假，我會事先了解並配合機構的請假規範；如未提前告知請假而無故未到，則該次因無法諮商而產生的行政費用由我自行繳納，若連續 2 次無故未到，合作機構得拒絕提供服務。
+
+七、若我有選擇使用通訊諮商的服務，我會配合簽立並遵守機構提供之「通訊諮商知後同意書」。
+
+八、我已認真閱讀、瞭解以上我所應盡的權利，並同意上述內容及機構安排諮商輔導服務。`
     }
   ];
   const hasT = db.prepare('SELECT 1 FROM consent_templates WHERE key = ?');
-  const insT = db.prepare(`INSERT INTO consent_templates (key, title, body, version, required, allow_decline, minor_only, sort)
-                           VALUES (?, ?, ?, 1, ?, ?, ?, ?)`);
+  const insT = db.prepare(`INSERT INTO consent_templates
+      (key, title, body, version, required, allow_decline, minor_only, sort, sign_block)
+    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)`);
   for (const t of CONSENT_DEFAULTS) {
-    if (!hasT.get(t.key)) insT.run(t.key, t.title, t.body, t.required, t.allow_decline, t.minor_only, t.sort);
+    if (!hasT.get(t.key)) {
+      insT.run(t.key, t.title, t.body, t.required, t.allow_decline, t.minor_only, t.sort, t.sign_block || '');
+    }
   }
 }
 
@@ -921,7 +958,11 @@ ensureColumns('invoices', {
 // code_prefix 則是個案編碼中接在初評日期後的標記（如「青壯」「國軍」；自費案留空）。
 ensureColumns('service_plans', {
   report_code: "TEXT NOT NULL DEFAULT ''",
-  code_prefix: "TEXT NOT NULL DEFAULT ''"
+  code_prefix: "TEXT NOT NULL DEFAULT ''",
+  // 方案的外部作業網址：如國軍方案要到國防部系統做個案註冊與每次晤談簽到，
+  // 填了之後排程與個案總覽會直接給連結，櫃檯不必自己找網址。
+  register_url: "TEXT NOT NULL DEFAULT ''",
+  signin_url: "TEXT NOT NULL DEFAULT ''"
 });
 ensureColumns('plan_topics', {
   report_code: "TEXT NOT NULL DEFAULT ''",
@@ -939,6 +980,17 @@ if (getSetting('report_code_seeded', '') !== '1') {
       .run(mark, `%${mark}%`);
   }
   setSetting('report_code_seeded', '1');
+}
+
+// 國軍心理健康照護方案的註冊與簽到網址（國防部系統）：只在沒填過時帶入一次
+if (getSetting('military_urls_seeded', '') !== '1') {
+  db.prepare(`UPDATE service_plans SET
+      register_url = CASE WHEN register_url = '' THEN ? ELSE register_url END,
+      signin_url = CASE WHEN signin_url = '' THEN ? ELSE signin_url END
+    WHERE name LIKE '%國軍%'`)
+    .run('https://gpwd-mhcp.mnd.gov.tw/registerpage?id=93&token=53c4ee67-a721-4071-9387-8efafb3941d6',
+      'https://gpwd-mhcp.mnd.gov.tw/signpage?id=93&token=df59aef9-729c-4f3c-acba-1379a437d4cc');
+  setSetting('military_urls_seeded', '1');
 }
 
 // 「線上預約申請」原本併在「預約排程」權限底下，拆成獨立模組後，

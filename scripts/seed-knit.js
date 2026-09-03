@@ -46,6 +46,9 @@ const PLANS = [
     intro: '費用請傳訊至官方 LINE，由專員向您說明。' },
   { name: '國軍方案（40 分鐘）', kind: 'subsidy', appt_type: 'individual',
     fee: 1800, session_minutes: 40, quota_per_year: 6, code_prefix: '國軍',
+    // 國防部系統：個案註冊與每次晤談簽到都在這裡做
+    register_url: 'https://gpwd-mhcp.mnd.gov.tw/registerpage?id=93&token=53c4ee67-a721-4071-9387-8efafb3941d6',
+    signin_url: 'https://gpwd-mhcp.mnd.gov.tw/signpage?id=93&token=df59aef9-729c-4f3c-acba-1379a437d4cc',
     subsidy_program: '國軍心理健康支持方案',
     intro: '國防部所屬人員六次免費，需先於國防部系統完成預先審核。' },
   { name: '青壯方案（50 分鐘）', kind: 'subsidy', appt_type: 'individual',
@@ -85,7 +88,7 @@ const PLAN_COLS = ['name', 'kind', 'appt_type', 'fee_mode', 'fee', 'fee_options'
   'counselor_week_limit', 'counselor_month_limit', 'share_mode', 'share_percent', 'share_fixed',
   'portal_visible', 'require_review', 'note', 'intro', 'sort', 'active', 'default_mode', 'venue_fee',
   // 年報表的個案編碼標記（如 1140601_青壯1）；類別代碼由所方自行在方案設定填
-  'code_prefix'];
+  'code_prefix', 'register_url', 'signin_url'];
 
 const findPlan = db.prepare('SELECT * FROM service_plans WHERE name = ?');
 const insTopic = db.prepare('INSERT INTO plan_topics (plan_id, name, sort) VALUES (?,?,?)');
@@ -119,11 +122,16 @@ PLANS.forEach((p, idx) => {
     sort: idx + 1,
     active: 1,
     default_mode: p.default_mode || 'onsite',
-    code_prefix: p.code_prefix || ''
+    code_prefix: p.code_prefix || '',
+    register_url: p.register_url || '',
+    signin_url: p.signin_url || ''
   };
   const exist = findPlan.get(p.name);
   // 已在後台調整過的編碼標記不被重跑 seed 覆蓋
   if (exist && exist.code_prefix) row.code_prefix = exist.code_prefix;
+  // 網址若已在後台改過（換 token）就不覆蓋
+  if (exist && exist.register_url) row.register_url = exist.register_url;
+  if (exist && exist.signin_url) row.signin_url = exist.signin_url;
   let planId;
   if (exist) {
     db.prepare(`UPDATE service_plans SET ${PLAN_COLS.map(c => `${c} = ?`).join(', ')} WHERE id = ?`)

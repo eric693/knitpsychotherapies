@@ -142,9 +142,14 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
     can_view_notes: canViewClientNotes(req.user, c),
     consents,
     pending_consents: templates.filter(t => !consents.some(s => s.key === t.key && s.version === t.version)).map(t => ({ key: t.key, title: t.title })),
-    appointments: db.prepare(`SELECT a.*, u.name AS counselor_name FROM appointments a
-      LEFT JOIN users u ON u.id = a.counselor_id WHERE a.client_id = ?
-      ORDER BY a.date DESC, a.start_time DESC LIMIT 30`).all(c.id),
+    appointments: db.prepare(`SELECT a.*, u.name AS counselor_name, sp.name AS plan_name FROM appointments a
+      LEFT JOIN users u ON u.id = a.counselor_id
+      LEFT JOIN service_plans sp ON sp.id = a.plan_id
+      WHERE a.client_id = ? ORDER BY a.date DESC, a.start_time DESC LIMIT 30`).all(c.id),
+    // 這位個案用到的方案若須在補助單位系統另行註冊／簽到（如國軍方案），把網址一併帶出來
+    plan_links: db.prepare(`SELECT DISTINCT sp.id, sp.name, sp.register_url, sp.signin_url
+      FROM appointments a JOIN service_plans sp ON sp.id = a.plan_id
+      WHERE a.client_id = ? AND (sp.register_url != '' OR sp.signin_url != '')`).all(c.id),
     assessments: db.prepare('SELECT id, scale, date, total, severity, alert, filled_by FROM assessments WHERE client_id = ? ORDER BY date DESC').all(c.id),
     packages: db.prepare('SELECT * FROM packages WHERE client_id = ? ORDER BY id DESC').all(c.id),
     invoices: db.prepare('SELECT * FROM invoices WHERE client_id = ? ORDER BY date DESC, id DESC LIMIT 30').all(c.id),
@@ -306,14 +311,16 @@ router.delete('/consent-templates/:id', requireStaff('settings'), (req, res) => 
 router.put('/consent-templates/:id', requireStaff('settings'), (req, res) => {
   const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '找不到此範本' });
-  const { title = t.title, body = t.body, required, allow_decline, minor_only } = req.body || {};
-  // 內容有變動即遞增版本，已簽署者需重新簽署新版
+  const { title = t.title, body = t.body, required, allow_decline, minor_only,
+    sign_block = t.sign_block } = req.body || {};
+  // 內容有變動即遞增版本，已簽署者需重新簽署新版（簽署欄只影響紙本版面，不動版本）
   const version = body !== t.body ? t.version + 1 : t.version;
-  db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?, minor_only = ? WHERE id = ?`)
+  db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?,
+      minor_only = ?, sign_block = ? WHERE id = ?`)
     .run(title, body, version,
       required === undefined ? t.required : (required ? 1 : 0),
       allow_decline === undefined ? t.allow_decline : (allow_decline ? 1 : 0),
-      minor_only === undefined ? t.minor_only : (minor_only ? 1 : 0), t.id);
+      minor_only === undefined ? t.minor_only : (minor_only ? 1 : 0), String(sign_block || ''), t.id);
   audit('staff', req.user.id, req.user.name, '修改同意書範本', t.key, { version });
   res.json({ ok: true, version });
 });
@@ -343,9 +350,9 @@ function consentDocHtml(opts) {
           ${signed.agreed ? '' : '　<strong>【不同意】</strong>'}</div>
         <div>簽署時間：${esc(signed.signed_at)}　版本：${signed.version}</div>
         ${signed.signature ? `<div><img src="${esc(signed.signature)}" alt="簽名" class="sig"></div>` : ''}
-      </div>` : `<div class="lines">
-        <div>本人簽名：____________________　　日期：____________________</div>
-        <div>諮商／臨床心理師簽名：____________________（諮／臨 心字＿＿＿＿＿號）　　日期：____________________</div>
+      </div>` : `<div class="lines">${opts.signBlock ? esc(opts.signBlock)
+    : `<div>本人簽名：____________________　　日期：____________________</div>
+       <div>諮商／臨床心理師簽名：____________________（諮／臨 心字＿＿＿＿＿號）　　日期：____________________</div>`}
       </div>`}
       <div class="tag">［${esc(label)}］</div>
     </div>
@@ -366,6 +373,7 @@ function consentDocHtml(opts) {
   .body { white-space: pre-wrap; }
   .foot { margin-top: 22px; }
   .org-info { font-size: 12px; color: #667; margin-bottom: 10px; }
+  .lines { white-space: pre-wrap; }
   .lines div { margin-bottom: 16px; }
   .signed { border: 1px solid #c9d6d6; padding: 10px 12px; border-radius: 6px; }
   .sig { height: 90px; margin-top: 6px; }
@@ -398,7 +406,7 @@ router.get('/consent-templates/:key/print', requireStaff('consents'), (req, res)
   const org = getSetting('center_name', '本所');
   audit('staff', req.user.id, req.user.name, forWord ? '匯出同意書空白版（Word）' : '列印同意書空白版', t.title);
   sendDoc(res, consentDocHtml({
-    title: t.title, body: t.body, forWord,
+    title: t.title, body: t.body, forWord, signBlock: t.sign_block || '',
     copies: two ? ['個案留存聯', `${org}留存聯`] : ['個案留存聯']
   }), forWord, `consent_${t.key}`);
 });
