@@ -1565,6 +1565,62 @@ function startServer() {
     await office.fails('GET', `/api/certificates/${certIdEmployment}`, undefined, '無權限');
   });
 
+  section('同意書列印與基本資料表');
+  await test('內建諮商／治療同意書與通訊諮商同意書兩份範本', async () => {
+    const tpls = await admin.ok('GET', '/api/consent-templates');
+    const a = tpls.find(t => t.key === 'counseling');
+    const b = tpls.find(t => t.key === 'teletherapy');
+    assert(a && a.title.includes('諮商'), '應有諮商／治療同意書');
+    assert(b && b.body.includes('通訊'), '應有通訊諮商同意書');
+  });
+  await test('同意書範本文字可改寫，改後版本遞增', async () => {
+    const t = (await admin.ok('GET', '/api/consent-templates')).find(x => x.key === 'counseling');
+    const r = await admin.ok('PUT', `/api/consent-templates/${t.id}`,
+      { title: t.title, body: t.body + '\n\n九、本所另訂之補充條款。' });
+    equal(r.version, t.version + 1, '內容改動應遞增版本');
+    const after = (await admin.ok('GET', '/api/consent-templates')).find(x => x.key === 'counseling');
+    assert(after.body.includes('補充條款'), '改寫的內容應存下來');
+  });
+  await test('空白同意書可列印兩聯，也可匯出 Word', async () => {
+    const html = await admin.get('/api/consent-templates/counseling/print');
+    equal(html.status, 200, '列印頁');
+    assert(html.text.includes('個案留存聯') && html.text.includes('留存聯］'), '應印出兩聯');
+    assert(html.text.includes('本人簽名') && html.text.includes('心字'), '應留簽名欄');
+    const one = await admin.get('/api/consent-templates/teletherapy/print?copies=1');
+    equal((one.text.match(/留存聯］/g) || []).length, 1, 'copies=1 只印一聯');
+    const doc = await admin.get('/api/consent-templates/counseling/print?format=doc');
+    equal(doc.status, 200, 'Word 匯出');
+  });
+  await test('已簽署的同意書印出簽署當下的全文與簽名', async () => {
+    await admin.ok('POST', `/api/clients/${clientId}/consents`, {
+      key: 'teletherapy', agreed: 1, signer_name: '冒煙測試', signer_role: 'client',
+      signature: 'data:image/png;base64,iVBORw0KGgo='
+    });
+    const c = await admin.ok('GET', `/api/clients/${clientId}`);
+    const signed = c.consents.find(x => x.key === 'teletherapy');
+    const html = await admin.get(`/api/consents/${signed.id}/print`);
+    assert(html.text.includes('冒煙測試') && html.text.includes('data:image/png'), '應含簽署人與簽名圖');
+    assert(html.text.includes('通訊'), '應為簽署當下的全文快照');
+  });
+  await test('基本資料表帶入個案資料，未填欄位留成待圈選項目', async () => {
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=profile&subject_id=${clientId}`);
+    equal(tpl.data.title, '基本資料表', '標題');
+    const edu = tpl.data.rows.find(r => r.label === '教育程度');
+    assert(edu.value.includes('請圈選') || edu.value.length, '教育程度未填時印出圈選選項');
+    assert(tpl.data.rows.find(r => r.label === '是否用藥'), '應含醫療史欄位');
+    equal(tpl.data.grid.headers.join(','), '日期,時間,簽名,收費', '附簽到表欄位');
+    const made = await admin.ok('POST', '/api/certificates', {
+      kind: 'profile', subject_id: clientId, subject_name: tpl.subject_name,
+      data: { ...tpl.data, grid: { ...tpl.data.grid, rows: 6 } }
+    });
+    const html = await admin.get(`/api/certificates/${made.id}/print`);
+    equal(html.status, 200, '列印頁');
+    assert(html.text.includes('基本資料表') && html.text.includes('簽名'), '應印出表格');
+    equal((html.text.match(/<td>&nbsp;<\/td>/g) || []).length, 24, '簽到表 6 列 × 4 欄');
+    const doc = await admin.get(`/api/certificates/${made.id}/print?format=doc`);
+    equal(doc.status, 200, 'Word 匯出');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

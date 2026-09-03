@@ -318,6 +318,104 @@ router.put('/consent-templates/:id', requireStaff('settings'), (req, res) => {
   res.json({ ok: true, version });
 });
 
+// ---- 同意書列印／匯出 ----
+//
+// 紙本仍是所內的主要簽署方式：空白版一次印兩聯（個案留存聯、織心留存聯），
+// 內容取自範本，範本文字在「系統設定 → 同意書範本」隨時可改；
+// 已在系統簽署的則印出簽署當下的全文快照與簽名圖，兩者都可另存 PDF 或匯出 Word 再排版。
+function consentDocHtml(opts) {
+  const esc = v => String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const org = {
+    name: getSetting('center_name', ''),
+    phone: getSetting('center_phone', ''),
+    address: getSetting('center_address', ''),
+    license: getSetting('center_license_no', '')
+  };
+  const copy = (label, signed) => `<section>
+    <div class="org">${esc(org.name)}</div>
+    <h1>${esc(opts.title)}</h1>
+    <div class="body">${esc(opts.body)}</div>
+    <div class="foot">
+      ${org.address ? `<div class="org-info">${esc(org.address)}${org.phone ? `　電話 ${esc(org.phone)}` : ''}</div>` : ''}
+      ${signed ? `<div class="signed">
+        <div>簽署人：${esc(signed.signer_name)}（${signed.signer_role === 'guardian' ? '法定代理人' : '本人'}）
+          ${signed.agreed ? '' : '　<strong>【不同意】</strong>'}</div>
+        <div>簽署時間：${esc(signed.signed_at)}　版本：${signed.version}</div>
+        ${signed.signature ? `<div><img src="${esc(signed.signature)}" alt="簽名" class="sig"></div>` : ''}
+      </div>` : `<div class="lines">
+        <div>本人簽名：____________________　　日期：____________________</div>
+        <div>諮商／臨床心理師簽名：____________________（諮／臨 心字＿＿＿＿＿號）　　日期：____________________</div>
+      </div>`}
+      <div class="tag">［${esc(label)}］</div>
+    </div>
+  </section>`;
+  const copies = opts.signed
+    ? [copy('簽署紀錄', opts.signed)]
+    : opts.copies.map(label => copy(label, null));
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<title>${esc(opts.title)}${opts.subject ? '－' + esc(opts.subject) : ''}</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    color: #1c2b2b; font-size: 13.5px; line-height: 1.9; }
+  section { page-break-after: always; }
+  section:last-child { page-break-after: auto; }
+  .org { text-align: center; font-size: 15px; }
+  h1 { font-size: 20px; text-align: center; letter-spacing: 4px; margin: 4px 0 14px; }
+  .body { white-space: pre-wrap; }
+  .foot { margin-top: 22px; }
+  .org-info { font-size: 12px; color: #667; margin-bottom: 10px; }
+  .lines div { margin-bottom: 16px; }
+  .signed { border: 1px solid #c9d6d6; padding: 10px 12px; border-radius: 6px; }
+  .sig { height: 90px; margin-top: 6px; }
+  .tag { margin-top: 14px; text-align: right; color: #667; font-size: 12px; }
+  .bar { margin-bottom: 12px; }
+  @media print { .bar { display: none; } }
+</style></head><body>
+<div class="bar"><button onclick="window.print()">列印／另存為 PDF</button></div>
+${copies.join('\n')}
+${opts.forWord ? '' : '<script>if (location.hash !== \'#noprint\') setTimeout(() => window.print(), 300);<\/script>'}
+</body></html>`;
+}
+
+function sendDoc(res, html, forWord, filename) {
+  if (forWord) {
+    res.setHeader('Content-Type', 'application/msword; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}.doc"`);
+  } else {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  }
+  res.send(html);
+}
+
+// 空白版：預設印兩聯（個案留存聯、織心留存聯），copies=1 只印一份
+router.get('/consent-templates/:key/print', requireStaff('consents'), (req, res) => {
+  const t = db.prepare('SELECT * FROM consent_templates WHERE key = ?').get(req.params.key);
+  if (!t) return res.status(404).send('找不到此同意書範本');
+  const forWord = req.query.format === 'doc';
+  const two = String(req.query.copies || '2') !== '1';
+  const org = getSetting('center_name', '本所');
+  audit('staff', req.user.id, req.user.name, forWord ? '匯出同意書空白版（Word）' : '列印同意書空白版', t.title);
+  sendDoc(res, consentDocHtml({
+    title: t.title, body: t.body, forWord,
+    copies: two ? ['個案留存聯', `${org}留存聯`] : ['個案留存聯']
+  }), forWord, `consent_${t.key}`);
+});
+
+// 已簽署版：印出簽署當下的全文快照與簽名
+router.get('/consents/:id/print', requireStaff('consents'), (req, res) => {
+  const row = db.prepare('SELECT * FROM consents WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).send('找不到此簽署紀錄');
+  const c = db.prepare('SELECT code, name FROM clients WHERE id = ?').get(row.client_id) || {};
+  const forWord = req.query.format === 'doc';
+  audit('staff', req.user.id, req.user.name, forWord ? '匯出已簽同意書（Word）' : '列印已簽同意書',
+    `${c.code || ''}/${row.key}`);
+  sendDoc(res, consentDocHtml({
+    title: row.title, body: row.body, signed: row, subject: c.name || '', forWord, copies: []
+  }), forWord, `consent_${row.key}_${c.code || row.client_id}`);
+});
+
 router.get('/clients/:id/consents/:key', requireStaff('consents'), (req, res) => {
   const t = db.prepare('SELECT * FROM consent_templates WHERE key = ?').get(req.params.key);
   if (!t) return res.status(404).json({ error: '找不到此同意書' });

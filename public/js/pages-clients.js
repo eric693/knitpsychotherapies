@@ -703,11 +703,25 @@ App.page('client', {
               <td>${s ? (s.agreed ? UI.tag('已同意', 'ok') : UI.tag('不同意', 'warn')) : UI.tag('未簽署', 'danger')}</td>
               <td>${s ? UI.esc(s.signer_name) + '（' + (TW.signer_role[s.signer_role] || '') + '）' : '-'}</td>
               <td>${s ? UI.esc(s.signed_at) : '-'}</td>
-              <td><button class="btn tiny" data-c="${t.key}" data-minor="${t.minor_only}">${s ? '重新簽署' : '簽署'}</button></td></tr>`;
+              <td style="white-space:nowrap">
+                <button class="btn tiny" data-c="${t.key}" data-minor="${t.minor_only}">${s ? '重新簽署' : '簽署'}</button>
+                ${s ? `<button class="btn tiny secondary" data-cp="${s.id}">列印</button>
+                      <button class="btn tiny secondary" data-cw="${s.id}">Word</button>`
+    : `<button class="btn tiny secondary" data-bp="${t.key}">列印空白</button>`}</td></tr>`;
           }))}
           <div style="font-size:12.5px;color:var(--muted);margin-top:8px">標示 * 為必要同意書；範本內容修改後版本會遞增，需重新簽署。</div></div>`;
         body.querySelectorAll('[data-c]').forEach(b => {
           b.onclick = () => consentDialog(c.id, b.dataset.c, b.dataset.minor === '1', () => App.go('client/' + id));
+        });
+        // 紙本流程：未簽的印空白兩聯給個案當場簽，已簽的可印出含簽名的存檔版或匯出 Word
+        body.querySelectorAll('[data-bp]').forEach(b => {
+          b.onclick = () => window.open(`/api/consent-templates/${b.dataset.bp}/print`, '_blank');
+        });
+        body.querySelectorAll('[data-cp]').forEach(b => {
+          b.onclick = () => window.open(`/api/consents/${b.dataset.cp}/print`, '_blank');
+        });
+        body.querySelectorAll('[data-cw]').forEach(b => {
+          b.onclick = () => { location.href = `/api/consents/${b.dataset.cw}/print?format=doc`; };
         });
       }
 

@@ -5,7 +5,8 @@
 const CERT_KINDS = [
   ['employment', '在職證明書'],
   ['resignation', '離職證明書'],
-  ['treatment', '治療證明']
+  ['treatment', '治療證明'],
+  ['profile', '基本資料表']
 ];
 
 function certRowsEditor(id, label, rows, hint) {
@@ -48,6 +49,10 @@ function certDialog(seed, onDone) {
         ${UI.textarea('statement', '聲明文字', { value: d.statement || '', rows: 3, full: true })}
         ${certRowsEditor('c-org', '機構抬頭', d.org || [], '預設帶系統設定裡的所別資訊，可逐張改寫')}
         ${certRowsEditor('c-sign', '簽名／核章欄位', d.signatures || [])}
+        ${UI.input('grid_label', '空白表格標題（留空則不印表格）', { value: (d.grid && d.grid.label) || '' })}
+        ${UI.input('grid_headers', '空白表格欄位（逗號分隔）',
+    { value: d.grid ? d.grid.headers.join('、') : '' })}
+        ${UI.input('grid_rows', '空白表格列數', { type: 'number', value: (d.grid && d.grid.rows) || 0 })}
         ${UI.input('footer_date', '文末日期', { value: d.footer_date || '', full: true })}
       </div>`,
     onOpen: el => {
@@ -82,6 +87,11 @@ function certDialog(seed, onDone) {
           statement_label: f.statement_label, statement: f.statement,
           org: collectCertRows(el, 'c-org'),
           signatures: collectCertRows(el, 'c-sign'),
+          grid: f.grid_headers.trim() ? {
+            label: f.grid_label,
+            headers: f.grid_headers.split(/[,，、]/).map(x => x.trim()).filter(Boolean),
+            rows: Number(f.grid_rows) || 12
+          } : null,
           footer_date: f.footer_date
         }
       };
@@ -95,9 +105,10 @@ function certDialog(seed, onDone) {
 
 App.page('certificates', {
   title: '證明書',
-  sub: '在職證明書、離職證明書與治療證明：套版帶出資料後，每一句話都能自行改寫，再列印或匯出 Word／PDF',
+  sub: '在職證明、離職證明、治療證明與基本資料表：套版帶出資料後，每一句話都能自行改寫，再列印或匯出 Word／PDF',
   help: [
     '選類別與當事人後按「開立」，系統先帶出預設內容；欄位名稱、內容、聲明文字、機構抬頭都可以直接改，也能自行增減列。',
+    '「基本資料表」會帶入個案已建檔的資料，沒填的欄位印成待填的圈選或底線，背面另附可自訂欄位與列數的空白簽到表。',
     '在職／離職證明的資料取自帳號（性別、生日、到職與離職日在「帳號權限」編輯帳號時填）；治療證明的來談日期與次數由已完成的晤談自動算出。',
     '開立後可「列印／PDF」或「匯出 Word」，Word 檔可再自行排版。',
     '已交出去的證明書請用「作廢」保留紀錄，不要直接刪除。',
@@ -177,7 +188,7 @@ App.page('certificates', {
         const kind = e2.querySelector('[name=kind]');
         const pick = e2.querySelector('#pick');
         const render = () => {
-          pick.innerHTML = kind.value === 'treatment'
+          pick.innerHTML = ['treatment', 'profile'].includes(kind.value)
             ? UI.select('subject_id', '個案', [['', '不指定（自行填寫）']]
               .concat(list.map(c => [c.id, `${c.code || ''} ${c.name}`.trim()])), { full: true })
             : UI.select('subject_id', '員工', [['', '不指定（自行填寫）']]

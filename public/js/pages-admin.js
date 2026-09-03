@@ -1126,7 +1126,8 @@ App.page('settings', {
       ['證明書', [['cert_prefix', '證明書編號前綴'], ['center_director_license', '負責心理師證書字號（如 心理字1923號）'],
         ['cert_employment_title', '在職證明書 標題'], ['cert_employment_statement', '在職證明書 聲明文字'],
         ['cert_resignation_title', '離職證明書 標題'], ['cert_resignation_statement', '離職證明書 聲明文字'],
-        ['cert_treatment_title', '治療證明 標題'],
+        ['cert_treatment_title', '治療證明 標題'], ['cert_profile_title', '基本資料表 標題'],
+        ['cert_profile_statement', '基本資料表 說明文字'],
         ['cert_treatment_statement', '治療證明 聲明文字（{purpose} 會代入用途）']]],
       ['提醒發送通道', [['notify_webhook_url', 'Webhook 網址（留空則僅人工發送）'],
         ['notify_webhook_token', 'Webhook 驗證權杖']]],
@@ -1411,8 +1412,16 @@ App.page('settings', {
       <td>${UI.esc(t.title)}</td><td>v${t.version}</td><td>${t.required ? '是' : '否'}</td>
       <td>${t.allow_decline ? '是' : '否'}</td><td>${t.minor_only ? '是' : '否'}</td>
       <td style="white-space:nowrap"><button class="btn tiny secondary" data-t="${t.id}">編輯</button>
+        <button class="btn tiny secondary" data-tp="${t.key}">列印空白（兩聯）</button>
+        <button class="btn tiny secondary" data-tw="${t.key}">匯出 Word</button>
         <button class="btn tiny danger" data-td="${t.id}">刪除</button></td></tr>`)) +
       '<div style="font-size:12.5px;color:var(--muted);margin-top:8px">修改內容會使版本遞增，已簽署者需重新簽署；舊版簽署紀錄保留全文快照。</div>';
+    cb.querySelectorAll('[data-tp]').forEach(b => {
+      b.onclick = () => window.open(`/api/consent-templates/${b.dataset.tp}/print`, '_blank');
+    });
+    cb.querySelectorAll('[data-tw]').forEach(b => {
+      b.onclick = () => { location.href = `/api/consent-templates/${b.dataset.tw}/print?format=doc`; };
+    });
     cb.querySelectorAll('[data-td]').forEach(b => {
       const t = templates.find(x => x.id === Number(b.dataset.td));
       b.onclick = async () => {

@@ -14,7 +14,8 @@ const router = express.Router();
 const KINDS = {
   employment: { label: '在職證明書', module: 'hr', subject: 'user' },
   resignation: { label: '離職證明書', module: 'hr', subject: 'user' },
-  treatment: { label: '治療證明', module: 'clients', subject: 'client' }
+  treatment: { label: '治療證明', module: 'clients', subject: 'client' },
+  profile: { label: '基本資料表', module: 'clients', subject: 'client' }
 };
 
 // 流水編號：前綴 + 西元年月 + 四碼序號，如 KC2026090001。
@@ -76,6 +77,30 @@ function subjectRows(kind, subject, extra = {}) {
       { label: '備註', value: '' }
     ];
   }
+  if (kind === 'profile') {
+    const pick = (v, opts) => (v ? String(v) : opts);
+    return [
+      { label: '姓名', value: u.name || '' },
+      { label: '性別', value: pick(GENDER[u.gender], '男 ／ 女（請圈選）') },
+      { label: '生日', value: rocText(u.birth_date) || '民國＿＿＿年＿＿＿月＿＿＿日' },
+      { label: '電話', value: u.phone || '' },
+      { label: '身分證字號', value: u.id_no || '' },
+      { label: '教育程度', value: pick(u.education, '博士 ／ 碩士 ／ 學士 ／ 高中 ／ 國中 ／ 國小及以下（請圈選）') },
+      { label: '地址', value: u.address || '' },
+      { label: '婚姻狀態', value: pick(u.marital, '已婚 ／ 未婚 ／ 分居 ／ 離異 ／ 其他＿＿＿＿＿（請圈選）') },
+      { label: '有無子女', value: '有＿＿＿＿＿＿＿＿＿＿＿＿；無' },
+      { label: '家中同住成員', value: '' },
+      { label: '主要困擾', value: u.main_issue || '' },
+      { label: '重大傷病卡', value: '有，診斷名＿＿＿＿＿＿＿＿＿＿；無' },
+      { label: '身心障礙手冊', value: '有，類別／程度＿＿＿＿＿＿＿＿；無' },
+      { label: '是否就診過兒童心智科或精神科', value: '有，民國＿＿＿年於＿＿＿＿＿＿醫院就診；否' },
+      { label: '是否做過心理衡鑑', value: '有 ／ 無' },
+      { label: '是否做過心理諮商', value: '有 ／ 無' },
+      { label: '是否用藥', value: '目前服用＿＿＿＿＿；曾經服用＿＿＿＿＿藥物，維持多長時間＿＿＿＿＿；無' },
+      { label: '重大醫療史（手術、住院）', value: u.history || '' },
+      { label: '如何得知本治療所資訊', value: pick(u.source, '路過看到；＿＿＿＿＿介紹；網路搜尋；其他＿＿＿＿＿') }
+    ];
+  }
   return [
     { label: '案主姓名', value: u.name || '' },
     { label: '身分證字號', value: u.id_no || '' },
@@ -87,6 +112,7 @@ function subjectRows(kind, subject, extra = {}) {
 }
 
 function signatureRows(kind) {
+  if (kind === 'profile') return [];
   if (kind === 'treatment') {
     const lic = getSetting('center_director_license', '');
     return [
@@ -141,6 +167,10 @@ function buildTemplate(kind, subjectId, purpose = '') {
       statement: statementRaw.replace('{purpose}', purpose || '＿＿＿＿'),
       org: orgBlock(kind),
       signatures: signatureRows(kind),
+      // 基本資料表背面的簽到欄：空白格數可自行增減，欄位名稱也能改
+      grid: kind === 'profile'
+        ? { label: '晤談紀錄（每次晤談由櫃檯填寫）', headers: ['日期', '時間', '簽名', '收費'], rows: 12 }
+        : null,
       footer_date: `中華民國 ${new Date().getFullYear() - 1911} 年 ${new Date().getMonth() + 1} 月 ${new Date().getDate()} 日`
     }
   };
@@ -219,6 +249,11 @@ function cleanData(d = {}) {
     statement: String(d.statement || ''),
     org: list(d.org),
     signatures: list(d.signatures),
+    grid: d.grid && Array.isArray(d.grid.headers) && d.grid.headers.length ? {
+      label: String(d.grid.label || ''),
+      headers: d.grid.headers.map(h => String(h || '').trim()).filter(Boolean),
+      rows: Math.min(40, Math.max(1, Math.round(Number(d.grid.rows) || 1)))
+    } : null,
     footer_date: String(d.footer_date || '')
   };
 }
@@ -307,6 +342,9 @@ function certHtml(c, data, forWord) {
   .sign span { display: inline-block; min-width: 220px; border-bottom: 1px solid #444; }
   .date { margin-top: 34px; text-align: center; letter-spacing: 2px; }
   .void { color: #b4381f; text-align: center; font-size: 18px; margin-bottom: 8px; }
+  .gridlb { font-weight: 600; margin: 18px 0 6px; }
+  table.grid th { background: #f2f5f5; width: auto; text-align: center; }
+  table.grid td { height: 30px; }
   .bar { margin-bottom: 12px; }
   @media print { .bar { display: none; } }
 </style></head><body>
@@ -318,6 +356,10 @@ ${data.subtitle ? `<div class="sub">${esc(data.subtitle)}</div>` : ''}
 <table>${data.rows.map(r => `<tr><th>${esc(r.label)}</th><td>${nl(r.value)}</td></tr>`).join('')}</table>
 ${data.statement ? `<div class="stmt">${data.statement_label
     ? `<div class="lb">${esc(data.statement_label)}</div>` : ''}${nl(data.statement)}</div>` : ''}
+${data.grid ? `${data.grid.label ? `<div class="gridlb">${esc(data.grid.label)}</div>` : ''}
+<table class="grid"><tr>${data.grid.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr>
+${Array.from({ length: data.grid.rows }, () =>
+    `<tr>${data.grid.headers.map(() => '<td>&nbsp;</td>').join('')}</tr>`).join('')}</table>` : ''}
 <div class="org">${data.org.map(r => `${esc(r.label)}：${esc(r.value)}`).join('<br>')}</div>
 ${data.signatures.length ? `<div class="sign">${data.signatures.map(r =>
     `${esc(r.label)}：<span>${esc(r.value)}</span>`).join('<br>')}</div>` : ''}
