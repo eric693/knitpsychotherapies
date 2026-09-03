@@ -1857,6 +1857,36 @@ function startServer() {
     assert(c.pending_consents.some(x => x.key === 'privacy'), '未設對象的同意書仍對所有人顯示');
   });
 
+  section('機構核銷');
+  await test('內建三家單位的核銷方式，季配單位只在 1、4、7、10 月列為應核銷', async () => {
+    const jan = await admin.ok('GET', '/api/partners-billing?month=2026-01');
+    const feb = await admin.ok('GET', '/api/partners-billing?month=2026-02');
+    const q = jan.rows.find(r => r.name.includes('家扶'));
+    assert(q, '應內建家扶－心創服務');
+    equal(q.cycle_label, '每季', '核銷方式');
+    equal(q.months, '1,4,7,10', '核銷月份');
+    assert(q.due, '1 月應核銷');
+    assert(!feb.rows.find(r => r.name.includes('家扶')).due, '2 月不核銷');
+    const m = jan.rows.find(r => r.name === '國軍方案');
+    assert(m.due && feb.rows.find(r => r.name === '國軍方案').due, '每月核銷者每個月都要');
+  });
+  await test('核銷需要資料可自行填寫，並印進核銷表', async () => {
+    const p = (await admin.ok('GET', '/api/partners')).find(x => x.name.includes('家扶'));
+    await admin.ok('PUT', `/api/partners/${p.id}`, {
+      billing_docs: '服務紀錄表\n收據正本\n個案簽到表', settle_note: '每季結束後 15 日內送件'
+    });
+    const board = await admin.ok('GET', '/api/partners-billing?month=2026-04');
+    const row = board.rows.find(r => r.id === p.id);
+    assert(row.docs.includes('個案簽到表'), '需要資料應存下來');
+    const html = await admin.get('/api/partners-billing/print?month=2026-04');
+    assert(html.text.includes('機構核銷') && html.text.includes('個案簽到表')
+      && html.text.includes('每季結束後'), '核銷表應含機構、方式與需要資料');
+    const onlyDue = await admin.get('/api/partners-billing/print?month=2026-02&due=1');
+    assert(!onlyDue.text.includes('家扶'), '只列本月應核銷時，季配單位在 2 月不出現');
+    const doc = await admin.get('/api/partners-billing/print?month=2026-04&format=doc');
+    equal(doc.status, 200, 'Word 匯出');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

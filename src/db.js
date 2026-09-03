@@ -1159,6 +1159,13 @@ ensureColumns('service_plans', {
   register_url: "TEXT NOT NULL DEFAULT ''",
   signin_url: "TEXT NOT NULL DEFAULT ''"
 });
+// 機構核銷：每家合作單位的核銷頻率與該附哪些資料，
+// 櫃檯每個月照「機構核銷」總表就知道這個月要跟誰請款、要準備什麼。
+ensureColumns('partners', {
+  billing_cycle: "TEXT NOT NULL DEFAULT ''",     // monthly 每月 / quarterly 每季 / per_case 逐案 / other 其他
+  billing_months: "TEXT NOT NULL DEFAULT ''",    // 每季或不定期時的月份（如 1,4,7,10）
+  billing_docs: "TEXT NOT NULL DEFAULT ''"       // 核銷需要的資料（每行一項）
+});
 ensureColumns('plan_topics', {
   report_code: "TEXT NOT NULL DEFAULT ''",
   code_prefix: "TEXT NOT NULL DEFAULT ''"
@@ -1175,6 +1182,25 @@ if (getSetting('report_code_seeded', '') !== '1') {
       .run(mark, `%${mark}%`);
   }
   setSetting('report_code_seeded', '1');
+}
+
+// 機構核銷方式：所方原本用一張表管的三家，第一次升級時帶進來（已存在的只補空欄位）
+if (getSetting('partner_billing_seeded', '') !== '1') {
+  const DEFAULTS = [
+    { name: '家扶－心創服務', type: 'gov', cycle: 'quarterly', months: '1,4,7,10' },
+    { name: '國軍方案', type: 'gov', cycle: 'monthly', months: '' },
+    { name: '國軍醫院心理衡鑑', type: 'medical', cycle: 'monthly', months: '' }
+  ];
+  const find = db.prepare('SELECT id, billing_cycle FROM partners WHERE name = ?');
+  const ins = db.prepare(`INSERT INTO partners (name, type, billing_cycle, billing_months)
+    VALUES (?,?,?,?)`);
+  const upd = db.prepare("UPDATE partners SET billing_cycle = ?, billing_months = ? WHERE id = ? AND billing_cycle = ''");
+  for (const d of DEFAULTS) {
+    const exist = find.get(d.name);
+    if (exist) upd.run(d.cycle, d.months, exist.id);
+    else ins.run(d.name, d.type, d.cycle, d.months);
+  }
+  setSetting('partner_billing_seeded', '1');
 }
 
 // 國軍心理健康照護方案的註冊與簽到網址（國防部系統）：只在沒填過時帶入一次

@@ -20,6 +20,12 @@ function partnerDialog(p, onDone) {
       ${UI.input('rate', '每次議定價', { type: 'number', value: d.rate || 0 })}
       ${UI.input('quota_sessions', '契約總次數（0 為不限）', { type: 'number', value: d.quota_sessions || 0 })}
       ${UI.input('address', '地址', { value: d.address || '', full: true })}
+      ${UI.select('billing_cycle', '核銷方式（多久核銷一次）',
+    [['', '未設定'], ['monthly', '每月'], ['quarterly', '每季'], ['half_year', '每半年'],
+      ['yearly', '每年'], ['per_case', '逐案結案後'], ['other', '其他（見備註）']],
+    { value: d.billing_cycle || '' })}
+      ${UI.input('billing_months', '核銷月份（逗號分隔，如 1,4,7,10）', { value: d.billing_months || '' })}
+      ${UI.textarea('billing_docs', '核銷需要資料（每行一項）', { value: d.billing_docs || '', full: true, rows: 4 })}
       ${UI.textarea('settle_note', '請款方式', { value: d.settle_note || '' })}
       ${UI.textarea('note', '備註', { value: d.note || '' })}
       ${p ? UI.checkbox('active', '合作中', d.active) : ''}
@@ -40,13 +46,30 @@ App.page('partners', {
     '先「新增合作單位」建立契約（學校認輔、企業 EAP、社政委託等），設定計價與用量上限。',
     '月底按「產生月結請款單」把該單位當月的晤談彙整成一張，「對帳單」可列印給對方，收到款再按「狀態」改為已收。',
     '契約內容有變動時，草稿狀態的請款單可按「依現況重算」。',
+    '「機構核銷」區塊會依各單位設定的核銷頻率（每月／每季 1、4、7、10 月等）標出本月該跟誰核銷、要附哪些資料，可列印或匯出 Word。',
   ],
   module: 'partners',
   async render(el) {
     const [partners, settlements] = await Promise.all([GET('/partners'), GET('/settlements')]);
+    const month = UI.thisMonth();
+    const billing = await GET('/partners-billing?month=' + month);
+    const due = billing.rows.filter(r => r.due);
     el.innerHTML = `<div class="toolbar"><div class="spacer"></div>
+        <button class="btn secondary" id="billprint">機構核銷表</button>
         <button class="btn secondary" id="gen">產生月結請款單</button>
         <button class="btn" id="add">新增合作單位</button></div>
+      <div class="card"><h3>機構核銷（${month}）
+          <span style="font-size:13px;font-weight:400;color:var(--muted)">本月應核銷 ${due.length} 家</span></h3>
+        ${UI.table(['機構名稱', '核銷方式', '核銷需要資料', '本月可核銷', '請款單'],
+    billing.rows.map(r => `<tr${r.due ? '' : ' style="color:var(--muted)"'}>
+          <td><strong>${UI.esc(r.name)}</strong>${r.due ? ' ' + UI.tag('本月應核銷', 'warn') : ''}</td>
+          <td>${UI.esc(r.cycle_label)}${r.months ? `（${UI.esc(r.months)} 月）` : ''}</td>
+          <td style="font-size:12.5px">${UI.nl2br(r.docs || '－')}</td>
+          <td>${r.sessions} 次</td>
+          <td>${{ none: '尚未開立', draft: '草稿', sent: '已請款', paid: '已入帳' }[r.settlement_status]}
+            ${r.settlement_amount ? '<br>' + UI.fmtMoney(r.settlement_amount) : ''}</td></tr>`), '尚無合作單位')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
+          核銷方式與需要資料在各單位的「編輯」裡設定；核銷表可列印或匯出 Word 帶去對帳。</div></div>
       <div class="card"><h3>合作單位</h3>
         ${UI.table(['單位', '類別', '聯絡人', '議定價', '契約期間', '個案數', '已用次數／額度', ''],
       partners.map(p => `<tr${p.active ? '' : ' style="color:var(--muted)"'}>
@@ -72,6 +95,22 @@ App.page('partners', {
             ${s.status !== 'paid' ? `<button class="btn tiny danger" data-d="${s.id}">刪除</button>` : ''}</td></tr>`), '尚無請款單')}</div>`;
 
     el.querySelector('#add').onclick = () => partnerDialog(null, () => App.go('partners'));
+    el.querySelector('#billprint').onclick = () => UI.modal({
+      title: '機構核銷表', hideFooter: true,
+      body: `<div class="form-grid">
+          ${UI.input('m', '月份', { type: 'month', value: month })}
+          ${UI.checkbox('due', '只列本月應核銷的單位', false)}
+        </div>
+        <div class="toolbar" style="margin-top:12px">
+          <button class="btn" id="pr">列印／PDF</button>
+          <button class="btn secondary" id="wd">匯出 Word</button></div>`,
+      onOpen: e2 => {
+        const qs = () => `month=${e2.querySelector('[name=m]').value}`
+          + `&due=${e2.querySelector('[name=due]').checked ? 1 : 0}`;
+        e2.querySelector('#pr').onclick = () => window.open(`/api/partners-billing/print?${qs()}`, '_blank');
+        e2.querySelector('#wd').onclick = () => { location.href = `/api/partners-billing/print?${qs()}&format=doc`; };
+      }
+    });
     el.querySelectorAll('[data-e]').forEach(b => {
       b.onclick = () => partnerDialog(partners.find(p => p.id === Number(b.dataset.e)), () => App.go('partners'));
     });
