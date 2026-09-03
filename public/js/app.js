@@ -184,16 +184,29 @@ const App = {
 
   // 為每張清單補上就地搜尋：頁面自己已有搜尋框（或表格太短）就不重複加。
   autoSearch(body, def) {
-    if (!body || body.querySelector('.fb-q')) return;
-    const already = Array.from(body.querySelectorAll('input')).some(i => /搜尋/.test(i.placeholder || ''));
-    if (already) return;
-    const cards = Array.from(body.querySelectorAll('.card')).filter(c => {
-      const rows = c.querySelectorAll('table.list tbody tr');
-      return rows.length >= (def.searchMin || 5);
-    });
+    if (!body) return;
+    // 清單頁常在切換月份或篩選後重畫表格，重畫會把搜尋列一起洗掉；
+    // 因此掛一個觀察器，表格重畫後再補回來（已經有搜尋列的卡片不會重複加）。
+    if (!body._searchWatch) {
+      body._searchWatch = true;
+      let t = null;
+      new MutationObserver(() => {
+        clearTimeout(t);
+        t = setTimeout(() => App.autoSearch(body, def), 150);
+      }).observe(body, { childList: true, subtree: true });
+    }
+    // 頁面自己已經有搜尋框（多半是打 API 的伺服器端搜尋）就不再疊一個
+    const own = Array.from(body.querySelectorAll('input')).some(i =>
+      /搜尋/.test(i.placeholder || '') && !i.classList.contains('fb-q'));
+    if (own) return;
+    const min = def.searchMin || 5;
+    const cards = Array.from(body.querySelectorAll('.card'))
+      .filter(c => c.querySelectorAll('table.list tbody tr').length >= min && !c.querySelector('.fb-q'));
     for (const card of cards) UI.filterBar(card, { search: def.searchHint || '搜尋這張表' });
     // 卡片外的獨立表格（有些頁面直接放表）
-    if (!cards.length && body.querySelectorAll('table.list tbody tr').length >= (def.searchMin || 5)) {
+    if (!body.querySelector('.card table.list')
+      && body.querySelectorAll('table.list tbody tr').length >= min
+      && !body.querySelector('.fb-q')) {
       UI.filterBar(body, { search: def.searchHint || '搜尋這張表' });
     }
   },

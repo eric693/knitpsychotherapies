@@ -128,7 +128,9 @@ function certDialog(seed, onDone) {
         }
       };
       if (el._saveTemplate) {
-        await POST(`/certificates/template/${seed.kind}`, { data: body.data });
+        await POST(`/certificates/template/${seed.kind}`, {
+          data: body.data, subject_id: seed.subject_id || 0, purpose: f.purpose || ''
+        });
         UI.toast('已存成這類表單的預設內容');
       }
       const r = isNew ? await POST('/certificates', body) : await PUT(`/certificates/${seed.id}`, body);

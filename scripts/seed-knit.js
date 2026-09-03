@@ -11,15 +11,33 @@ const { db, getSetting } = require('../src/db');
 // ---- 心理師 ----
 // 密碼一律為初始密碼，請各位心理師首次登入後自行修改。
 const INIT_PASSWORD = 'knit2026';
+// 心理師名單、證書字號與專長取自所方官網的心理師介紹頁，
+// 供收據、證明書落款與線上預約表單顯示；日後異動請以後台「帳號權限」為準（重跑本檔不會蓋掉已改過的簡介）。
 const COUNSELORS = [
-  { username: 'chung', name: '鍾芯瑜', title: '', license_type: '臨床心理師' },
-  { username: 'lo', name: '羅捷', title: '', license_type: '臨床心理師' },
-  { username: 'chueh', name: '闕靖惠', title: '', license_type: '臨床心理師' },
-  { username: 'chang-wl', name: '張文藍', title: '', license_type: '臨床心理師' },
-  { username: 'chuang', name: '莊育涵', title: '', license_type: '臨床心理師' },
-  { username: 'chang-yl', name: '張益綸', title: '', license_type: '諮商心理師' },
-  { username: 'hsu', name: '許峰益', title: '', license_type: '諮商心理師' },
-  { username: 'hsiao', name: '蕭如軒', title: '', license_type: '諮商心理師' }
+  { username: 'chung', name: '鍾芯瑜', title: '', license_type: '臨床心理師', license_no: '心理字第001923號',
+    specialty: '兒童青少年（注意力不足／過動症、自閉症、情緒調節困難、親子溝通、創傷療育）、成人親職諮商、創傷療育、伴侶諮商',
+    intro: '治療取向：系統觀與依附理論、創傷知情與身體經驗。' },
+  { username: 'lo', name: '羅捷', title: '', license_type: '臨床心理師', license_no: '心理字第002045號',
+    specialty: '自閉症類群與注意力不足過動症評估介入、兒童早期療育、兒童青少年情緒行為困擾、依附與手足議題、親職教養諮詢、兒童遊戲治療、創傷知情',
+    intro: '治療取向：現象學心理學，以關係脈絡與發展適應為中心。' },
+  { username: 'chueh', name: '闕靖惠', title: '', license_type: '臨床心理師', license_no: '心理字第001839號',
+    specialty: '親職與家庭關係（正向教養、親子溝通、代際創傷）、成人情緒困擾與強迫行為、睡眠困擾、悲傷輔導、職場與職涯心理、正念減壓',
+    intro: '工作風格：真誠、接納、思辨、引導。' },
+  { username: 'chang-wl', name: '張文藍', title: '', license_type: '臨床心理師', license_no: '心理字第002093號',
+    specialty: '兒童早期療育、兒童遊戲治療、兒童青少年情緒行為困擾、自閉症與注意力不足過動症評估介入、親職教養諮詢、創傷知情、物質成癮、人際與自我探索',
+    intro: '工作風格：接納、好奇、幽默，重視當下經驗與共同參與。' },
+  { username: 'chuang', name: '莊育涵', title: '', license_type: '臨床心理師', license_no: '心理字第002257號',
+    specialty: '兒童發展評估與早期療育、自閉症類群與注意力不足過動症評估介入、兒童青少年個別與團體治療、親子互動介入、依附關係、創傷知情照護',
+    intro: '工作風格：溫暖接納、重視關係、親職合作。' },
+  { username: 'chang-yl', name: '張益綸', title: '', license_type: '諮商心理師', license_no: '諮心字第003036號',
+    specialty: '大學生人際關係與戀愛議題、成人職場壓力與生涯規劃、親密關係與溝通困境',
+    intro: '治療取向：存在主義／意義取向、關係取向心理諮商。' },
+  { username: 'hsu', name: '許峰益', title: '', license_type: '諮商心理師', license_no: '諮心字第004510號',
+    specialty: '兒青情緒調節、人際互動、注意力與過動、自傷、網路成癮、霸凌與創傷；親子關係與正向教養；成人情緒壓力、親密關係、職場困境、長者心理健康',
+    intro: '工作風格：溫暖、陪伴、同理、合作、引導，採多元學派整合。' },
+  { username: 'hsiao', name: '蕭如軒', title: '', license_type: '諮商心理師', license_no: '諮心字第007035號',
+    specialty: '青少年與大學生發展（人際關係、情緒壓力、自我認同、學習生涯）、成人家庭關係、人際界限、感情議題、情緒調適、哀傷失落',
+    intro: '工作風格：真誠、溫暖、引導、同理，重視優勢觀點。' }
 ];
 
 // ---- 治療主題（各方案共用同一組）----
@@ -69,15 +87,21 @@ const findUser = db.prepare('SELECT * FROM users WHERE username = ? OR name = ?'
 for (const c of COUNSELORS) {
   const exist = findUser.get(c.username, c.name);
   if (exist) {
-    db.prepare(`UPDATE users SET name = ?, title = ?, license_type = ?, online_only = ?, intro = ?,
+    // 證書字號與專長只在後台還沒填時帶入，避免蓋掉所方自己更新過的內容
+    db.prepare(`UPDATE users SET name = ?, title = ?, license_type = ?, online_only = ?,
+        intro = CASE WHEN intro = '' THEN ? ELSE intro END,
+        license_no = CASE WHEN license_no = '' THEN ? ELSE license_no END,
+        specialty = CASE WHEN specialty = '' THEN ? ELSE specialty END,
         role = CASE WHEN role = 'admin' THEN role ELSE 'counselor' END, active = 1 WHERE id = ?`)
-      .run(c.name, c.title || '', c.license_type, c.online_only || 0, c.intro || '', exist.id);
+      .run(c.name, c.title || '', c.license_type, c.online_only || 0, c.intro || '',
+        c.license_no || '', c.specialty || '', exist.id);
     console.log(`更新心理師：${c.name}`);
   } else {
-    db.prepare(`INSERT INTO users (username, password_hash, name, role, title, license_type, online_only, intro)
-      VALUES (?,?,?,'counselor',?,?,?,?)`).run(
+    db.prepare(`INSERT INTO users (username, password_hash, name, role, title, license_type,
+        online_only, intro, license_no, specialty)
+      VALUES (?,?,?,'counselor',?,?,?,?,?,?)`).run(
       c.username, bcrypt.hashSync(INIT_PASSWORD, 10), c.name, c.title || '',
-      c.license_type, c.online_only || 0, c.intro || '');
+      c.license_type, c.online_only || 0, c.intro || '', c.license_no || '', c.specialty || '');
     console.log(`新增心理師：${c.name}（帳號 ${c.username}，初始密碼 ${INIT_PASSWORD}）`);
   }
 }

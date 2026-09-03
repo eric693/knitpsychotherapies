@@ -1911,6 +1911,14 @@ function startServer() {
     const ei2 = await admin.ok('GET', `/api/certificates/template?kind=early_intervention&subject_id=${clientId}`);
     equal(ei2.data.grid.label, '本所療育明細', '表格標題沿用');
     equal(ei2.data.grid.data.length, eiTpl.data.grid.data.length, '表格內容仍由系統帶出');
+    // 存預設時不可把當事人的資料一起存進去（下一位個案會看到上一位的姓名）
+    const other = (await admin.ok('GET', '/api/clients')).find(x => x.id !== clientId);
+    if (other) {
+      const forOther = await admin.ok('GET', `/api/certificates/template?kind=treatment&subject_id=${other.id}`);
+      equal(forOther.data.rows.find(r => r.label === '案主姓名').value, other.name,
+        '換一位個案時姓名要換掉，不能留著上一位的');
+      assert(!JSON.stringify(forOther.data).includes(c.id_no || '＿無此值＿'), '不應殘留上一位的身分證字號');
+    }
     // 回復系統預設
     await admin.ok('DELETE', '/api/certificates/template/treatment');
     const back = await admin.ok('GET', `/api/certificates/template?kind=treatment&subject_id=${clientId}`);

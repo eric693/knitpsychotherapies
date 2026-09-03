@@ -502,6 +502,14 @@ router.post('/certificates/template/:kind', requireStaff('settings'), (req, res)
   if (!KINDS[kind]) return res.status(404).json({ error: '找不到此類別' });
   const data = cleanData((req.body || {}).data);
   if (!data.title) return res.status(400).json({ error: '請填寫標題' });
+  // 存的是「版面與固定文字」，不是某一位當事人的資料：
+  // 開立畫面多半是在某位個案身上改的，若原封不動存起來，下一位個案就會看到上一位的
+  // 姓名、身分證字號與療程明細。因此凡是系統自動帶入的欄位一律清空，表格資料也不存。
+  const base = buildTemplate(kind, Number((req.body || {}).subject_id) || 0,
+    String((req.body || {}).purpose || ''), String((req.body || {}).month || '')).data;
+  const auto = new Map((base.rows || []).filter(r => r.value).map(r => [r.label, r.value]));
+  data.rows = data.rows.map(r => (auto.get(r.label) === r.value ? { ...r, value: '' } : r));
+  if (data.grid) data.grid = { ...data.grid, data: [] };
   setSetting(`cert_tpl_${kind}`, JSON.stringify(data));
   audit('staff', req.user.id, req.user.name, '設定表單預設內容', KINDS[kind].label);
   res.json({ ok: true });

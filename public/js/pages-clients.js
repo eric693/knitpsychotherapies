@@ -710,13 +710,13 @@ App.page('client', {
           if (a === 'minor') return c.age_group === 'child' || c.age_group === 'teen';
           return a === c.age_group;
         };
-        const all = templates.filter(t => !t.minor_only || c.is_minor);
-        const list = el.querySelector('#allconsents') && el.querySelector('#allconsents').checked
-          ? all : all.filter(fits);
+        // 全部都畫出來，不適用這位個案的先隱藏；勾「顯示全部」就地顯示，不必重新載入整頁
+        const list = templates.filter(t => !t.minor_only || c.is_minor);
         body.innerHTML = `<div class="card">${UI.table(['同意書', '版本', '狀態', '簽署人', '簽署時間', ''],
           list.map(t => {
             const s = c.consents.find(x => x.key === t.key && x.version === t.version);
-            return `<tr><td>${UI.esc(t.title)}${t.required ? ' *' : ''}</td><td>v${t.version}</td>
+            return `<tr data-fit="${fits(t) ? 1 : 0}"${fits(t) ? '' : ' style="display:none"'}>
+              <td>${UI.esc(t.title)}${t.required ? ' *' : ''}</td><td>v${t.version}</td>
               <td>${s ? (s.agreed ? UI.tag('已同意', 'ok') : UI.tag('不同意', 'warn')) : UI.tag('未簽署', 'danger')}</td>
               <td>${s ? UI.esc(s.signer_name) + '（' + (TW.signer_role[s.signer_role] || '') + '）' : '-'}</td>
               <td>${s ? UI.esc(s.signed_at) : '-'}</td>
@@ -731,7 +731,13 @@ App.page('client', {
   { child: '兒童', teen: '青少年', adult: '成人' }[c.age_group] || '這位個案'}的）</label>
           <div style="font-size:12.5px;color:var(--muted);margin-top:8px">標示 * 為必要同意書；範本內容修改後版本會遞增，需重新簽署。</div></div>`;
         const allBox = body.querySelector('#allconsents');
-        if (allBox) allBox.onchange = () => App.go('client/' + id + '/consents');
+        if (allBox) {
+          allBox.onchange = () => {
+            body.querySelectorAll('tr[data-fit="0"]').forEach(tr => {
+              tr.style.display = allBox.checked ? '' : 'none';
+            });
+          };
+        }
         body.querySelectorAll('[data-c]').forEach(b => {
           b.onclick = () => consentDialog(c.id, b.dataset.c, b.dataset.minor === '1', () => App.go('client/' + id));
         });
