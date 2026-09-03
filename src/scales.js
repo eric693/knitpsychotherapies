@@ -74,6 +74,25 @@ const SCALES = {
     ],
     cuts: [[0, 13, '低度壓力'], [14, 26, '中度壓力'], [27, 40, '高度壓力']]
   },
+  // WHO-5：分數越高代表幸福感越好（與其他量表相反）；
+  // 國際慣例以原始總分 ×4 換算成 0-100，低於 50 建議進一步評估憂鬱。
+  WHO5: {
+    name: 'WHO-5 幸福指標量表',
+    intro: '請針對以下五個句子，選出在過去兩週中最接近您的感受；數字越高代表越幸福。',
+    options: [['0', '從來沒有'], ['1', '有時候'], ['2', '少於一半的時間'],
+      ['3', '一半以上的時間'], ['4', '大部分的時間'], ['5', '全部的時間']],
+    positive: true,
+    items: [
+      '我感到情緒開朗且精神不錯',
+      '我感到心情平靜和放鬆',
+      '我感到有活力且精力充沛',
+      '我醒來感到神清氣爽並有充分休息',
+      '我的日常生活中充滿讓我感興趣的事物'
+    ],
+    alertNote: '總分 ×4 即為 0-100 的幸福感指數，低於 50（總分 12 以下）建議進一步評估憂鬱。',
+    cuts: [[0, 6, '幸福感很低，建議儘速評估'], [7, 12, '幸福感偏低，建議進一步評估'],
+      [13, 17, '幸福感中等'], [18, 25, '幸福感良好']]
+  },
   ISI: {
     name: 'ISI 失眠嚴重度量表',
     intro: '請評估您最近兩週的睡眠狀況。',
@@ -117,7 +136,7 @@ function publicScales() {
   for (const [k, s] of Object.entries(SCALES)) {
     out[k] = {
       key: k, name: s.name, intro: s.intro, options: s.options, items: s.items,
-      cuts: s.cuts, alertNote: s.alertNote || ''
+      cuts: s.cuts, alertNote: s.alertNote || '', positive: !!s.positive
     };
   }
   return out;

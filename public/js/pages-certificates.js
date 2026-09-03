@@ -6,7 +6,9 @@ const CERT_KINDS = [
   ['employment', '在職證明書'],
   ['resignation', '離職證明書'],
   ['treatment', '治療證明'],
-  ['profile', '基本資料表']
+  ['profile', '基本資料表'],
+  ['plan_detail', '方案服務明細（附表）'],
+  ['referral', '方案轉介單']
 ];
 
 function certRowsEditor(id, label, rows, hint) {
@@ -52,7 +54,12 @@ function certDialog(seed, onDone) {
         ${UI.input('grid_label', '空白表格標題（留空則不印表格）', { value: (d.grid && d.grid.label) || '' })}
         ${UI.input('grid_headers', '空白表格欄位（逗號分隔）',
     { value: d.grid ? d.grid.headers.join('、') : '' })}
-        ${UI.input('grid_rows', '空白表格列數', { type: 'number', value: (d.grid && d.grid.rows) || 0 })}
+        ${UI.input('grid_rows', '表格總列數（含已帶入的資料列）', { type: 'number', value: (d.grid && d.grid.rows) || 0 })}
+        ${d.grid && d.grid.data && d.grid.data.length ? `<div class="form-row full">
+          <label>已帶入的表格內容（每列以逗號分隔，可直接改字）</label>
+          <div id="c-grid">${d.grid.data.map(r => `<div class="cert-row" style="margin-bottom:6px">
+            <input class="vl" value="${UI.esc(r.join('，'))}" style="width:100%"></div>`).join('')}</div>
+        </div>` : ''}
         ${UI.input('footer_date', '文末日期', { value: d.footer_date || '', full: true })}
       </div>`,
     onOpen: el => {
@@ -90,7 +97,8 @@ function certDialog(seed, onDone) {
           grid: f.grid_headers.trim() ? {
             label: f.grid_label,
             headers: f.grid_headers.split(/[,，、]/).map(x => x.trim()).filter(Boolean),
-            rows: Number(f.grid_rows) || 12
+            rows: Number(f.grid_rows) || 12,
+            data: Array.from(el.querySelectorAll('#c-grid .vl')).map(i => i.value.split('，'))
           } : null,
           footer_date: f.footer_date
         }
@@ -108,6 +116,8 @@ App.page('certificates', {
   sub: '在職證明、離職證明、治療證明與基本資料表：套版帶出資料後，每一句話都能自行改寫，再列印或匯出 Word／PDF',
   help: [
     '選類別與當事人後按「開立」，系統先帶出預設內容；欄位名稱、內容、聲明文字、機構抬頭都可以直接改，也能自行增減列。',
+    '「方案服務明細（附表）」會把該個案在補助方案下已完成的晤談逐次列出（次數、日期、服務人員、面對面或通訊），民眾簽名與同意書檔名留白現場填。',
+    '「方案轉介單」會帶入機構代碼、個案基本資料與最近一次 BSRS-5 的分數，轉介原因與建議轉介機構的預設文字在系統設定改。',
     '「基本資料表」會帶入個案已建檔的資料，沒填的欄位印成待填的圈選或底線，背面另附可自訂欄位與列數的空白簽到表。',
     '在職／離職證明的資料取自帳號（性別、生日、到職與離職日在「帳號權限」編輯帳號時填）；治療證明的來談日期與次數由已完成的晤談自動算出。',
     '開立後可「列印／PDF」或「匯出 Word」，Word 檔可再自行排版。',

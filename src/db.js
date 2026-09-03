@@ -71,7 +71,10 @@ ensureColumns('users', {
 // 同意書列印時的簽署欄：留空用預設兩行（本人簽名、心理師簽名），
 // 國軍方案這類需要填單位、級職、身分證字號的，就把整段簽署欄寫在這裡。
 ensureColumns('consent_templates', {
-  sign_block: "TEXT NOT NULL DEFAULT ''"
+  sign_block: "TEXT NOT NULL DEFAULT ''",
+  // 列印時的聯別名稱（逗號分隔）：留空用預設的「個案留存聯、機構留存聯」；
+  // 公部門方案的同意書常寫成「存根聯、收執聯」，逐份可改。
+  copy_labels: "TEXT NOT NULL DEFAULT ''"
 });
 ensureColumns('session_notes', {
   // 覆核狀態：none 不需覆核（正式心理師）／pending 待督導覆核／approved 已覆核／returned 退回補正
@@ -320,6 +323,22 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     cert_treatment_title: '治療證明',
     cert_profile_title: '基本資料表',
     cert_profile_statement: '',
+    // 公部門補助方案的表單：服務明細（附表 2）與轉介單
+    cert_plan_detail_title: '心理諮商服務明細',
+    cert_plan_detail_statement: '',
+    cert_referral_title: '心理健康支持方案轉介單',
+    cert_referral_statement: '',
+    center_org_code: 'XY03190057',      // 衛福部方案的合作機構代碼
+    // 轉介單「建議轉介機構」預設值（每行一家；列印時整段可改）
+    referral_targets_default: '蕭芸嶙身心診所　電話 04-23939203　411 臺中市太平區樹孝路 501 號\n'
+      + '國軍臺中總醫院精神科　電話 04-23934191　411 臺中市太平區中山路二段 348 號',
+    // 轉介單的轉介原因清單（每行一組「類別：選項、選項…」，列印成可勾選的段落）
+    referral_reasons: '（1）情感／人際關係：家庭成員問題、職場人際關係、夫妻問題、喪親喪偶、感情因素、長期照顧壓力\n'
+      + '（2）精神健康／物質濫用：憂鬱傾向或罹患憂鬱症、罹患其他精神疾病、酒精濫用、藥物濫用\n'
+      + '（3）工作／經濟：職場工作壓力、職場霸凌、失業、債務\n'
+      + '（4）生理疾病：慢性化的疾病問題（如久病不癒）、急性化的疾病問題（如初得知患病）\n'
+      + '（5）校園問題：學校適應問題、課業壓力、校園霸凌、同儕相處問題、生涯規劃\n'
+      + '（6）其他：＿＿＿＿＿＿＿＿＿＿',
     cert_treatment_statement: '此份文件提供 {purpose} 做為接受本所心理治療證明之用，不改做其他用途，'
       + '案主需自負保管及保密責任。',
     // 對外提醒發送：填入 webhook 後由系統送出，留空則僅產生訊息供人工發送
@@ -529,15 +548,54 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 七、若我有選擇使用通訊諮商的服務，我會配合簽立並遵守機構提供之「通訊諮商知後同意書」。
 
 八、我已認真閱讀、瞭解以上我所應盡的權利，並同意上述內容及機構安排諮商輔導服務。`
+    },
+    {
+      key: 'youth', title: '15-45 歲青壯世代心理健康支持方案同意書', sort: 9, required: 0, allow_decline: 0, minor_only: 0,
+      copy_labels: '存根聯,收執聯',
+      sign_block: `立　書　人：＿＿＿＿＿＿＿＿＿＿
+立書人地址：＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿
+立書人身分證字號：＿＿＿＿＿＿＿＿＿＿
+立書人電話：＿＿＿＿＿＿＿＿＿＿
+
+合作機構：{center}
+合作機構說明人員：＿＿＿＿＿＿＿＿＿＿
+
+中華民國　＿＿＿　年　＿＿　月　＿＿　日
+
+【請繼續填答下列資料】
+居住地：＿＿＿＿＿＿＿＿＿＿　生日：民國＿＿＿年＿＿月＿＿日
+婚姻狀況（請圈選）：未婚 ／ 已婚 ／ 離婚或分居 ／ 喪偶 ／ 不便回答
+教育程度（請圈選）：國中（含）以下 ／ 高中職 ／ 專科 ／ 大學 ／ 研究所以上 ／ 不詳
+職業（請圈選）：無業或失業中 ／ 民意代表、主管及經理人員 ／ 專業人員 ／ 技術員及助理專業人員 ／
+　事務支援人員 ／ 服務及銷售工作人員 ／ 農、林、漁、牧業生產人員 ／ 技藝有關工作人員 ／
+　機械設備操作及組裝人員 ／ 基層技術工及勞力工 ／ 軍人 ／ 學生 ／ 不便回答
+
+※ 同意書之記載如有虛偽不實，填寫人恐觸犯刑法偽造文書或登載不實罪，將依法追究相關法律責任。`,
+      body: `本人＿＿＿＿＿＿＿＿在經過合作機構說明後，已充分瞭解本方案內容、風險、益處、相關權益及規範，同意參與衛生福利部 15-45 歲青壯世代心理健康支持方案，並願意遵守下列規定：
+
+一、同意僅使用本方案之補助服務至多 3 次，且如先前已有至其他合作機構接受本案補助之情事，應據實告知。如有虛偽不實，願負一切法律責任，並主動向合作機構繳回第 4 次起之溢領心理諮商補助費用，每次新臺幣壹仟陸佰元整。
+
+二、對於已排定或已預約之心理諮商，如連續 2 次無故未依約接受心理諮商，合作機構得拒絕提供其服務。
+
+三、若接受通訊心理諮商服務，應於接受通訊心理諮商前，於鏡頭出示有效身分證明文件及同意合作機構拍照保存該畫面，以利佐證受補助條件。
+
+四、同意衛生福利部蒐集本人相關個人資料，但僅作為去識別分析、研究及評估本方案政策成效，及稽核本方案合作機構服務品質等公務目的使用。
+
+五、{center}（合作機構）及主管衛生局針對上開本人各項資料，應妥為保管，以供日後相關單位查核服務執行狀況。
+
+衛生福利部　關心您！`
     }
   ];
   const hasT = db.prepare('SELECT 1 FROM consent_templates WHERE key = ?');
   const insT = db.prepare(`INSERT INTO consent_templates
-      (key, title, body, version, required, allow_decline, minor_only, sort, sign_block)
-    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)`);
+      (key, title, body, version, required, allow_decline, minor_only, sort, sign_block, copy_labels)
+    VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`);
+  // {center} 代入機構名稱，改名時範本不必逐份改寫
+  const center = getSetting('center_name', '本所');
   for (const t of CONSENT_DEFAULTS) {
     if (!hasT.get(t.key)) {
-      insT.run(t.key, t.title, t.body, t.required, t.allow_decline, t.minor_only, t.sort, t.sign_block || '');
+      insT.run(t.key, t.title, t.body.replace(/\{center\}/g, center), t.required, t.allow_decline,
+        t.minor_only, t.sort, (t.sign_block || '').replace(/\{center\}/g, center), t.copy_labels || '');
     }
   }
 }

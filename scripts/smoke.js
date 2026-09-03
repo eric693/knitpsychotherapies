@@ -1654,6 +1654,68 @@ function startServer() {
     equal(doc.status, 200, 'Word 匯出');
   });
 
+  section('青壯方案表單');
+  await test('WHO-5 幸福指標量表可施測，分數越高越好', async () => {
+    const scales = await admin.ok('GET', '/api/scales');
+    assert(scales.WHO5 && scales.WHO5.positive, 'WHO-5 應標示為分數越高越好');
+    equal(scales.WHO5.items.length, 5, '五題');
+    const r = await admin.ok('POST', '/api/assessments',
+      { client_id: clientId, scale: 'WHO5', date: ymd(new Date()), answers: [1, 1, 1, 1, 1] });
+    equal(r.total, 5, '總分');
+    assert(r.severity.includes('幸福感'), '判讀：' + r.severity);
+  });
+  await test('青壯方案同意書：聯別印成存根聯與收執聯', async () => {
+    const t = (await admin.ok('GET', '/api/consent-templates')).find(x => x.key === 'youth');
+    assert(t && t.body.includes('至多 3 次'), '應內建青壯方案同意書');
+    equal(t.copy_labels, '存根聯,收執聯', '聯別名稱');
+    assert(t.sign_block.includes('立書人身分證字號') && t.sign_block.includes('職業'),
+      '簽署欄應含立書人欄位與後半的填答資料');
+    const html = await admin.get('/api/consent-templates/youth/print');
+    assert(html.text.includes('存根聯') && html.text.includes('收執聯'), '應印出兩聯');
+    assert(!html.text.includes('個案留存聯'), '有自訂聯別時不用預設名稱');
+    const doc = await admin.get('/api/consent-templates/youth/print?format=doc');
+    equal(doc.status, 200, 'Word 匯出');
+  });
+  await test('方案服務明細把補助方案的已完成晤談逐次填進表格', async () => {
+    const me = await admin.ok('GET', '/api/me');
+    const plan = (await admin.ok('GET', '/api/service-plans')).find(p => p.active && p.kind === 'subsidy');
+    const date = nextWeekday(1, 220);
+    const made = await admin.ok('POST', '/api/appointments', {
+      client_id: clientId, counselor_id: me.id, date, start_time: '07:00',
+      plan_id: plan.id, mode: 'online', override: true
+    });
+    await admin.ok('POST', `/api/appointments/${made.id}/status`, { status: 'done' });
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=plan_detail&subject_id=${clientId}`);
+    equal(tpl.data.grid.headers[0], '服務次數', '表頭');
+    const row = tpl.data.grid.data.find(r => r[1].endsWith(date.slice(5).replace('-', '/')));
+    assert(row, '應列出這次晤談：' + JSON.stringify(tpl.data.grid.data));
+    equal(row[4], '✓', '通訊方式執行應打勾');
+    assert(tpl.data.rows.some(r => r.label === '合作機構代碼' && r.value), '應帶出機構代碼');
+    const cert = await admin.ok('POST', '/api/certificates', {
+      kind: 'plan_detail', subject_id: clientId, subject_name: tpl.subject_name, data: tpl.data
+    });
+    const html = await admin.get(`/api/certificates/${cert.id}/print`);
+    assert(html.text.includes('心理諮商服務明細') && html.text.includes(row[2]), '列印頁應含服務人員');
+    await admin.ok('POST', `/api/appointments/${made.id}/status`, { status: 'cancelled' });
+    await admin.del(`/api/appointments/${made.id}`);
+  });
+  await test('方案轉介單帶出機構代碼與最近一次 BSRS-5', async () => {
+    await admin.ok('POST', '/api/assessments',
+      { client_id: clientId, scale: 'BSRS5', date: ymd(new Date()), answers: [4, 4, 4, 4, 4, 3] });
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=referral&subject_id=${clientId}`);
+    const state = tpl.data.rows.find(r => r.label === '個案狀況');
+    assert(state.value.includes('■1.') && state.value.includes('■2.'), '總分 20、附加題 3 分應自動勾選');
+    assert(state.value.includes('BSRS-5：'), '應附上最近一次施測日期與分數');
+    const reason = tpl.data.rows.find(r => r.label === '轉介原因（可複選）');
+    assert(reason.value.includes('□職場霸凌'), '轉介原因應印成可勾選');
+    assert(tpl.data.rows.find(r => r.label === '建議轉介機構').value.includes('身心診所'), '建議轉介機構');
+    const cert = await admin.ok('POST', '/api/certificates', {
+      kind: 'referral', subject_id: clientId, subject_name: tpl.subject_name, data: tpl.data
+    });
+    const doc = await admin.get(`/api/certificates/${cert.id}/print?format=doc`);
+    equal(doc.status, 200, 'Word 匯出');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

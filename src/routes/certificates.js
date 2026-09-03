@@ -15,7 +15,10 @@ const KINDS = {
   employment: { label: '在職證明書', module: 'hr', subject: 'user' },
   resignation: { label: '離職證明書', module: 'hr', subject: 'user' },
   treatment: { label: '治療證明', module: 'clients', subject: 'client' },
-  profile: { label: '基本資料表', module: 'clients', subject: 'client' }
+  profile: { label: '基本資料表', module: 'clients', subject: 'client' },
+  // 公部門補助方案（青壯、國軍等）要交出去的兩張表
+  plan_detail: { label: '方案服務明細', module: 'clients', subject: 'client' },
+  referral: { label: '方案轉介單', module: 'clients', subject: 'client' }
 };
 
 // 流水編號：前綴 + 西元年月 + 四碼序號，如 KC2026090001。
@@ -77,6 +80,45 @@ function subjectRows(kind, subject, extra = {}) {
       { label: '備註', value: '' }
     ];
   }
+  if (kind === 'plan_detail') {
+    return [
+      { label: '民眾姓名', value: u.name || '' },
+      { label: '民眾身分證字號', value: u.id_no || '' },
+      { label: '提供心理諮商合作機構名稱', value: getSetting('center_name', '') },
+      { label: '合作機構代碼', value: getSetting('center_org_code', '') },
+      { label: '同意書檔案名稱', value: '' }
+    ];
+  }
+  if (kind === 'referral') {
+    const b = extra.bsrs;
+    const mark = on => (on ? '■' : '□');
+    return [
+      { label: '原醫事機構', value: getSetting('center_name', '') },
+      { label: '機構代碼', value: getSetting('center_org_code', '') },
+      { label: '機構電話', value: getSetting('center_phone', '') },
+      { label: '機構地址', value: getSetting('center_address', '') },
+      { label: '姓名', value: u.name || '' },
+      { label: '性別', value: GENDER[u.gender] ? `${GENDER[u.gender]}` : '□男　□女' },
+      { label: '身分證字號', value: u.id_no || '' },
+      { label: '出生日期', value: rocText(u.birth_date) },
+      { label: '聯絡電話', value: u.phone || '' },
+      { label: '聯絡人／關係', value: u.emergency_name
+        ? `${u.emergency_name}（${u.emergency_relationship || ''}）${u.emergency_phone || ''}` : '' },
+      { label: '聯絡地址', value: u.address || '' },
+      { label: '個案狀況', value:
+        `${mark(b && b.total >= 15)}1. BSRS-5 前五題總分大於 15 分`
+        + `　${mark(b && b.alert)}2. BSRS-5 附加題分數 2 分以上`
+        + `　□3. 其他經評估有轉介或長期介入之需要（請說明）：＿＿＿＿＿＿＿＿`
+        + (b ? `\n（最近一次 BSRS-5：${b.date}　總分 ${b.total}）` : '') },
+      { label: '轉介原因（可複選）', value: String(getSetting('referral_reasons', ''))
+        .split('\n').map(line => {
+          const [cat, opts] = line.split('：');
+          return opts ? `${cat}：${opts.split('、').map(o => '□' + o).join('　')}` : line;
+        }).join('\n') },
+      { label: '建議轉介機構', value: getSetting('referral_targets_default', '') },
+      { label: '轉介日期', value: `中華民國 ＿＿＿ 年 ＿＿ 月 ＿＿ 日` }
+    ];
+  }
   if (kind === 'profile') {
     const pick = (v, opts) => (v ? String(v) : opts);
     return [
@@ -111,8 +153,33 @@ function subjectRows(kind, subject, extra = {}) {
   ];
 }
 
+// 附在表單後面的表格：基本資料表是空白簽到表，方案服務明細則直接把已完成的晤談填進去
+function gridFor(kind, subject) {
+  if (kind === 'profile') {
+    return { label: '晤談紀錄（每次晤談由櫃檯填寫）', headers: ['日期', '時間', '簽名', '收費'], rows: 12 };
+  }
+  if (kind === 'plan_detail') {
+    const data = subject ? planSessionRows(subject.id, 'subsidy') : [];
+    return {
+      label: '心理諮商服務明細',
+      headers: ['服務次數', '日期（民國 年/月/日）', '心理諮商服務提供人員姓名',
+        '面對面方式執行', '通訊方式執行', '民眾簽名', '同意書檔案名稱'],
+      rows: Math.max(3, data.length),
+      data
+    };
+  }
+  return null;
+}
+
 function signatureRows(kind) {
   if (kind === 'profile') return [];
+  if (kind === 'plan_detail') return [{ label: '合作機構核章', value: '' }];
+  if (kind === 'referral') {
+    return [
+      { label: '心理諮商服務人員簽章', value: '' },
+      { label: '機構核章', value: '' }
+    ];
+  }
   if (kind === 'treatment') {
     const lic = getSetting('center_director_license', '');
     return [
@@ -126,6 +193,31 @@ function signatureRows(kind) {
     return [{ label: '機構', value: '' }, { label: '負責人', value: '' }];
   }
   return [{ label: '單位核章', value: '' }];
+}
+
+// 方案服務明細（如青壯方案附表 2）：把該案在補助方案下已完成的晤談逐次列出，
+// 面對面／通訊依預約當時的形式帶入，民眾簽名與同意書檔名留白由現場填。
+function planSessionRows(clientId, planKind) {
+  const rows = db.prepare(`SELECT a.date, a.mode, u.name AS counselor_name, sp.kind AS plan_kind
+    FROM appointments a
+    LEFT JOIN users u ON u.id = a.counselor_id
+    LEFT JOIN service_plans sp ON sp.id = a.plan_id
+    WHERE a.client_id = ? AND a.status = 'done' AND (? = '' OR sp.kind = ?)
+    ORDER BY a.date, a.start_time`).all(clientId, planKind || '', planKind || '');
+  return rows.map((r, i) => [
+    String(i + 1),
+    r.date ? `${Number(r.date.slice(0, 4)) - 1911}/${r.date.slice(5, 7)}/${r.date.slice(8, 10)}` : '',
+    r.counselor_name || '',
+    r.mode === 'online' ? '' : '✓',
+    r.mode === 'online' ? '✓' : '',
+    '', ''
+  ]);
+}
+
+// 最近一次 BSRS-5：轉介單的「個案狀況」要據此勾選
+function latestBsrs(clientId) {
+  return db.prepare(`SELECT date, total, alert FROM assessments
+    WHERE client_id = ? AND scale = 'BSRS5' ORDER BY date DESC, id DESC LIMIT 1`).get(clientId) || null;
 }
 
 // 治療證明要填的來談期間、次數與心理師，從已完成的晤談算出來
@@ -152,7 +244,8 @@ function buildTemplate(kind, subjectId, purpose = '') {
     subject = db.prepare('SELECT * FROM users WHERE id = ?').get(subjectId) || null;
   } else if (def.subject === 'client' && subjectId) {
     subject = db.prepare('SELECT * FROM clients WHERE id = ?').get(subjectId) || null;
-    if (subject) extra = treatmentFacts(subject.id);
+    if (subject && kind === 'treatment') extra = treatmentFacts(subject.id);
+    if (subject && kind === 'referral') extra = { bsrs: latestBsrs(subject.id) };
   }
   return {
     kind,
@@ -168,9 +261,7 @@ function buildTemplate(kind, subjectId, purpose = '') {
       org: orgBlock(kind),
       signatures: signatureRows(kind),
       // 基本資料表背面的簽到欄：空白格數可自行增減，欄位名稱也能改
-      grid: kind === 'profile'
-        ? { label: '晤談紀錄（每次晤談由櫃檯填寫）', headers: ['日期', '時間', '簽名', '收費'], rows: 12 }
-        : null,
+      grid: gridFor(kind, subject),
       footer_date: `中華民國 ${new Date().getFullYear() - 1911} 年 ${new Date().getMonth() + 1} 月 ${new Date().getDate()} 日`
     }
   };
@@ -252,7 +343,11 @@ function cleanData(d = {}) {
     grid: d.grid && Array.isArray(d.grid.headers) && d.grid.headers.length ? {
       label: String(d.grid.label || ''),
       headers: d.grid.headers.map(h => String(h || '').trim()).filter(Boolean),
-      rows: Math.min(40, Math.max(1, Math.round(Number(d.grid.rows) || 1)))
+      rows: Math.min(60, Math.max(1, Math.round(Number(d.grid.rows) || 1))),
+      // 已填好的資料列（如方案服務明細的每次晤談）；每格都可改字
+      data: Array.isArray(d.grid.data)
+        ? d.grid.data.slice(0, 60).map(r => (Array.isArray(r) ? r : []).map(v => String(v === undefined ? '' : v)))
+        : []
     } : null,
     footer_date: String(d.footer_date || '')
   };
@@ -358,7 +453,9 @@ ${data.statement ? `<div class="stmt">${data.statement_label
     ? `<div class="lb">${esc(data.statement_label)}</div>` : ''}${nl(data.statement)}</div>` : ''}
 ${data.grid ? `${data.grid.label ? `<div class="gridlb">${esc(data.grid.label)}</div>` : ''}
 <table class="grid"><tr>${data.grid.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr>
-${Array.from({ length: data.grid.rows }, () =>
+${(data.grid.data || []).map(row =>
+    `<tr>${data.grid.headers.map((h, i) => `<td>${esc(row[i] || '')}</td>`).join('')}</tr>`).join('')}
+${Array.from({ length: Math.max(0, data.grid.rows - (data.grid.data || []).length) }, () =>
     `<tr>${data.grid.headers.map(() => '<td>&nbsp;</td>').join('')}</tr>`).join('')}</table>` : ''}
 <div class="org">${data.org.map(r => `${esc(r.label)}：${esc(r.value)}`).join('<br>')}</div>
 ${data.signatures.length ? `<div class="sign">${data.signatures.map(r =>

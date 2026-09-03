@@ -1128,6 +1128,10 @@ App.page('settings', {
         ['cert_resignation_title', '離職證明書 標題'], ['cert_resignation_statement', '離職證明書 聲明文字'],
         ['cert_treatment_title', '治療證明 標題'], ['cert_profile_title', '基本資料表 標題'],
         ['cert_profile_statement', '基本資料表 說明文字'],
+        ['cert_plan_detail_title', '方案服務明細 標題'], ['cert_referral_title', '方案轉介單 標題'],
+        ['center_org_code', '方案合作機構代碼'],
+        ['referral_targets_default', '轉介單的建議轉介機構（每行一家）'],
+        ['referral_reasons', '轉介單的轉介原因（每行「類別：選項、選項」）'],
         ['cert_treatment_statement', '治療證明 聲明文字（{purpose} 會代入用途）']]],
       ['提醒發送通道', [['notify_webhook_url', 'Webhook 網址（留空則僅人工發送）'],
         ['notify_webhook_token', 'Webhook 驗證權杖']]],
@@ -1437,6 +1441,8 @@ App.page('settings', {
           ${UI.textarea('body', '內容', { value: t.body, rows: 16 })}
           ${UI.textarea('sign_block', '紙本簽署欄（留空用預設的本人／心理師簽名兩行）',
     { value: t.sign_block || '', rows: 6 })}
+          ${UI.input('copy_labels', '聯別名稱（逗號分隔，留空為「個案留存聯、機構留存聯」）',
+    { value: t.copy_labels || '', full: true, placeholder: '存根聯,收執聯' })}
           ${UI.checkbox('required', '必要同意書', t.required)}
           ${UI.checkbox('allow_decline', '允許選擇不同意', t.allow_decline)}
           ${UI.checkbox('minor_only', '僅未成年個案需簽', t.minor_only)}</div>`,

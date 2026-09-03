@@ -312,15 +312,16 @@ router.put('/consent-templates/:id', requireStaff('settings'), (req, res) => {
   const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '找不到此範本' });
   const { title = t.title, body = t.body, required, allow_decline, minor_only,
-    sign_block = t.sign_block } = req.body || {};
+    sign_block = t.sign_block, copy_labels = t.copy_labels } = req.body || {};
   // 內容有變動即遞增版本，已簽署者需重新簽署新版（簽署欄只影響紙本版面，不動版本）
   const version = body !== t.body ? t.version + 1 : t.version;
   db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?,
-      minor_only = ?, sign_block = ? WHERE id = ?`)
+      minor_only = ?, sign_block = ?, copy_labels = ? WHERE id = ?`)
     .run(title, body, version,
       required === undefined ? t.required : (required ? 1 : 0),
       allow_decline === undefined ? t.allow_decline : (allow_decline ? 1 : 0),
-      minor_only === undefined ? t.minor_only : (minor_only ? 1 : 0), String(sign_block || ''), t.id);
+      minor_only === undefined ? t.minor_only : (minor_only ? 1 : 0), String(sign_block || ''),
+      String(copy_labels || ''), t.id);
   audit('staff', req.user.id, req.user.name, '修改同意書範本', t.key, { version });
   res.json({ ok: true, version });
 });
@@ -404,10 +405,13 @@ router.get('/consent-templates/:key/print', requireStaff('consents'), (req, res)
   const forWord = req.query.format === 'doc';
   const two = String(req.query.copies || '2') !== '1';
   const org = getSetting('center_name', '本所');
+  // 聯別名稱可逐份自訂（如公部門方案寫成「存根聯、收執聯」）
+  const labels = String(t.copy_labels || '').split(/[,，]/).map(x => x.trim()).filter(Boolean);
   audit('staff', req.user.id, req.user.name, forWord ? '匯出同意書空白版（Word）' : '列印同意書空白版', t.title);
   sendDoc(res, consentDocHtml({
     title: t.title, body: t.body, forWord, signBlock: t.sign_block || '',
-    copies: two ? ['個案留存聯', `${org}留存聯`] : ['個案留存聯']
+    copies: labels.length ? (two ? labels : labels.slice(0, 1))
+      : (two ? ['個案留存聯', `${org}留存聯`] : ['個案留存聯'])
   }), forWord, `consent_${t.key}`);
 });
 

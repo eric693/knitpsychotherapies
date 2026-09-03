@@ -625,7 +625,7 @@ const IMPORTS = [
     columns: [
       { key: 'client_code', label: '個案編號', hint: '或改填身分證統一編號' },
       { key: 'client_id_no', label: '個案身分證統一編號' },
-      { key: 'scale', label: '量表', required: true, hint: 'PHQ9／GAD7／BSRS5／PSS10／ISI' },
+      { key: 'scale', label: '量表', required: true, hint: 'PHQ9／GAD7／BSRS5／WHO5／PSS10／ISI' },
       { key: 'date', label: '施測日期', required: true },
       { key: 'total', label: '總分', hint: '未填逐題作答時必填' },
       { key: 'answers', label: '逐題作答', hint: '各題分數以空格分隔（例 1 2 0 3 1 2 1 0 0）；填了會重新計分。'

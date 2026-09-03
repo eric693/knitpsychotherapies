@@ -780,5 +780,6 @@ const SCALE_NAMES = {
   GAD7: 'GAD-7 廣泛性焦慮',
   BSRS5: 'BSRS-5 心情溫度計',
   PSS10: 'PSS-10 知覺壓力',
+  WHO5: 'WHO-5 幸福指標',
   ISI: 'ISI 失眠嚴重度'
 };
