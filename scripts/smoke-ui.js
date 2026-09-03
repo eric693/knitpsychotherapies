@@ -1,6 +1,6 @@
 // 前端冒煙測試：用無頭瀏覽器巡過所有頁面，抓 JS 例外、500 回應與載入不出來的頁面。
 //
-//   npm run smoke:ui                 # 對 http://localhost:3340（正式站，唯讀操作）
+//   npm run smoke:ui                 # 對 http://localhost:3440（正式站，唯讀操作）
 //   BASE=http://127.0.0.1:3999 npm run smoke:ui
 //
 // 與 scripts/smoke.js 的分工：smoke.js 驗 API 行為與資料正確性（會寫入拋棄式資料庫），
@@ -11,11 +11,11 @@
 
 const fs = require('fs');
 
-const BASE = process.env.BASE || 'http://localhost:3340';
+const BASE = process.env.BASE || 'http://localhost:3440';
 const CANDIDATES = [
   '/root/lifecare/node_modules/playwright-core',
   '/root/mindcare/node_modules/playwright-core',
-  '/root/project/goodmoodpsy/mindcare/node_modules/playwright-core',
+  '/root/project/knitpsychotherapies/mindcare/node_modules/playwright-core',
   'playwright-core'
 ];
 

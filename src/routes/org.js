@@ -791,7 +791,7 @@ router.get('/exports/:kind', requireStaff('reports'), (req, res) => {
   if (format === 'pdf') {
     // 交由瀏覽器列印為 PDF：inline 開啟，頁面載入後自動帶出列印對話框
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(toPrintHtml(def.name, def.headers, rows, subtitle, getSetting('org_name') || getSetting('center_name', '好心情心理諮商所')));
+    return res.send(toPrintHtml(def.name, def.headers, rows, subtitle, getSetting('org_name') || getSetting('center_name', '織心心理治療所')));
   }
   if (format === 'xls') {
     res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');

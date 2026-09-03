@@ -1110,7 +1110,7 @@ App.page('settings', {
         ['dunning_template', '催繳訊息範本（{client}{date}{item}{amount}{days}{phone}{center}）'],
         ['waitlist_template', '候補遞補通知範本（{name}{date}{weekday}{time}{counselor}{center}{phone}）']]],
       ['收據印花稅總繳戳記', [['receipt_stamp_enabled', '收據是否印出戳記（1/0）'],
-        ['receipt_stamp_note', '戳記中間文字'], ['receipt_stamp_authority', '總繳所在地（如 臺南市）'],
+        ['receipt_stamp_note', '戳記中間文字'], ['receipt_stamp_authority', '總繳所在地（如 臺中市）'],
         ['receipt_stamp_payer', '負責總繳人姓名（留空則用負責心理師）']]],
       ['線上預約表單（對外）', [['booking_form_enabled', '開放對外預約表單（1/0）'],
         ['booking_public_url', '預約表單對外網址（LINE 卡片的預約按鈕會用到）'],

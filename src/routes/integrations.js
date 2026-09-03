@@ -1,4 +1,4 @@
-// Google 表單同步：所內原本的「好心情心理諮商所＿諮商預約表」填完後，
+// Google 表單同步：所內原本的 Google 預約表單填完後，
 // 由表單的 Apps Script 觸發器把回應 POST 到這裡，直接寫進後台的「線上預約申請」。
 //
 // 為什麼是 Apps Script 而不是我們去輪詢：Google 表單沒有公開的讀取 API，
@@ -39,7 +39,7 @@ function matchTopic(planId, text) {
   const rows = db.prepare('SELECT * FROM plan_topics WHERE plan_id = ? AND active = 1').all(planId);
   return rows.find(t => normalize(t.name) === key) || null;
 }
-// 「馬健倫 所長/諮商心理師」→ 取姓名部分比對；「由諮商所安排合適之心理師」→ 不指定
+// 「鍾芯瑜 臨床心理師」→ 取姓名部分比對；「由諮商所安排合適之心理師」→ 不指定
 function matchCounselor(text) {
   const raw = String(text || '').trim();
   if (!raw || /安排/.test(raw)) return null;
@@ -191,7 +191,7 @@ router.put('/integrations/google-form', requireStaff('settings'), (req, res) => 
 
 // 貼到 Google 表單「擴充功能 → Apps Script」的程式碼；設定「表單提交時」觸發器即可。
 function appsScript(endpoint, secret) {
-  return `// 好心情｜Google 表單 → 諮商所後台同步
+  return `// 織心｜Google 表單 → 諮商所後台同步
 // 1. 在表單畫面右上「⋮ → 指令碼編輯器」貼上本段程式碼並儲存
 // 2. 左側「觸發條件 → 新增觸發條件」：執行函式 onFormSubmit、事件來源「來自表單」、
 //    事件類型「表單提交時」，儲存並授權

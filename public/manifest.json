@@ -1,6 +1,6 @@
 {
-  "name": "好心情心理諮商所管理系統",
-  "short_name": "好心情後台",
+  "name": "織心心理治療所管理系統",
+  "short_name": "織心後台",
   "description": "櫃檯與心理師用的所內管理系統：排程、個案、晤談紀錄與收費。",
   "id": "/?app=staff",
   "start_url": "/?app=staff",

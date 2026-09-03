@@ -23,7 +23,7 @@ app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { req.rawBody = 
 // ---- 公開端點：登入頁文字 ----
 app.get('/api/public/ui-texts', (req, res) => {
   const out = {
-    center_name: getSetting('center_name', '好心情心理諮商所'),
+    center_name: getSetting('center_name', '織心心理治療所'),
     center_phone: getSetting('center_phone'),
     center_address: getSetting('center_address')
   };
@@ -62,7 +62,7 @@ app.get('/api/me', requireStaff(), (req, res) => {
     is_supervisor: req.user.role === 'admin' || req.user.role === 'supervisor'
       || !!db.prepare('SELECT 1 FROM users WHERE supervisor_id = ? AND active = 1').get(req.user.id),
     modules: req.user.role === 'admin' ? MODULE_KEYS : parsePermissions(req.user.permissions),
-    center_name: getSetting('center_name', '好心情心理諮商所')
+    center_name: getSetting('center_name', '織心心理治療所')
   });
 });
 
@@ -285,9 +285,9 @@ setInterval(dailyMaintenance, 6 * 3600 * 1000);
 const { runDailyPush } = require('./routes/line');
 setInterval(() => { runDailyPush().catch(e => console.error('LINE 每日推播失敗：', e.message)); }, 10 * 60 * 1000);
 
-const PORT = process.env.PORT || 3340;
+const PORT = process.env.PORT || 3440;
 app.listen(PORT, () => {
-  console.log(`好心情心理諮商所管理系統 http://localhost:${PORT}`);
+  console.log(`織心心理治療所管理系統 http://localhost:${PORT}`);
   console.log(`個案專區 http://localhost:${PORT}/portal.html`);
   console.log(`線上預約表單 http://localhost:${PORT}/booking.html`);
 });

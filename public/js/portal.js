@@ -40,7 +40,7 @@ const Portal = {
     const t = await GET('/public/ui-texts').catch(() => ({}));
     document.getElementById('app').innerHTML = `
       <div class="login-wrap"><div class="login-card">
-        <h1>${UI.esc(t.ui_portal_title || '好心情個案專區')}</h1>
+        <h1>${UI.esc(t.ui_portal_title || '織心個案專區')}</h1>
         <div class="sub">${UI.esc(t.ui_portal_login_sub || '預約與行政事項')}</div>
         <div class="form-row"><label>手機號碼</label><input id="lg-user" inputmode="numeric" autocomplete="username"></div>
         <div class="form-row"><label>密碼</label><input id="lg-pass" type="password" autocomplete="current-password"></div>

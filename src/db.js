@@ -213,14 +213,14 @@ CREATE INDEX IF NOT EXISTS idx_intakeform_status ON intake_forms(status, created
 
 // 前台可編輯文字（系統設定頁維護；清空即隱藏該區塊）
 const UI_TEXT_DEFAULTS = {
-  ui_staff_login_title: '好心情心理諮商所',
-  ui_staff_login_sub: '諮商所管理系統',
+  ui_staff_login_title: '織心心理治療所',
+  ui_staff_login_sub: '心理治療所管理系統',
   // 登入頁的提示框：正式站一律留空，不在公開頁面寫出任何帳號密碼；
   // 要做展示時才在「系統設定 → 前台文字」填入內容
   ui_demo_staff: '',
-  ui_portal_title: '好心情個案專區',
+  ui_portal_title: '織心個案專區',
   ui_portal_login_sub: '預約、量表填寫與費用查詢',
-  ui_portal_login_hint: '首次登入密碼為手機末 6 碼；忘記密碼請來電諮商所。',
+  ui_portal_login_hint: '首次登入密碼為手機末 6 碼；忘記密碼請來電治療所。',
   ui_demo_portal: '',
   ui_portal_note: '本專區僅提供預約與行政事項；晤談內容請於晤談時與心理師討論。',
   ui_crisis_note: '如遇立即危機請撥打 1925（安心專線）或 119；本系統非緊急通報管道。'
@@ -230,14 +230,14 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 {
   const SETTING_DEFAULTS = {
     ...UI_TEXT_DEFAULTS,
-    center_name: '好心情心理諮商所',
-    center_phone: '0909334443',
-    center_address: '708 臺南市安平區建平七街453巷75號2樓之2',
+    center_name: '織心心理治療所',
+    center_phone: '04-23937306',
+    center_address: '411 臺中市太平區樹孝路39號',
     // 機構登記資料：收據／報表抬頭與核銷文件需載明
-    center_license_no: '',              // 諮商所開業執照字號
+    center_license_no: '',              // 治療所開業執照字號
     center_director: '',                // 負責心理師
     center_tax_id: '',                  // 機構統一編號（營利事業登記者）
-    center_email: '',
+    center_email: 'knitpsychotherapy@gmail.com',
     session_minutes: '50',
     default_fee: '2000',
     intake_fee: '2500',
@@ -246,8 +246,8 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     // 未到固定收費：本所同意書寫明「行政規費 200 元」，填了就以固定金額為準，
     // 留 0 才回頭用上面的比例計算
     no_show_fee_fixed: '0',
-    case_code_prefix: 'C',
-    receipt_prefix: 'MC',
+    case_code_prefix: 'K',
+    receipt_prefix: 'KN',
     counseling_types: '初談,個別諮商,伴侶諮商,家族諮商,團體諮商,心理衡鑑',
     approach_options: 'CBT 認知行為,個人中心,心理動力,家族系統,DBT 辯證行為,ACT 接納承諾,敘事治療,遊戲治療,EMDR,其他',
     source_options: '自行求助,親友介紹,學校輔導室,醫療院所轉介,社會局／家防中心,企業EAP,法院裁定,其他',
@@ -853,7 +853,7 @@ ensureColumns('invoices', {
     // 印花稅總繳戳記：與所內公文用印相同內容，印在收據右下角
     receipt_stamp_enabled: '1',
     receipt_stamp_note: '本執行費收據印花稅總繳',
-    receipt_stamp_authority: '臺南市',
+    receipt_stamp_authority: '臺中市',
     receipt_stamp_payer: '',            // 負責總繳人姓名
     // 發票章（統一編號章）掃描圖：存 data URI，收據列印時蓋在用印欄旁邊。
     // 留空就只印文字，不會有破圖。
@@ -866,8 +866,8 @@ ensureColumns('invoices', {
   for (const [k, v] of Object.entries(EXT_SETTING_DEFAULTS)) if (!has.get(k)) ins.run(k, v);
 }
 
-// 方案別的實際內容（好心情現行的 12 個方案、11 個諮商主題與心理師名單）
-// 由 scripts/seed-goodmood.js 建立與更新，可重複執行；這裡不再灌任何示範方案，
+// 方案別的實際內容（織心現行的 12 個方案、11 個諮商主題與心理師名單）
+// 由 scripts/seed-knit.js 建立與更新，可重複執行；這裡不再灌任何示範方案，
 // 免得正式站上出現兩套方案名稱。
 
 module.exports = {

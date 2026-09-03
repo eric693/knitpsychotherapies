@@ -1,68 +1,53 @@
-// 依好心情心理諮商所現行的 Google 預約表單，建立心理師帳號、諮商主題與 12 個諮商方案。
-//   node scripts/seed-goodmood.js
+// 依織心心理治療所官網（https://www.knitpsychotherapies.com/）的服務項目與心理師名單，
+// 建立心理師帳號、治療主題與服務方案。
+//   node scripts/seed-knit.js
 //
 // 可重複執行：以名稱比對，已存在者更新內容，不會產生重複資料，也不會動到既有預約。
-// 補助方案的自付額一律 200 元場地費，方案給付金額 = 總額 - 200，
-// 若各方案實際給付不同，於後台「方案設定」逐一調整即可。
+// 收費金額官網未公開，以下一律是暫定值，請於後台「方案設定」逐一改成本所實際收費。
 
 const bcrypt = require('bcryptjs');
 const { db, getSetting } = require('../src/db');
 
-// ---- 心理師（表單「預約之心理師」）----
+// ---- 心理師 ----
 // 密碼一律為初始密碼，請各位心理師首次登入後自行修改。
-const INIT_PASSWORD = 'goodmood2026';
+const INIT_PASSWORD = 'knit2026';
 const COUNSELORS = [
-  { username: 'ma', name: '馬健倫', title: '所長', license_type: '諮商心理師' },
-  { username: 'wang-yc', name: '王詠蕎', title: '', license_type: '諮商心理師' },
-  { username: 'tsai', name: '蔡琳', title: '', license_type: '諮商心理師' },
-  { username: 'wu-ty', name: '吳宗怡', title: '', license_type: '諮商心理師' },
-  { username: 'wang-mc', name: '王敏慈', title: '', license_type: '諮商心理師' },
-  { username: 'fang', name: '方鋕丞', title: '', license_type: '臨床心理師' },
-  { username: 'lan', name: '藍挹丰', title: '', license_type: '諮商心理師', online_only: 1,
-    intro: '僅接受線上通訊諮商' }
+  { username: 'chung', name: '鍾芯瑜', title: '', license_type: '臨床心理師' },
+  { username: 'lo', name: '羅捷', title: '', license_type: '臨床心理師' },
+  { username: 'chueh', name: '闕靖惠', title: '', license_type: '臨床心理師' },
+  { username: 'chang-wl', name: '張文藍', title: '', license_type: '臨床心理師' },
+  { username: 'chuang', name: '莊育涵', title: '', license_type: '臨床心理師' },
+  { username: 'chang-yl', name: '張益綸', title: '', license_type: '諮商心理師' },
+  { username: 'hsu', name: '許峰益', title: '', license_type: '諮商心理師' },
+  { username: 'hsiao', name: '蕭如軒', title: '', license_type: '諮商心理師' }
 ];
 
-// ---- 諮商主題（表單「諮商主題」，各方案共用同一組）----
+// ---- 治療主題（各方案共用同一組）----
 const TOPICS = ['自我探索', '情緒困擾', '壓力調適', '親密關係', '原生家庭/親子關係',
-  '人際關係', '生涯議題', '心理疾患', '創傷與失落', '職場議題', '其他'];
+  '人際關係', '生涯議題', '心理疾患', '創傷與失落', '兒童青少年適應', '其他'];
 
-// ---- 諮商方案（表單「諮商方案」）----
-// subsidy 類方案：fee 為方案總額，個案只付 200 元場地費（VENUE_FEE），其餘由方案給付。
-// 場地費全額歸所方，不列入心理師抽成基數（抽成以方案給付的 1600 為基數）。
+// ---- 服務方案（官網服務項目）----
+// 金額為暫定值，請於後台調整；如日後承接政府補助方案，於後台新增 kind = 'subsidy' 的方案即可。
 const VENUE_FEE = 200;
 const PLANS = [
-  { name: '個別心理諮商（50 分鐘）', kind: 'self', appt_type: 'individual',
+  { name: '成人個別心理治療／諮商（50 分鐘）', kind: 'self', appt_type: 'individual',
     fee: 2000, session_minutes: 50 },
-  { name: '個別心理諮商（80 分鐘）', kind: 'self', appt_type: 'individual',
+  { name: '兒童、青少年個別心理治療（50 分鐘）', kind: 'self', appt_type: 'individual',
+    fee: 2000, session_minutes: 50, age_max: 18 },
+  { name: '兒童、青少年團體治療', kind: 'self', appt_type: 'group',
+    fee: 1200, session_minutes: 90, age_max: 18,
+    intro: '需先完成個別評估後才可入團。' },
+  { name: '伴侶諮商（80 分鐘）', kind: 'self', appt_type: 'couple',
     fee: 3000, session_minutes: 80 },
-  { name: '婚姻伴侶/家庭諮商（80 分鐘）', kind: 'self', appt_type: 'couple',
-    fee: 3000, session_minutes: 80, fee_mode: 'choice', fee_options: '3000,3600,4500' },
+  { name: '親職諮詢（50 分鐘）', kind: 'self', appt_type: 'family',
+    fee: 2000, session_minutes: 50 },
   { name: '通訊（視訊）諮商（50 分鐘）', kind: 'self', appt_type: 'individual',
     fee: 2000, session_minutes: 50, default_mode: 'online' },
-  { name: '親子/家長諮詢（80 分鐘）', kind: 'self', appt_type: 'family',
-    fee: 3000, session_minutes: 80 },
-  { name: '115 年度 15-45 歲青壯世代心理健康支持方案', kind: 'subsidy', appt_type: 'individual',
-    fee: 1800, session_minutes: 50, age_min: 15, age_max: 45, quota_per_year: 3,
-    counselor_week_limit: 6, subsidy_program: '青壯世代心理健康支持方案',
-    intro: '一年 3 次，需自付 200 元場地費。' },
-  { name: '115 年度臺南市教師支持方案', kind: 'subsidy', appt_type: 'individual',
-    fee: 1800, session_minutes: 50, quota_per_year: 6, subsidy_program: '臺南市教師支持方案',
-    intro: '一年 6 次，需自付 200 元場地費。' },
-  { name: '115 年度國軍心理健康方案', kind: 'subsidy', appt_type: 'individual',
-    fee: 1800, session_minutes: 50, quota_per_year: 6, subsidy_program: '國軍心理健康方案',
-    intro: '一年 6 次，需自付 200 元場地費。' },
-  { name: '臺南市政府員工協助方案', kind: 'subsidy', appt_type: 'individual',
-    fee: 1800, session_minutes: 50, quota_per_year: 4, subsidy_program: '臺南市政府員工協助方案',
-    intro: '一年 4 次，需自付 200 元場地費。' },
-  { name: '1219 台北捷運心理健康支持方案', kind: 'subsidy', appt_type: 'individual',
-    fee: 1800, session_minutes: 50, subsidy_program: '1219 台北捷運心理健康支持方案',
-    intro: '需自付 200 元場地費。' },
-  { name: '馬太鞍溪心理健康支持方案', kind: 'subsidy', appt_type: 'individual',
-    fee: 1800, session_minutes: 50, subsidy_program: '馬太鞍溪心理健康支持方案',
-    intro: '需自付 200 元場地費。' },
-  { name: 'LGBTQ+ 族群個別諮商方案（40 分鐘）', kind: 'self', appt_type: 'individual',
-    fee: 1200, session_minutes: 40, quota_per_year: 3,
-    intro: '限使用 3 次。' }
+  { name: 'EMDR 眼動減敏重整療法（80 分鐘）', kind: 'self', appt_type: 'individual',
+    fee: 3000, session_minutes: 80,
+    intro: '需先完成初次評估，由受訓心理師執行。' },
+  { name: '初次評估會談（50 分鐘）', kind: 'self', appt_type: 'individual',
+    fee: 2500, session_minutes: 50 }
 ];
 
 const SHARE_PERCENT = 0.6;   // 心理師抽成預設值，後台可逐方案／逐心理師調整

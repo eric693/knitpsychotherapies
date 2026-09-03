@@ -209,7 +209,7 @@ function startServer() {
     clientId = r.id;
     const c = await lin.ok('GET', `/api/clients/${clientId}`);
     clientCode = c.code;
-    assert(/^C\d{4}\d{3}$/.test(c.code), `個案編號格式異常：${c.code}`);
+    assert(/^K\d{4}\d{3}$/.test(c.code), `個案編號格式異常：${c.code}`);
   });
   await test('身分證檢查碼不符時回警告（設計為提示不擋）', async () => {
     const r = await lin.ok('POST', '/api/clients', { name: '冒煙身分證測試', id_no: 'A123456780' });
@@ -1140,7 +1140,7 @@ function startServer() {
     assert(r.center_name, '收據應帶機構抬頭');
   });
   await test('作廢重開會產生新號並與原號勾稽', async () => {
-    const r = await admin.ok('POST', `/api/receipts/${receiptId}/reissue`, { reason: '抬頭錯誤', title: '好心情股份有限公司' });
+    const r = await admin.ok('POST', `/api/receipts/${receiptId}/reissue`, { reason: '抬頭錯誤', title: '織心股份有限公司' });
     assert(r.receipt_no !== receiptNo, '應為新號');
     const list = await admin.ok('GET', '/api/receipts');
     const old = list.rows.find(x => x.id === receiptId);
@@ -1390,11 +1390,11 @@ function startServer() {
       response_id: 'smoke-resp-1',
       answers: {
         姓名: '陳表單', 信箱: 'form@example.com', 聯絡電話: '0955-123-456', 生理性別: '女',
-        出生年月日: '1995/06/15', 地址: '台南市安平區測試路 1 號', 身分證字號: 'a123456789',
+        出生年月日: '1995/06/15', 地址: '台中市太平區測試路 1 號', 身分證字號: 'a123456789',
         緊急聯絡人: '陳母', 緊急聯絡人電話: '0912345000', 緊急聯絡人關係: '母子',
-        '諮商方案 ': '個別心理諮商（50分鐘2000元）',
+        '諮商方案 ': '成人個別心理治療／諮商（50分鐘2000元）',
         諮商主題: '情緒困擾',
-        '預約之心理師          好心情心理諮商所心理師介紹': '馬健倫 所長/諮商心理師',
+        '預約之心理師          織心心理治療所心理師介紹': '鍾芯瑜 臨床心理師',
         欲安排之諮商時間: '星期一09:00-11:00、星期三14:00-16:00、星期五13:00-17:00'
       }
     };
@@ -1403,9 +1403,9 @@ function startServer() {
     });
     const d = await r.json();
     assert(r.ok, '同步失敗：' + JSON.stringify(d));
-    equal(d.matched.plan, '個別心理諮商（50 分鐘）', '方案對應');
+    equal(d.matched.plan, '成人個別心理治療／諮商（50 分鐘）', '方案對應');
     equal(d.matched.topic, '情緒困擾', '主題對應');
-    equal(d.matched.counselor, '馬健倫', '心理師對應');
+    equal(d.matched.counselor, '鍾芯瑜', '心理師對應');
     // 同一份回應重送不應產生第二筆
     const again = await (await fetch(BASE + '/api/integrations/google-form', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
@@ -1420,7 +1420,7 @@ function startServer() {
     const client = await admin.ok('GET', `/api/clients/${c.client_id}`);
     equal(client.id_no, 'A123456789', '身分證字號');
     equal(client.emergency_phone, '0912345000', '緊急聯絡人電話');
-    assert(client.address.includes('安平'), '地址');
+    assert(client.address.includes('太平'), '地址');
   });
   await test('表單同步設定頁提供 Apps Script 程式碼', async () => {
     const d = await admin.ok('GET', '/api/integrations/google-form');

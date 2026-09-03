@@ -298,5 +298,30 @@ if (!has('SELECT 1 FROM assessment_reports')) {
   console.log('第三階段展示資料已建立：視訊會議室與視訊預約、心理衡鑑報告、初談問卷、逾期收費單');
 }
 
-// 方案別、諮商主題與心理師名單（好心情現行設定）
-require('./seed-goodmood.js');
+// 方案別、治療主題與心理師名單（織心現行設定）
+require('./seed-knit.js');
+
+// 展示用的補助方案與可選金額方案。本所目前沒有承接補助方案，但系統支援，
+// 故只在示範／測試資料庫建，正式站的 scripts/seed-knit.js 不會建這兩個。
+{
+  const demoPlans = [
+    { name: '（示範）青壯世代心理健康支持方案', kind: 'subsidy', appt_type: 'individual',
+      fee: 1800, venue_fee: 200, subsidy_amount: 1600, subsidy_program: '青壯世代心理健康支持方案',
+      session_minutes: 50, age_min: 15, age_max: 45, quota_per_year: 3, counselor_week_limit: 6,
+      fee_mode: 'fixed', fee_options: '', intro: '一年 3 次，需自付 200 元場地費。' },
+    { name: '（示範）婚姻伴侶／家庭諮商（80 分鐘）', kind: 'self', appt_type: 'couple',
+      fee: 3000, venue_fee: 0, subsidy_amount: 0, subsidy_program: '',
+      session_minutes: 80, age_min: 0, age_max: 0, quota_per_year: 0, counselor_week_limit: 0,
+      fee_mode: 'choice', fee_options: '3000,3600,4500', intro: '' }
+  ];
+  const topics = ['自我探索', '情緒困擾', '壓力調適', '親密關係', '人際關係'];
+  for (const p of demoPlans) {
+    if (has('SELECT 1 FROM service_plans WHERE name = ?', p.name)) continue;
+    const cols = Object.keys(p);
+    const id = db.prepare(`INSERT INTO service_plans (${cols.join(',')}, share_mode, share_percent,
+      portal_visible, require_review, active) VALUES (${cols.map(() => '?').join(',')}, 'percent', 0.6, 1, 1, 1)`)
+      .run(...cols.map(c => p[c])).lastInsertRowid;
+    topics.forEach((t, i) => db.prepare('INSERT INTO plan_topics (plan_id, name, sort) VALUES (?,?,?)').run(id, t, i + 1));
+  }
+  console.log('示範方案已建立：補助方案與可選金額方案');
+}

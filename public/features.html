@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="好心情心理諮商所管理系統功能介紹：系統運作、LINE 預約、方案額度、收據、空間管理、安裝成 App 與保密分層。">
-<title>好心情諮商所管理系統</title>
+<meta name="description" content="織心心理治療所管理系統功能介紹：系統運作、LINE 預約、方案額度、收據、空間管理、安裝成 App 與保密分層。">
+<title>織心心理治療所管理系統</title>
 <style>
   :root{
     --ground:#F3F4F1; --panel:#FFFFFF; --ink:#1C2530; --ink-soft:#4C5763;
@@ -126,12 +126,12 @@
 <div class="wrap">
 <header class="top">
   <p class="eyebrow">功能介紹</p>
-  <h1>好心情心理諮商所管理系統</h1>
+  <h1>織心心理治療所管理系統</h1>
   <p class="lede">從來電、預約、晤談紀錄到收費與收據的整所作業系統。員工端網頁後台、個案端手機專區、公開線上預約表單，加上 LINE 官方帳號自動通知，同一份資料一次到底，不必再謄第二次。</p>
   <div class="meta">
-    <a href="https://goodmoodpsy.crownai.ink">員工端 goodmoodpsy.crownai.ink</a>
-    <a href="https://goodmoodpsy.crownai.ink/portal.html">個案專區 /portal.html</a>
-    <a href="https://goodmoodpsy.crownai.ink/booking.html">線上預約 /booking.html</a>
+    <a href="https://knitpsychotherapies.crownai.ink">員工端 knitpsychotherapies.crownai.ink</a>
+    <a href="https://knitpsychotherapies.crownai.ink/portal.html">個案專區 /portal.html</a>
+    <a href="https://knitpsychotherapies.crownai.ink/booking.html">線上預約 /booking.html</a>
     <span>LINE 官方帳號 @032cjyby</span>
   </div>
 </header>
@@ -235,7 +235,7 @@
   <h3>串接設定頁做三件事</h3>
   <ul>
     <li><strong>頻道憑證</strong>：貼上 LINE Developers Console 的 Channel access token（long-lived）與 Channel secret；已存的權杖只顯示末四碼，不改就留原樣。按「驗證連線」會向 LINE 取回官方帳號名稱與 ID，確認打得通。</li>
-    <li><strong>Webhook</strong>：按「寫回 LINE 並測試」，系統直接把 <code>https://goodmoodpsy.crownai.ink/api/line/webhook</code> 設定到 LINE 頻道並請 LINE 實際回打一次。同時記得到 LINE 後台關閉「自動回覆訊息」與「歡迎訊息」，改由本系統回覆。簽章以 channel secret 驗證，驗不過即忽略。</li>
+    <li><strong>Webhook</strong>：按「寫回 LINE 並測試」，系統直接把 <code>https://knitpsychotherapies.crownai.ink/api/line/webhook</code> 設定到 LINE 頻道並請 LINE 實際回打一次。同時記得到 LINE 後台關閉「自動回覆訊息」與「歡迎訊息」，改由本系統回覆。簽章以 channel secret 驗證，驗不過即忽略。</li>
     <li><strong>通知時間與樣式</strong>：晤談提醒提前時數、心理師行程每日推播時間、Flex 卡片主色、放在卡片按鈕上的預約表單網址。</li>
   </ul>
   <h3>綁定管理：綁了可以解、解了可以再綁</h3>
@@ -284,7 +284,7 @@
 
 <section id="gform">
   <h2><span class="num">04</span>Google 表單同步</h2>
-  <p class="sub">所內原本的「好心情心理諮商所＿諮商預約表」不必停用。</p>
+  <p class="sub">所內原本的 Google 預約表單不必停用。</p>
   <p>在「系統 → Google 表單同步」頁產生密鑰、把頁面上的 Apps Script 程式碼貼到表單的指令碼編輯器並設定「表單提交時」觸發器，之後每一筆回應都會即時寫入後台的「線上預約申請」，櫃檯不必再謄一次。</p>
   <ul>
     <li>方案／主題／心理師以<strong>選項文字自動對應</strong>（會自動忽略「（50分鐘2000元）」這類價目說明）；對不到時仍收單，並在申請上標示「需人工指定」，資料不會掉。</li>
@@ -316,8 +316,8 @@
 
   <h3>目前建立的方案</h3>
   <ul>
-    <li><strong>自費</strong>：個別 50 分鐘 2000、個別 80 分鐘 3000、婚姻伴侶／家庭 80 分鐘 3000（可選 3000／3600／4500）、通訊（視訊）諮商 50 分鐘 2000、親子／家長諮詢 80 分鐘 3000、LGBTQ+ 族群個別諮商 40 分鐘 1200（限 3 次）。</li>
-    <li><strong>補助</strong>（個案自付 200 元場地費，其餘由方案給付）：115 年度 15-45 歲青壯世代心理健康支持方案（一年 3 次、每位心理師每週 6 人次）、臺南市教師支持方案（6 次）、國軍心理健康方案（6 次）、臺南市政府員工協助方案（4 次）、1219 台北捷運心理健康支持方案、馬太鞍溪心理健康支持方案。</li>
+    <li><strong>自費</strong>：成人個別心理治療／諮商 50 分鐘 2000、兒童青少年個別心理治療 50 分鐘 2000、兒童青少年團體治療 90 分鐘 1200、伴侶諮商 80 分鐘 3000、親職諮詢 50 分鐘 2000、通訊（視訊）諮商 50 分鐘 2000、EMDR 眼動減敏重整療法 80 分鐘 3000、初次評估會談 50 分鐘 2500（金額為暫定值，於後台調整）。</li>
+    <li><strong>補助</strong>：目前未建立。日後承接政府方案時於後台新增補助方案即可，個案只付場地費、其餘由方案給付的算法系統已內建。</li>
     <li><strong>諮商主題</strong>（11 項共用）：自我探索、情緒困擾、壓力調適、親密關係、原生家庭／親子關係、人際關係、生涯議題、心理疾患、創傷與失落、職場議題、其他。</li>
   </ul>
 
@@ -389,8 +389,8 @@
   <p class="sub">不必上架 App Store，用瀏覽器就能把系統裝到主畫面。</p>
 
   <div class="grid">
-    <div class="card"><h4>員工端「好心情後台」</h4><p>開啟 <code>goodmoodpsy.crownai.ink</code> 後安裝。長按 App 圖示可直接跳「今日看板」「預約排程」「線上預約申請」。</p></div>
-    <div class="card"><h4>個案端「好心情」</h4><p>請個案用手機開 <code>/portal.html</code> 後加入主畫面。圖示與員工端不同色，兩個 App 不會混淆。</p></div>
+    <div class="card"><h4>員工端「織心後台」</h4><p>開啟 <code>knitpsychotherapies.crownai.ink</code> 後安裝。長按 App 圖示可直接跳「今日看板」「預約排程」「線上預約申請」。</p></div>
+    <div class="card"><h4>個案端「織心」</h4><p>請個案用手機開 <code>/portal.html</code> 後加入主畫面。圖示與員工端不同色，兩個 App 不會混淆。</p></div>
     <div class="card"><h4>Android／Chrome／Edge</h4><p>開啟後畫面下方會跳出安裝提示，按「安裝」即可；也可用瀏覽器選單的「安裝應用程式」，或系統設定頁的安裝按鈕。</p></div>
     <div class="card"><h4>iPhone／iPad</h4><p>用 Safari 開啟 → 分享 → 加入主畫面。iOS 沒有自動安裝功能，頁面會跳一次操作說明。</p></div>
   </div>
@@ -517,7 +517,7 @@
 </section>
 
 <footer>
-  <p>好心情心理諮商所　臺南市安平區建平七街453巷75號2樓之2　0909334443　<a href="https://www.goodmoodpsy.com.tw" style="color:var(--accent)">goodmoodpsy.com.tw</a></p>
+  <p>織心心理治療所　臺中市太平區樹孝路39號　04-23937306　<a href="https://www.knitpsychotherapies.com" style="color:var(--accent)">knitpsychotherapies.com</a></p>
 </footer>
 
 </main>

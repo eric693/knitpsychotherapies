@@ -1,6 +1,6 @@
 {
-  "name": "好心情個案專區",
-  "short_name": "好心情",
+  "name": "織心個案專區",
+  "short_name": "織心",
   "description": "查看預約、改期與取消申請、填寫量表、看費用與收據、簽署同意書。",
   "id": "/portal.html",
   "start_url": "/portal.html",

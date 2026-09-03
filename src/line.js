@@ -19,7 +19,7 @@ function brandColor() {
 }
 function centerInfo() {
   return {
-    name: getSetting('center_name', '好心情心理諮商所'),
+    name: getSetting('center_name', '織心心理治療所'),
     phone: getSetting('center_phone', ''),
     address: getSetting('center_address', '')
   };

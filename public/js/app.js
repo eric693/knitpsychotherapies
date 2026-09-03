@@ -81,7 +81,7 @@ const App = {
     document.getElementById('app').innerHTML = `
       <div class="login-wrap">
         <div class="login-card">
-          <h1>${UI.esc(t.ui_staff_login_title || '好心情心理諮商所')}</h1>
+          <h1>${UI.esc(t.ui_staff_login_title || '織心心理治療所')}</h1>
           <div class="sub">${UI.esc(t.ui_staff_login_sub || '諮商所管理系統')}</div>
           <div class="form-row"><label>帳號</label><input id="lg-user" autocomplete="username"></div>
           <div class="form-row"><label>密碼</label><input id="lg-pass" type="password" autocomplete="current-password"></div>
@@ -136,7 +136,7 @@ const App = {
       <div class="backdrop" id="backdrop"></div>
       <div class="layout">
         <aside class="sidebar" id="sidebar">
-          <div class="brand">${UI.esc(App.me.center_name)}<small>好心情諮商所管理系統</small></div>
+          <div class="brand">${UI.esc(App.me.center_name)}<small>織心心理治療所管理系統</small></div>
           <nav class="nav" id="nav">${navHtml}</nav>
           <div class="user-box">
             <div class="name">${UI.esc(App.me.name)}</div>

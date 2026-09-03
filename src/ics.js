@@ -56,9 +56,9 @@ function buildCalendar(token) {
   if (!u) return null;
   const from = addDays(today(), -30);
   const to = addDays(today(), 180);
-  const center = getSetting('center_name', '好心情心理諮商所');
+  const center = getSetting('center_name', '織心心理治療所');
   const lines = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//GoodMood//Schedule//ZH-TW',
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Knit//Schedule//ZH-TW',
     'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
     `X-WR-CALNAME:${esc(center + '－' + u.name + ' 班表')}`,
     'X-WR-TIMEZONE:Asia/Taipei',

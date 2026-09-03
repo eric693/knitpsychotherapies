@@ -1,16 +1,17 @@
-# 好心情心理諮商所管理系統
+# 織心心理治療所管理系統
 
 心理諮商所管理系統：員工端 SPA（側欄導覽 + 卡片看板 + Modal 表單）
 ＋ 個案端手機版專區（底部分頁導覽）＋ 公開線上預約表單。
 
-- 正式網址：https://goodmoodpsy.crownai.ink （員工端）
-- 個案專區：https://goodmoodpsy.crownai.ink/portal.html
-- 線上預約表單（公開免登入）：https://goodmoodpsy.crownai.ink/booking.html
-- pm2 名稱 `goodmoodpsy`，埠 3340，TZ=Asia/Taipei
-- 與 https://mindcare.crownai.ink （pm2 `mindcare`，埠 3270）是**各自獨立**的兩套，
+- 正式網址：https://knitpsychotherapies.crownai.ink （員工端）
+- 個案專區：https://knitpsychotherapies.crownai.ink/portal.html
+- 線上預約表單（公開免登入）：https://knitpsychotherapies.crownai.ink/booking.html
+- pm2 名稱 `knitpsychotherapies`，埠 3440，TZ=Asia/Taipei
+- 與 https://goodmoodpsy.crownai.ink （pm2 `goodmoodpsy`，埠 3340）、
+  https://mindcare.crownai.ink （pm2 `mindcare`，埠 3270）是**各自獨立**的三套，
   程式碼、資料庫、備份與網域都不共用。
-- 所別資訊：好心情心理諮商所（https://www.goodmoodpsy.com.tw ），
-  臺南市安平區建平七街453巷75號2樓之2，電話 0909334443
+- 所別資訊：織心心理治療所（https://www.knitpsychotherapies.com ），
+  411 臺中市太平區樹孝路39號，電話 04-23937306、0965321326，knitpsychotherapy@gmail.com
 
 ## 這套系統跟一般客戶管理系統的差別
 
@@ -185,7 +186,7 @@ public/
 ## 常用指令
 
 ```bash
-npm start              # 直接啟動（預設埠 3340）
+npm start              # 直接啟動（預設埠 3440）
 npm run seed           # 建立展示資料（已有個案時不重複灌入）
 npm run smoke          # API 冒煙測試（拋棄式資料庫，不碰正式資料）
 npm run smoke:ui       # 前端冒煙：無頭瀏覽器巡過所有頁面抓 JS 錯誤（需執行中的伺服器）
@@ -231,19 +232,20 @@ pm2 restart mindcare   # 正式環境重啟（單獨重啟時建議改用 npm ru
 另訂金額、報酬方式與人次上限。取價順序：心理師費率 → 主題 → 方案預設（`src/plans.js` `resolveFee`）。
 全部在「系統 → 方案設定」頁自行增修，不必改程式。
 
-方案、諮商主題與心理師名單依所內現行的 Google 預約表單建立，由
-`scripts/seed-goodmood.js` 維護（可重複執行，以名稱比對更新，不會產生重複資料）：
+方案、治療主題與心理師名單依本所官網服務項目建立，由
+`scripts/seed-knit.js` 維護（可重複執行，以名稱比對更新，不會產生重複資料）。
+**金額為暫定值**，請於「系統 → 方案設定」改成本所實際收費：
 
-- **自費方案**：個別 50 分鐘 2000、個別 80 分鐘 3000、婚姻伴侶/家庭 80 分鐘 3000（可選 3000／3600／4500）、
-  通訊（視訊）諮商 50 分鐘 2000（預設線上）、親子/家長諮詢 80 分鐘 3000、
-  LGBTQ+ 族群個別諮商 40 分鐘 1200（限 3 次）
-- **補助方案**（個案自付 200 元場地費，其餘由方案給付）：115 年度 15-45 歲青壯世代心理健康支持方案
-  （一年 3 次、每位心理師每週 6 人次）、臺南市教師支持方案（6 次）、國軍心理健康方案（6 次）、
-  臺南市政府員工協助方案（4 次）、1219 台北捷運心理健康支持方案、馬太鞍溪心理健康支持方案
-- **諮商主題**（11 項，各方案共用）：自我探索、情緒困擾、壓力調適、親密關係、原生家庭/親子關係、
-  人際關係、生涯議題、心理疾患、創傷與失落、職場議題、其他（可自填）
-- **心理師**：馬健倫（所長）、王詠蕎、蔡琳、吳宗怡、王敏慈、方鋕丞（臨床心理師）、
-  藍挹丰（僅接受線上通訊諮商）；表單另有「由諮商所安排合適之心理師」
+- **自費方案**：成人個別心理治療／諮商 50 分鐘 2000、兒童青少年個別心理治療 50 分鐘 2000、
+  兒童青少年團體治療 90 分鐘 1200、伴侶諮商 80 分鐘 3000、親職諮詢 50 分鐘 2000、
+  通訊（視訊）諮商 50 分鐘 2000（預設線上）、EMDR 眼動減敏重整療法 80 分鐘 3000、
+  初次評估會談 50 分鐘 2500
+- **補助方案**：目前未建立。日後承接政府方案時於後台新增 `kind = subsidy` 的方案即可，
+  個案只付場地費、其餘由方案給付的算法系統已內建。
+- **治療主題**（11 項，各方案共用）：自我探索、情緒困擾、壓力調適、親密關係、原生家庭/親子關係、
+  人際關係、生涯議題、心理疾患、創傷與失落、兒童青少年適應、其他（可自填）
+- **心理師**：鍾芯瑜、羅捷、闕靖惠、張文藍、莊育涵（臨床心理師）、
+  張益綸、許峰益、蕭如軒（諮商心理師）；初始密碼一律 `knit2026`，首次登入請自行修改
 
 ### 金額的三個角色（重要）
 
@@ -292,8 +294,8 @@ pm2 restart mindcare   # 正式環境重啟（單獨重啟時建議改用 npm ru
 
 員工端與個案端都可安裝到手機或電腦主畫面，不必上架商店：
 
-- 員工端 `/manifest.json`（名稱「好心情後台」，含今日看板／預約排程／線上預約申請三個捷徑）
-- 個案端 `/portal.manifest.json`（名稱「好心情」，深色圖示以便與後台區分）
+- 員工端 `/manifest.json`（名稱「織心後台」，含今日看板／預約排程／線上預約申請三個捷徑）
+- 個案端 `/portal.manifest.json`（名稱「織心」，深色圖示以便與後台區分）
 - Android／Chrome 依畫面提示或「系統設定 → 安裝成手機／電腦 App」按鈕安裝；
   iOS 只能走 Safari 的「分享 → 加入主畫面」（頁面會自動跳一次說明）
 - **刻意不做離線**：`public/sw.js` 對 HTML、`/api`、`/uploads` 一律不快取，
@@ -354,7 +356,7 @@ pm2 restart mindcare   # 正式環境重啟（單獨重啟時建議改用 npm ru
 1. **頻道憑證**：貼上 LINE Developers Console 的 Channel access token（long-lived）與 Channel secret
    （已存的權杖只顯示末四碼，不改就留原樣），按「驗證連線」會向 LINE 取回官方帳號名稱與 ID 確認打得通
 2. **Webhook**：按「寫回 LINE 並測試」，系統直接把
-   `https://goodmoodpsy.crownai.ink/api/line/webhook` 設定到 LINE 頻道並請 LINE 實際回打一次；
+   `https://knitpsychotherapies.crownai.ink/api/line/webhook` 設定到 LINE 頻道並請 LINE 實際回打一次；
    同時記得到 LINE 後台關閉「自動回覆訊息」與「歡迎訊息」，改由本系統回覆
 3. **通知時間與樣式**：晤談提醒提前時數、心理師行程每日推播時間、Flex 卡片主色、
    放在卡片按鈕上的預約表單網址
@@ -378,7 +380,7 @@ Webhook 簽章以 channel secret 驗證，驗不過即忽略。
 
 ## Google 表單同步
 
-所內原本的「好心情心理諮商所＿諮商預約表」（Google 表單）不必停用——
+所內原本的 Google 預約表單不必停用——
 在「系統 → Google 表單同步」頁產生密鑰、把頁面上的 Apps Script 程式碼貼到表單的
 指令碼編輯器並設定「表單提交時」觸發器，之後每一筆回應都會即時寫入後台的
 「線上預約申請」，櫃檯不必再謄一次。
