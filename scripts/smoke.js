@@ -1887,6 +1887,51 @@ function startServer() {
     equal(doc.status, 200, 'Word 匯出');
   });
 
+  await test('表單文字可存成預設，之後開立同類表單都套用，且自動帶入不受影響', async () => {
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=treatment&subject_id=${clientId}`);
+    const rows = tpl.data.rows.map(r => (r.label === '治療主題' ? { label: '治療重點', value: '' } : r));
+    rows.push({ label: '本所備註', value: '本證明僅供指定用途使用' });
+    await admin.ok('POST', '/api/certificates/template/treatment', {
+      data: { ...tpl.data, title: '心理治療證明書', statement: '固定聲明文字', rows }
+    });
+    const after = await admin.ok('GET', `/api/certificates/template?kind=treatment&subject_id=${clientId}`);
+    equal(after.data.title, '心理治療證明書', '標題沿用所方存的預設');
+    equal(after.data.statement, '固定聲明文字', '聲明沿用');
+    assert(after.data.rows.some(r => r.label === '治療重點'), '改過的欄位名沿用');
+    assert(after.data.rows.some(r => r.label === '本所備註'), '自行加的欄位沿用');
+    assert(after.has_saved_template, '應標示已有自訂預設');
+    // 會變動的欄位仍即時帶入
+    const c = await admin.ok('GET', `/api/clients/${clientId}`);
+    equal(after.data.rows.find(r => r.label === '案主姓名').value, c.name, '姓名仍自動帶入');
+    // 表格資料一律用系統當下算的
+    const eiTpl = await admin.ok('GET', `/api/certificates/template?kind=early_intervention&subject_id=${clientId}`);
+    await admin.ok('POST', '/api/certificates/template/early_intervention', {
+      data: { ...eiTpl.data, grid: { ...eiTpl.data.grid, label: '本所療育明細', data: [] } }
+    });
+    const ei2 = await admin.ok('GET', `/api/certificates/template?kind=early_intervention&subject_id=${clientId}`);
+    equal(ei2.data.grid.label, '本所療育明細', '表格標題沿用');
+    equal(ei2.data.grid.data.length, eiTpl.data.grid.data.length, '表格內容仍由系統帶出');
+    // 回復系統預設
+    await admin.ok('DELETE', '/api/certificates/template/treatment');
+    const back = await admin.ok('GET', `/api/certificates/template?kind=treatment&subject_id=${clientId}`);
+    equal(back.data.title, '治療證明', '回復系統預設');
+    assert(!back.has_saved_template, '已無自訂預設');
+    await admin.ok('DELETE', '/api/certificates/template/early_intervention');
+  });
+  await test('一般行政不得改表單預設內容', async () => {
+    await office.fails('POST', '/api/certificates/template/treatment', { data: { title: 'X' } });
+  });
+  await test('勞務報酬單的標題與頁尾說明改設定就跟著變', async () => {
+    const lin2 = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    const made = await admin.ok('POST', '/api/payouts',
+      { user_id: lin2.id, month: '2026-03', item: '督導費', gross: 3000, income_type: '9A' });
+    await admin.ok('PUT', '/api/settings', { payout_slip_title: '執行業務所得給付單', payout_slip_note: '本單一式兩份。' });
+    const slip = await admin.get(`/api/payouts/slip?ids=${made.id}`);
+    assert(slip.text.includes('執行業務所得給付單') && slip.text.includes('本單一式兩份。'), '標題與說明可改');
+    await admin.ok('PUT', '/api/settings', { payout_slip_title: '勞務報酬單' });
+    await admin.ok('DELETE', `/api/payouts/${made.id}`);
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

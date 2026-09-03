@@ -402,7 +402,7 @@ function slipHtml(u, rows, opts) {
   const sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
   const dateCell = r => rocDate(r.pay_date) || `${esc(r.month)}（日期待填）`;
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
-<title>勞務報酬單－${esc(u.name)}</title>
+<title>${esc(opts.title)}－${esc(u.name)}</title>
 <style>
   @page { size: A4; margin: 16mm; }
   body { font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; color: #1c2b2b; font-size: 13px; }
@@ -418,7 +418,7 @@ function slipHtml(u, rows, opts) {
   @media print { .bar { display: none; } }
 </style></head><body>
 <div class="bar"><button onclick="window.print()">列印／另存為 PDF</button></div>
-<h1>勞務報酬單</h1>
+<h1>${esc(opts.title)}</h1>
 <table>
   <tr><th>單位名稱</th><td>${esc(opts.centerName)}</td><th>統一編號</th><td>${esc(opts.taxId)}</td></tr>
   <tr><th>單位地址</th><td colspan="3">${esc(opts.address)}</td></tr>
@@ -449,8 +449,7 @@ function slipHtml(u, rows, opts) {
 </table>
 <div class="sign">上述資料經本人確認無誤，領款人：______________________（簽名）
   <br>經手人：${esc(opts.handler)}</div>
-<div class="note">本單依所得稅法及全民健康保險補充保險費規定辦理；單次給付未達起扣門檻者免予扣繳，
-  年度所得仍以扣繳憑單全年累計金額為準。</div>
+${opts.note ? `<div class="note">${esc(opts.note)}</div>` : ''}
 <script>if (location.hash !== '#noprint') setTimeout(() => window.print(), 300);<\/script>
 </body></html>`;
 }
@@ -481,6 +480,8 @@ router.get('/payouts/slip', requireStaff('payouts'), (req, res) => {
     centerName: getSetting('center_name', '織心心理治療所'),
     taxId: getSetting('center_tax_id', ''),
     address: getSetting('center_address', ''),
+    title: getSetting('payout_slip_title', '勞務報酬單'),
+    note: getSetting('payout_slip_note', ''),
     service: getSetting('payout_slip_service', '心理治療（55 心理師）'),
     handler: getSetting('payout_slip_handler', '') || req.user.name,
     incomeTypeLabel: label[rows[0].income_type] || rows[0].income_type,

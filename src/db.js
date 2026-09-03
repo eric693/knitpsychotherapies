@@ -315,6 +315,9 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     payout_split_interval_days: '0',
     payout_slip_service: '心理治療（55 心理師）',   // 勞務報酬單的勞務內容欄
     payout_slip_handler: '',                        // 經手人（留空時印製表當下的操作者）
+    payout_slip_title: '勞務報酬單',
+    payout_slip_note: '本單依所得稅法及全民健康保險補充保險費規定辦理；單次給付未達起扣門檻者免予扣繳，'
+      + '年度所得仍以扣繳憑單全年累計金額為準。',
     // ---- 證明書（在職、離職、治療證明）----
     // 標題與聲明文字都可改；開立時仍可逐張再改，這裡只是預設值。
     cert_prefix: 'KC',                  // 證明書流水編號前綴

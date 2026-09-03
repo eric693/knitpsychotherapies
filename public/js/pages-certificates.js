@@ -68,6 +68,12 @@ function certDialog(seed, onDone) {
         ${UI.input('copies', '聯別（逗號分隔，留空印一份）',
     { value: (d.copies || []).join('，'), full: true, placeholder: '第一聯 本所存根聯,第二聯 醫療端留存聯' })}
         ${UI.input('footer_date', '文末日期', { value: d.footer_date || '', full: true })}
+        <div class="form-row full" style="margin-top:6px">
+          <label style="font-size:13px"><input type="checkbox" id="astpl"> 同時把這份版面存成此類表單的預設內容
+            （之後開立同類表單都從這裡開始；姓名、日期、療程等仍會自動帶入）</label>
+          ${seed.has_saved_template ? `<button class="btn tiny secondary" type="button" id="rsttpl"
+            style="align-self:flex-start;margin-top:6px">回復系統預設</button>` : ''}
+        </div>
       </div>`,
     onOpen: el => {
       const fill = (id, rows) => {
@@ -77,6 +83,16 @@ function certDialog(seed, onDone) {
       fill('c-rows', d.rows || []);
       fill('c-org', d.org || []);
       fill('c-sign', d.signatures || []);
+      const tplBox = el.querySelector('#astpl');
+      if (tplBox) tplBox.onchange = () => { el._saveTemplate = tplBox.checked; };
+      const rst = el.querySelector('#rsttpl');
+      if (rst) {
+        rst.onclick = async () => {
+          if (!await UI.confirm('回復此類表單的系統預設內容？已開立的表單不受影響。')) return;
+          await DEL(`/certificates/template/${seed.kind}`);
+          UI.toast('已回復系統預設，請重新開立以套用');
+        };
+      }
       el.addEventListener('click', e => {
         const add = e.target.closest('[data-add]');
         if (add) {
@@ -111,6 +127,10 @@ function certDialog(seed, onDone) {
           footer_date: f.footer_date
         }
       };
+      if (el._saveTemplate) {
+        await POST(`/certificates/template/${seed.kind}`, { data: body.data });
+        UI.toast('已存成這類表單的預設內容');
+      }
       const r = isNew ? await POST('/certificates', body) : await PUT(`/certificates/${seed.id}`, body);
       UI.toast('已儲存');
       onDone && onDone();
@@ -127,6 +147,7 @@ App.page('certificates', {
     '「方案服務明細（附表）」會把該個案在補助方案下已完成的晤談逐次列出（次數、日期、服務人員、面對面或通訊），民眾簽名與同意書檔名留白現場填。',
     '「轉介單（一式三聯）」用於轉介身心科／診所：一次印出本所存根聯、醫療端留存聯與醫療端回覆聯，回覆欄留給醫師勾選與簽名。',
     '「方案轉介單」會帶入機構代碼、個案基本資料與最近一次 BSRS-5 的分數，轉介原因與建議轉介機構的預設文字在系統設定改。',
+    '每一種表單的文字都能長期改：在開立畫面把欄位名稱與固定文字改好，勾「存成此類表單的預設內容」，之後開立同類表單就以它為底。',
     '「未成年個案基本資料表」多了就讀學校、年級、主要照顧者、醫院評估與療育課程，背面是上課日期／時間／家長簽名／收費的空白表。',
     '學齡前走「早療補助官方表單」（社會局表一申請表＋表二交通補助蓋章卡＋表三療育補助收據浮貼卡，一次印三頁），學齡走「弱勢療育補助記錄卡」（表件二）；兩者都會把該月療程與收據號碼帶進去，注意事項文字在系統設定改。',
     '「早療補助療育紀錄」會列出該童指定月份已完成的療程（日期、療育項目、單位、人員、自費金額與收據號碼），供家長辦理早療補助時併附收據送件。',

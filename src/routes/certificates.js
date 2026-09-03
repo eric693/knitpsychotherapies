@@ -6,7 +6,7 @@
 // 套版只負責帶入預設值與當事人資料，不限制所方最後怎麼寫。
 
 const express = require('express');
-const { db, audit, today, getSetting, listSetting, ageYears } = require('../db');
+const { db, audit, today, getSetting, setSetting, listSetting, ageYears } = require('../db');
 const { requireStaff } = require('../auth');
 
 const router = express.Router();
@@ -392,6 +392,31 @@ function treatmentFacts(clientId) {
   };
 }
 
+// 每一種表單的預設內容都可以改：把改好的版面「存成預設」後，
+// 之後開立同類表單就以它為底（settings 的 cert_tpl_<kind>），
+// 而姓名、日期、療程等會隨個案變動的欄位仍照樣自動帶入。
+function savedTemplate(kind) {
+  try {
+    const raw = getSetting(`cert_tpl_${kind}`, '');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+// 合併：文字以所方存的預設為準，值若是系統帶得出來的（同欄位名有值）就用系統的
+function mergeTemplate(base, saved) {
+  if (!saved) return base;
+  const autofill = new Map((base.rows || []).filter(r => r.value).map(r => [r.label, r.value]));
+  return {
+    ...base,
+    ...saved,
+    rows: (saved.rows || []).map(r => ({ label: r.label, value: autofill.get(r.label) || r.value || '' })),
+    // 表格資料（療程明細等）一律用系統當下算出來的，只沿用標題與欄位名
+    grid: base.grid && saved.grid
+      ? { ...saved.grid, data: base.grid.data || [], rows: Math.max(saved.grid.rows || 0, (base.grid.data || []).length) }
+      : (base.grid || saved.grid || null)
+  };
+}
+
 // 套版：帶出這一張證明書的預設內容，前端再逐欄修改
 function buildTemplate(kind, subjectId, purpose = '', month = '') {
   const def = KINDS[kind];
@@ -463,8 +488,32 @@ router.get('/certificates/staff-options', requireStaff('hr'), (req, res) => {
 router.get('/certificates/template', requireStaff(), (req, res) => {
   const kind = KINDS[req.query.kind] ? req.query.kind : 'employment';
   if (!checkAccess(req, res, kind)) return;
-  res.json(buildTemplate(kind, Number(req.query.subject_id) || 0, String(req.query.purpose || ''),
-    String(req.query.month || '')));
+  const tpl = buildTemplate(kind, Number(req.query.subject_id) || 0, String(req.query.purpose || ''),
+    String(req.query.month || ''));
+  tpl.data = mergeTemplate(tpl.data, savedTemplate(kind));
+  tpl.has_saved_template = !!savedTemplate(kind);
+  res.json(tpl);
+});
+
+// 存成預設：把這份版面（標題、欄位名稱與固定文字、聲明、表格欄位）記起來，
+// 之後同類表單都以它開始；個案姓名等會變動的欄位仍即時帶入。
+router.post('/certificates/template/:kind', requireStaff('settings'), (req, res) => {
+  const kind = req.params.kind;
+  if (!KINDS[kind]) return res.status(404).json({ error: '找不到此類別' });
+  const data = cleanData((req.body || {}).data);
+  if (!data.title) return res.status(400).json({ error: '請填寫標題' });
+  setSetting(`cert_tpl_${kind}`, JSON.stringify(data));
+  audit('staff', req.user.id, req.user.name, '設定表單預設內容', KINDS[kind].label);
+  res.json({ ok: true });
+});
+
+// 回復系統預設（清掉所方存的版面）
+router.delete('/certificates/template/:kind', requireStaff('settings'), (req, res) => {
+  const kind = req.params.kind;
+  if (!KINDS[kind]) return res.status(404).json({ error: '找不到此類別' });
+  setSetting(`cert_tpl_${kind}`, '');
+  audit('staff', req.user.id, req.user.name, '回復表單預設內容', KINDS[kind].label);
+  res.json({ ok: true });
 });
 
 router.get('/certificates', requireStaff(), (req, res) => {
