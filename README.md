@@ -400,8 +400,22 @@ Webhook 簽章以 channel secret 驗證，驗不過即忽略。
 - 「是否指定心理師」選「不指定，由所方媒合…」時不指定心理師，不會誤判成未對應
 - 表單常用全形數字（`(２０００／５０分鐘)`），比對前會先轉半形再剝掉價目說明
 - 電話會正規化（去掉空白與破折號、`+886` 轉 `0`），舊個案以電話自動比對
-- 同一筆回應重送不會產生第二筆（以 Google 的 response id 去重），
-  可用編輯器裡的 `backfill()` 把先前的歷史回應一次補進來
+- 同一筆回應重送不會產生第二筆（以 Google 的 response id 去重）
+
+### 歷史回應要走試算表，不是 backfill()
+
+Apps Script 的 `backfill()` 只拿得到「該筆回應當時、且現在仍存在」的題目。
+這份表單改過版，舊回應缺姓名與 email 等欄位，補送時會全部被擋在「缺少姓名或聯絡電話」。
+歷史資料改走回應試算表（它保留了每一個欄位，含後來刪掉的題目）：
+
+```bash
+# 表單 →「回應」分頁 → 試算表圖示 → 檔案 → 下載 → 逗號分隔值 (.csv)
+node scripts/import-form-responses.js 回應.csv          # 試算，先看對不對
+node scripts/import-form-responses.js 回應.csv --apply  # 實際寫入
+```
+
+以「時間戳記」去重，重跑不會產生第二筆；對應規則與即時同步共用
+`src/form-ingest.js`，兩條路進來的資料長得一樣。
 - 端點為 `POST /api/integrations/google-form`，以共用密鑰驗證（固定長度比較），
   密鑰可隨時重新產生
 
