@@ -1716,6 +1716,27 @@ function startServer() {
     equal(doc.status, 200, 'Word 匯出');
   });
 
+  await test('轉介單（一式三聯）：三聯各印一頁，附醫療端回覆欄', async () => {
+    const tpl = await admin.ok('GET', `/api/certificates/template?kind=referral_clinic&subject_id=${clientId}`);
+    equal(tpl.data.copies.length, 3, '一式三聯');
+    assert(tpl.data.copies[0].includes('存根聯') && tpl.data.copies[2].includes('回覆聯'), '聯別名稱');
+    const reply = tpl.data.rows.find(r => r.label.includes('轉介回覆'));
+    assert(reply.value.includes('建議藥物治療') && reply.value.includes('醫師簽名'), '回覆欄');
+    assert(tpl.data.rows.find(r => r.label === '建議轉介機構').value.includes('晨心'), '建議轉介機構');
+    assert(tpl.data.rows.find(r => r.label === '機構代碼').value, '機構代碼');
+    const cert = await admin.ok('POST', '/api/certificates', {
+      kind: 'referral_clinic', subject_id: clientId, subject_name: tpl.subject_name, data: tpl.data
+    });
+    const html = await admin.get(`/api/certificates/${cert.id}/print`);
+    equal((html.text.match(/<section>/g) || []).length, 3, '應印出三頁');
+    assert(html.text.includes('醫療端回覆聯'), '頁尾標明聯別');
+    const doc = await admin.get(`/api/certificates/${cert.id}/print?format=doc`);
+    equal(doc.status, 200, 'Word 匯出');
+    // 其他類別仍只印一份
+    const one = await admin.ok('GET', `/api/certificates/template?kind=treatment&subject_id=${clientId}`);
+    equal(one.data.copies.length, 0, '治療證明不分聯');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

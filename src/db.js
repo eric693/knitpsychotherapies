@@ -328,6 +328,13 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     cert_plan_detail_statement: '',
     cert_referral_title: '心理健康支持方案轉介單',
     cert_referral_statement: '',
+    // 所內自用的轉介單（轉介到身心科／診所），一式三聯並附醫師回覆欄
+    cert_referral_clinic_title: '轉介單',
+    cert_referral_clinic_statement: '',
+    referral_clinic_copies: '第一聯　本所存根聯,第二聯　醫療端留存聯,第三聯　醫療端回覆聯',
+    referral_clinic_targets: '蕭芸嶙身心診所　電話 04-23939203　411 臺中市太平區樹孝路 501 號\n'
+      + '晨心身心診所　電話 04-22780799　411 臺中市太平區中興路 158 號 1 樓',
+    referral_reply_options: '建議藥物治療,暫不需藥物、持續追蹤,建議持續心理治療',
     center_org_code: 'XY03190057',      // 衛福部方案的合作機構代碼
     // 轉介單「建議轉介機構」預設值（每行一家；列印時整段可改）
     referral_targets_default: '蕭芸嶙身心診所　電話 04-23939203　411 臺中市太平區樹孝路 501 號\n'

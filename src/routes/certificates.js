@@ -6,7 +6,7 @@
 // 套版只負責帶入預設值與當事人資料，不限制所方最後怎麼寫。
 
 const express = require('express');
-const { db, audit, today, getSetting } = require('../db');
+const { db, audit, today, getSetting, listSetting } = require('../db');
 const { requireStaff } = require('../auth');
 
 const router = express.Router();
@@ -18,7 +18,9 @@ const KINDS = {
   profile: { label: '基本資料表', module: 'clients', subject: 'client' },
   // 公部門補助方案（青壯、國軍等）要交出去的兩張表
   plan_detail: { label: '方案服務明細', module: 'clients', subject: 'client' },
-  referral: { label: '方案轉介單', module: 'clients', subject: 'client' }
+  referral: { label: '方案轉介單', module: 'clients', subject: 'client' },
+  // 所內轉介到身心科／診所用的轉介單，一式三聯並附醫師回覆欄
+  referral_clinic: { label: '轉介單（一式三聯）', module: 'clients', subject: 'client' }
 };
 
 // 流水編號：前綴 + 西元年月 + 四碼序號，如 KC2026090001。
@@ -89,6 +91,29 @@ function subjectRows(kind, subject, extra = {}) {
       { label: '同意書檔案名稱', value: '' }
     ];
   }
+  if (kind === 'referral_clinic') {
+    return [
+      { label: '原醫事機構', value: getSetting('center_name', '') },
+      { label: '機構代碼', value: getSetting('center_org_code', '') },
+      { label: '機構電話', value: getSetting('center_phone', '') },
+      { label: '機構地址', value: getSetting('center_address', '') },
+      { label: '姓名', value: u.name || '' },
+      { label: '性別', value: GENDER[u.gender] || '□男　□女' },
+      { label: '身分證字號', value: u.id_no || '' },
+      { label: '出生日期', value: rocText(u.birth_date) },
+      { label: '聯絡電話', value: u.phone || '' },
+      { label: '聯絡人／關係', value: u.emergency_name
+        ? `${u.emergency_name}（${u.emergency_relationship || ''}）${u.emergency_phone || ''}` : '' },
+      { label: '聯絡地址', value: u.address || '' },
+      { label: '轉介原因（可複選）', value: reasonChecklist() },
+      { label: '建議轉介機構', value: getSetting('referral_clinic_targets', '') },
+      { label: '轉介回覆（由醫療端填寫）', value:
+        listSetting('referral_reply_options').map(o => '☐ ' + o).join('　')
+        + '\n補充說明：＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿'
+        + '\n醫師簽名：＿＿＿＿＿＿＿＿＿＿　日期：＿＿＿＿＿＿＿＿＿＿' },
+      { label: '轉介日期', value: '中華民國 ＿＿＿ 年 ＿＿ 月 ＿＿ 日' }
+    ];
+  }
   if (kind === 'referral') {
     const b = extra.bsrs;
     const mark = on => (on ? '■' : '□');
@@ -110,11 +135,7 @@ function subjectRows(kind, subject, extra = {}) {
         + `　${mark(b && b.alert)}2. BSRS-5 附加題分數 2 分以上`
         + `　□3. 其他經評估有轉介或長期介入之需要（請說明）：＿＿＿＿＿＿＿＿`
         + (b ? `\n（最近一次 BSRS-5：${b.date}　總分 ${b.total}）` : '') },
-      { label: '轉介原因（可複選）', value: String(getSetting('referral_reasons', ''))
-        .split('\n').map(line => {
-          const [cat, opts] = line.split('：');
-          return opts ? `${cat}：${opts.split('、').map(o => '□' + o).join('　')}` : line;
-        }).join('\n') },
+      { label: '轉介原因（可複選）', value: reasonChecklist() },
       { label: '建議轉介機構', value: getSetting('referral_targets_default', '') },
       { label: '轉介日期', value: `中華民國 ＿＿＿ 年 ＿＿ 月 ＿＿ 日` }
     ];
@@ -174,7 +195,7 @@ function gridFor(kind, subject) {
 function signatureRows(kind) {
   if (kind === 'profile') return [];
   if (kind === 'plan_detail') return [{ label: '合作機構核章', value: '' }];
-  if (kind === 'referral') {
+  if (kind === 'referral' || kind === 'referral_clinic') {
     return [
       { label: '心理諮商服務人員簽章', value: '' },
       { label: '機構核章', value: '' }
@@ -212,6 +233,14 @@ function planSessionRows(clientId, planKind) {
     r.mode === 'online' ? '✓' : '',
     '', ''
   ]);
+}
+
+// 轉介原因：設定裡每行寫「類別：選項、選項…」，印成一行一類、每個選項前加勾選框
+function reasonChecklist() {
+  return String(getSetting('referral_reasons', '')).split('\n').map(line => {
+    const [cat, opts] = line.split('：');
+    return opts ? `${cat}：${opts.split('、').map(o => '□' + o).join('　')}` : line;
+  }).join('\n');
 }
 
 // 最近一次 BSRS-5：轉介單的「個案狀況」要據此勾選
@@ -262,6 +291,10 @@ function buildTemplate(kind, subjectId, purpose = '') {
       signatures: signatureRows(kind),
       // 基本資料表背面的簽到欄：空白格數可自行增減，欄位名稱也能改
       grid: gridFor(kind, subject),
+      // 聯別：一式數聯的表單，每一聯各印一頁並在頁尾標明是哪一聯
+      copies: kind === 'referral_clinic'
+        ? listSetting('referral_clinic_copies').filter(Boolean)
+        : [],
       footer_date: `中華民國 ${new Date().getFullYear() - 1911} 年 ${new Date().getMonth() + 1} 月 ${new Date().getDate()} 日`
     }
   };
@@ -349,6 +382,8 @@ function cleanData(d = {}) {
         ? d.grid.data.slice(0, 60).map(r => (Array.isArray(r) ? r : []).map(v => String(v === undefined ? '' : v)))
         : []
     } : null,
+    copies: Array.isArray(d.copies)
+      ? d.copies.map(x => String(x || '').trim()).filter(Boolean).slice(0, 6) : [],
     footer_date: String(d.footer_date || '')
   };
 }
@@ -438,12 +473,16 @@ function certHtml(c, data, forWord) {
   .date { margin-top: 34px; text-align: center; letter-spacing: 2px; }
   .void { color: #b4381f; text-align: center; font-size: 18px; margin-bottom: 8px; }
   .gridlb { font-weight: 600; margin: 18px 0 6px; }
+  section { page-break-after: always; }
+  section:last-child { page-break-after: auto; }
+  .copytag { margin-top: 16px; text-align: right; color: #667; font-size: 12px; }
   table.grid th { background: #f2f5f5; width: auto; text-align: center; }
   table.grid td { height: 30px; }
   .bar { margin-bottom: 12px; }
   @media print { .bar { display: none; } }
 </style></head><body>
 <div class="bar"><button onclick="window.print()">列印／另存為 PDF</button></div>
+${(data.copies && data.copies.length ? data.copies : [null]).map(copyLabel => `<section>
 ${c.status === 'void' ? `<div class="void">【已作廢】${esc(c.void_reason)}</div>` : ''}
 ${data.subtitle ? `<div class="sub">${esc(data.subtitle)}</div>` : ''}
 <h1>${esc(data.title)}</h1>
@@ -461,6 +500,8 @@ ${Array.from({ length: Math.max(0, data.grid.rows - (data.grid.data || []).lengt
 ${data.signatures.length ? `<div class="sign">${data.signatures.map(r =>
     `${esc(r.label)}：<span>${esc(r.value)}</span>`).join('<br>')}</div>` : ''}
 <div class="date">${esc(data.footer_date)}</div>
+${copyLabel ? `<div class="copytag">${esc(copyLabel)}</div>` : ''}
+</section>`).join('')}
 ${forWord ? '' : '<script>if (location.hash !== \'#noprint\') setTimeout(() => window.print(), 300);<\/script>'}
 </body></html>`;
 }

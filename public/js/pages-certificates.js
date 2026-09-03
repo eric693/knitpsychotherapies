@@ -8,7 +8,8 @@ const CERT_KINDS = [
   ['treatment', '治療證明'],
   ['profile', '基本資料表'],
   ['plan_detail', '方案服務明細（附表）'],
-  ['referral', '方案轉介單']
+  ['referral', '方案轉介單'],
+  ['referral_clinic', '轉介單（一式三聯）']
 ];
 
 function certRowsEditor(id, label, rows, hint) {
@@ -60,6 +61,8 @@ function certDialog(seed, onDone) {
           <div id="c-grid">${d.grid.data.map(r => `<div class="cert-row" style="margin-bottom:6px">
             <input class="vl" value="${UI.esc(r.join('，'))}" style="width:100%"></div>`).join('')}</div>
         </div>` : ''}
+        ${UI.input('copies', '聯別（逗號分隔，留空印一份）',
+    { value: (d.copies || []).join('，'), full: true, placeholder: '第一聯 本所存根聯,第二聯 醫療端留存聯' })}
         ${UI.input('footer_date', '文末日期', { value: d.footer_date || '', full: true })}
       </div>`,
     onOpen: el => {
@@ -100,6 +103,7 @@ function certDialog(seed, onDone) {
             rows: Number(f.grid_rows) || 12,
             data: Array.from(el.querySelectorAll('#c-grid .vl')).map(i => i.value.split('，'))
           } : null,
+          copies: f.copies.split(/[,，]/).map(x => x.trim()).filter(Boolean),
           footer_date: f.footer_date
         }
       };
@@ -117,6 +121,7 @@ App.page('certificates', {
   help: [
     '選類別與當事人後按「開立」，系統先帶出預設內容；欄位名稱、內容、聲明文字、機構抬頭都可以直接改，也能自行增減列。',
     '「方案服務明細（附表）」會把該個案在補助方案下已完成的晤談逐次列出（次數、日期、服務人員、面對面或通訊），民眾簽名與同意書檔名留白現場填。',
+    '「轉介單（一式三聯）」用於轉介身心科／診所：一次印出本所存根聯、醫療端留存聯與醫療端回覆聯，回覆欄留給醫師勾選與簽名。',
     '「方案轉介單」會帶入機構代碼、個案基本資料與最近一次 BSRS-5 的分數，轉介原因與建議轉介機構的預設文字在系統設定改。',
     '「基本資料表」會帶入個案已建檔的資料，沒填的欄位印成待填的圈選或底線，背面另附可自訂欄位與列數的空白簽到表。',
     '在職／離職證明的資料取自帳號（性別、生日、到職與離職日在「帳號權限」編輯帳號時填）；治療證明的來談日期與次數由已完成的晤談自動算出。',
