@@ -160,10 +160,18 @@ App.page('receipts', {
           <td style="white-space:nowrap"><button class="btn tiny secondary" data-v="${r.id}">檢視／列印</button>
             ${r.status === 'valid' ? `<button class="btn tiny secondary" data-ed="${r.id}">編輯</button>
               <button class="btn tiny secondary" data-re="${r.id}">重開</button>
-              <button class="btn tiny danger" data-void="${r.id}">作廢</button>` : ''}</td></tr>`), '尚無收據')}</div>`;
+              <button class="btn tiny danger" data-void="${r.id}">作廢</button>`
+    : `<button class="btn tiny secondary" data-unvoid="${r.id}">↺ 撤銷作廢</button>`}</td></tr>`), '尚無收據')}</div>`;
 
     const reload = () => App.go('receipts');
     el.querySelector('#add').onclick = () => issueDialog(null, reload);
+    // 作廢按錯時可撤銷；若已經重開過新號，會請你先處理那一張
+    el.querySelectorAll('[data-unvoid]').forEach(b => {
+      b.onclick = async () => {
+        if (!await UI.confirm('撤銷作廢，讓這張收據恢復為有效？')) return;
+        try { await POST(`/receipts/${b.dataset.unvoid}/unvoid`, {}); UI.toast('已撤銷作廢'); reload(); } catch (e) { UI.err(e); }
+      };
+    });
     // 抬頭、統編、項目與備註可直接修正；編號、金額與日期屬憑證要素，要改就得作廢重開
     el.querySelectorAll('[data-ed]').forEach(b => {
       const r = data.rows.find(x => x.id === Number(b.dataset.ed));

@@ -125,11 +125,25 @@ router.put('/invoices/:id', requireStaff('billing'), (req, res) => {
 router.post('/invoices/:id/void', requireStaff('billing'), (req, res) => {
   const i = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
   if (!i) return res.status(404).json({ error: '找不到此收費單' });
+  if (i.status === 'void') return res.status(400).json({ error: '此收費單已作廢' });
   const { reason = '' } = req.body || {};
-  db.prepare("UPDATE invoices SET status = 'void', note = ? WHERE id = ?")
-    .run((i.note ? i.note + '；' : '') + '作廢：' + reason, i.id);
+  // 記下作廢前的狀態，手滑時撤銷得回來（金額與收據關聯都不動）
+  db.prepare("UPDATE invoices SET status = 'void', void_prev_status = ?, note = ? WHERE id = ?")
+    .run(i.status, (i.note ? i.note + '；' : '') + '作廢：' + reason, i.id);
   audit('staff', req.user.id, req.user.name, '作廢收費單', String(i.client_id), { id: i.id, reason });
   res.json({ ok: true });
+});
+
+// 撤銷作廢：回到作廢前的狀態（未收／已收），並在備註標記撤銷
+router.post('/invoices/:id/unvoid', requireStaff('billing'), (req, res) => {
+  const i = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+  if (!i) return res.status(404).json({ error: '找不到此收費單' });
+  if (i.status !== 'void') return res.status(400).json({ error: '此收費單不是作廢狀態' });
+  const back = ['unpaid', 'paid'].includes(i.void_prev_status) ? i.void_prev_status : 'unpaid';
+  db.prepare("UPDATE invoices SET status = ?, void_prev_status = '', note = ? WHERE id = ?")
+    .run(back, (i.note ? i.note + '；' : '') + '撤銷作廢', i.id);
+  audit('staff', req.user.id, req.user.name, '撤銷作廢收費單', String(i.client_id), { id: i.id, back });
+  res.json({ ok: true, status: back });
 });
 
 router.get('/invoices/:id/receipt', requireStaff('billing'), (req, res) => {

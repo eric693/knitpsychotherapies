@@ -280,6 +280,57 @@ async function noteDialog(seed, onDone) {
     : '儲存後仍可修改；按「簽核定稿」後比照病歷不可再更動。'}</div>
     ${note ? `<div style="margin-top:10px"><button class="btn warn" id="sign" type="button">${App.me.is_intern ? '送督導覆核' : '簽核定稿'}</button></div>` : ''}`}`,
     onOpen: (el, close) => {
+      // 草稿自動存到這台裝置：打到一半關掉視窗、當掉或跳頁，內容不會整篇不見。
+      // 只存在瀏覽器本機（不上傳），儲存或簽核成功後就清掉。
+      const draftKey = `mc-note-draft-${App.me.id}-${seed.client_id || (note && note.client_id) || 0}`
+        + `-${(note && note.id) || 'new'}`;
+      if (!readonly && !pending) {
+        const saveDraft = () => {
+          try {
+            localStorage.setItem(draftKey, JSON.stringify({ at: new Date().toISOString(), data: UI.formData(el) }));
+            const tag = el.querySelector('#draft-state');
+            if (tag) tag.textContent = `草稿已暫存於本機　${new Date().toTimeString().slice(0, 5)}`;
+          } catch { /* 隱私模式或空間不足時放棄暫存，不影響編輯 */ }
+        };
+        let t = null;
+        el.addEventListener('input', () => { clearTimeout(t); t = setTimeout(saveDraft, 1500); });
+        // 每 30 秒存一次；視窗關掉後（元素已不在畫面上）就自己停下來
+        el._draftTimer = setInterval(() => {
+          if (!document.body.contains(el)) { clearInterval(el._draftTimer); return; }
+          saveDraft();
+        }, 30000);
+        window.addEventListener('beforeunload', () => {
+          if (document.body.contains(el)) saveDraft();
+        });
+
+        // 有上次沒存完的草稿就問要不要接續
+        let draft = null;
+        try { draft = JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { draft = null; }
+        if (draft && draft.data) {
+          const bar = document.createElement('div');
+          bar.className = 'notice warn';
+          bar.style.margin = '0 0 12px';
+          bar.innerHTML = `這台裝置上有 ${UI.esc(String(draft.at).replace('T', ' ').slice(0, 16))} 未儲存的草稿。
+            <button class="btn tiny" type="button" id="draft-use">接續草稿</button>
+            <button class="btn tiny secondary" type="button" id="draft-drop">丟棄</button>`;
+          el.prepend(bar);
+          bar.querySelector('#draft-use').onclick = () => {
+            for (const [k, v] of Object.entries(draft.data)) {
+              const f = el.querySelector(`[name="${k}"]`);
+              if (f && typeof v === 'string') f.value = v;
+            }
+            bar.remove();
+            UI.toast('已帶回草稿內容');
+          };
+          bar.querySelector('#draft-drop').onclick = () => { localStorage.removeItem(draftKey); bar.remove(); };
+        }
+        const state = document.createElement('div');
+        state.id = 'draft-state';
+        state.style.cssText = 'font-size:12px;color:var(--muted);margin-top:8px';
+        el.appendChild(state);
+      }
+      el._clearDraft = () => { try { localStorage.removeItem(draftKey); } catch { /* 忽略 */ } };
+
       const sign = el.querySelector('#sign');
       if (sign) sign.onclick = async () => {
         const msg = App.me.is_intern
@@ -289,6 +340,7 @@ async function noteDialog(seed, onDone) {
         try {
           await PUT(`/notes/${note.id}`, UI.formData(el));
           const r = await POST(`/notes/${note.id}/sign`, {});
+          if (el._clearDraft) el._clearDraft();
           UI.toast(r.message || '已簽核定稿');
           close();
           onDone && onDone();
@@ -315,6 +367,7 @@ async function noteDialog(seed, onDone) {
       if (data.risk_flag !== 'none' && !data.risk_note) throw new Error('已標記風險，請填寫風險評估說明');
       if (note) await PUT(`/notes/${note.id}`, data);
       else await POST('/notes', { ...data, client_id: seed.client_id, appointment_id: seed.appointment_id || null });
+      if (el._clearDraft) el._clearDraft();
       UI.toast('已儲存');
       onDone && onDone();
     }

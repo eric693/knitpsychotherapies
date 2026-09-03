@@ -177,8 +177,16 @@ App.page('bookings', {
       </div>
       <div class="card"><h3>待處理
         <span style="font-size:13px;font-weight:400;color:var(--muted)">${pending.length} 筆</span></h3>
-      ${UI.table(['送出時間', '姓名／電話', '身分', '方案／主題', '希望時段', '心理師', '額度', ''],
+      <div class="toolbar" style="margin:0 0 8px">
+        <label style="font-size:13px"><input type="checkbox" id="bulk-all"> 全選</label>
+        <button class="btn tiny secondary" id="bulk-client">批次建檔</button>
+        <button class="btn tiny secondary" id="bulk-reject">批次退回</button>
+        <button class="btn tiny danger" id="bulk-del">批次刪除</button>
+        <span id="bulk-count" style="font-size:12.5px;color:var(--muted)"></span>
+      </div>
+      ${UI.table(['', '送出時間', '姓名／電話', '身分', '方案／主題', '希望時段', '心理師', '額度', ''],
       pending.map(r => `<tr>
+        <td><input type="checkbox" class="bulk-pick" value="${r.id}"></td>
         <td>${UI.esc(r.created_at.slice(5, 16))}</td>
         <td>${UI.esc(r.name)}<br><span style="font-size:12px;color:var(--muted)">${UI.esc(r.phone)}</span></td>
         <td>${r.client_id ? UI.tag('舊個案', 'primary') + '<br>' + UI.esc(r.client_code || '') : UI.tag('初次', 'warn')}
@@ -217,6 +225,46 @@ App.page('bookings', {
     el.querySelector('#bq').onkeydown = e => { if (e.key === 'Enter') apply(); };
     ['#bst', '#bpl', '#bcs', '#bfrom', '#bto'].forEach(sel => { el.querySelector(sel).onchange = apply; });
     if (el.querySelector('#bclr')) el.querySelector('#bclr').onclick = () => { App._bookFilter = null; App.go('bookings'); };
+    // 批次處理：舊表單一次匯入上百筆時，一筆一筆開太慢
+    const picks = () => Array.from(el.querySelectorAll('.bulk-pick:checked')).map(c => Number(c.value));
+    const showCount = () => {
+      el.querySelector('#bulk-count').textContent = picks().length ? `已勾選 ${picks().length} 筆` : '';
+    };
+    el.querySelectorAll('.bulk-pick').forEach(c => { c.onchange = showCount; });
+    const allBox = el.querySelector('#bulk-all');
+    if (allBox) {
+      allBox.onchange = () => {
+        el.querySelectorAll('.bulk-pick').forEach(c => { c.checked = allBox.checked; });
+        showCount();
+      };
+    }
+    const bulk = async (action, label, extra) => {
+      const ids = picks();
+      if (!ids.length) { UI.toast('請先勾選要處理的申請', true); return; }
+      if (!await UI.confirm(`確定要${label} ${ids.length} 筆申請？`)) return;
+      try {
+        const r = await POST('/bookings/bulk', { ids, action, ...(extra || {}) });
+        UI.toast(`已${label} ${r.done} 筆${r.skipped.length ? `，${r.skipped.length} 筆略過` : ''}`);
+        if (r.skipped.length) {
+          UI.modal({
+            title: `略過的 ${r.skipped.length} 筆`, hideFooter: true,
+            body: UI.table(['姓名', '原因'], r.skipped.map(x =>
+              `<tr><td>${UI.esc(x.name || '')}</td><td>${UI.esc(x.why)}</td></tr>`))
+          });
+        }
+        App.go('bookings');
+      } catch (e) { UI.err(e); }
+    };
+    if (el.querySelector('#bulk-client')) {
+      el.querySelector('#bulk-client').onclick = () => bulk('create-client', '建檔');
+      el.querySelector('#bulk-del').onclick = () => bulk('delete', '刪除');
+      el.querySelector('#bulk-reject').onclick = () => UI.modal({
+        title: '批次退回',
+        body: `<div class="form-grid">${UI.textarea('reply_note', '退回原因（會記在每一筆申請上）', { rows: 3 })}</div>`,
+        onSubmit: async e2 => { await bulk('reject', '退回', UI.formData(e2)); }
+      });
+    }
+
     el.querySelectorAll('[data-b]').forEach(b => {
       b.onclick = () => bookingDialog(b.dataset.b, () => App.go('bookings'));
     });

@@ -1155,7 +1155,9 @@ ensureColumns('appointments', {
 });
 ensureColumns('invoices', {
   plan_id: 'INTEGER REFERENCES service_plans(id)',
-  topic_id: 'INTEGER REFERENCES plan_topics(id)'
+  topic_id: 'INTEGER REFERENCES plan_topics(id)',
+  // 作廢前的狀態：手滑作廢時要能撤銷回原本的未收／已收
+  void_prev_status: "TEXT NOT NULL DEFAULT ''"
 });
 
 // 年報表（督考用）欄位：

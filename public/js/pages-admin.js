@@ -463,7 +463,8 @@ App.page('billing', {
             ${i.status === 'unpaid' ? `<button class="btn tiny" data-pay="${i.id}">收款</button>
             <button class="btn tiny danger" data-void="${i.id}">作廢</button>`
             : (i.status === 'paid' || i.status === 'refunded') ? `<button class="btn tiny secondary" data-r="${i.id}">收據</button>
-            <button class="btn tiny danger" data-refund="${i.id}">退費</button>` : ''}</td></tr>`),
+            <button class="btn tiny danger" data-refund="${i.id}">退費</button>`
+            : i.status === 'void' ? `<button class="btn tiny secondary" data-unvoid="${i.id}">↺ 撤銷作廢</button>` : ''}</td></tr>`),
           '沒有符合條件的收費單')}`;
       el.querySelectorAll('[data-edit]').forEach(b => {
         b.onclick = () => invoiceDialog(d.rows.find(x => x.id === Number(b.dataset.edit)), null, draw);
@@ -539,6 +540,13 @@ App.page('billing', {
               draw();
             }
           });
+        };
+      });
+      // 手滑作廢救得回來：回到作廢前的狀態（未收／已收）
+      el.querySelectorAll('[data-unvoid]').forEach(b => {
+        b.onclick = async () => {
+          if (!await UI.confirm('撤銷作廢，讓這張收費單回到作廢前的狀態？')) return;
+          try { await POST(`/invoices/${b.dataset.unvoid}/unvoid`, {}); UI.toast('已撤銷作廢'); draw(); } catch (e) { UI.err(e); }
         };
       });
       el.querySelectorAll('[data-void]').forEach(b => {

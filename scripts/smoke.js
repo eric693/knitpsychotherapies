@@ -1995,6 +1995,66 @@ function startServer() {
     assert(r.version > broken.version, '內容有變動要遞增版本');
   });
 
+  section('收費還原與預約申請批次處理');
+  await test('收費單作廢可撤銷，回到作廢前的狀態', async () => {
+    const inv = await admin.ok('POST', '/api/invoices',
+      { client_id: clientId, date: ymd(new Date()), item: '測試收費', amount: 1500 });
+    await admin.ok('POST', `/api/invoices/${inv.id}/pay`, { method: '現金' });
+    await admin.ok('POST', `/api/invoices/${inv.id}/void`, { reason: '按錯' });
+    let row = (await admin.ok('GET', '/api/invoices?status=void')).rows.find(x => x.id === inv.id);
+    equal(row.status, 'void', '已作廢');
+    await admin.ok('POST', `/api/invoices/${inv.id}/unvoid`, {});
+    row = (await admin.ok('GET', '/api/invoices?status=paid')).rows.find(x => x.id === inv.id);
+    equal(row.status, 'paid', '撤銷後回到已收款');
+    await admin.fails('POST', `/api/invoices/${inv.id}/unvoid`, {}, '不是作廢狀態');
+  });
+  await test('收據作廢可撤銷；已重開過的則擋下', async () => {
+    const inv = await admin.ok('POST', '/api/invoices',
+      { client_id: clientId, date: ymd(new Date()), item: '收據測試', amount: 2000 });
+    await admin.ok('POST', `/api/invoices/${inv.id}/pay`, { method: '現金' });
+    const rec = await admin.ok('POST', '/api/receipts', { invoice_id: inv.id });
+    await admin.ok('POST', `/api/receipts/${rec.id}/void`, { reason: '打錯抬頭' });
+    await admin.ok('POST', `/api/receipts/${rec.id}/unvoid`, {});
+    let r = (await admin.ok('GET', '/api/receipts')).rows.find(x => x.id === rec.id);
+    equal(r.status, 'valid', '撤銷作廢後恢復有效');
+    const re = await admin.ok('POST', `/api/receipts/${rec.id}/reissue`, { reason: '抬頭更正' });
+    await admin.fails('POST', `/api/receipts/${rec.id}/unvoid`, {}, '已重開為');
+    assert(re.receipt_no, '重開會產生新號');
+  });
+  await test('預約申請可批次建檔與批次退回，已成立的自動跳過', async () => {
+    // 用表單同步端點造兩筆待處理申請（公開表單那條有送出頻率限制，測試不適合連打）
+    const gen = await admin.ok('PUT', '/api/integrations/google-form', { regenerate: true });
+    const send = async (name, phone, rid) => {
+      const r = await fetch(BASE + '/api/integrations/google-form', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret: gen.secret, response_id: rid,
+          answers: { 姓名: name, 手機: phone, '預約項目': '個別治療／諮商（50 分鐘）' } })
+      });
+      return (await r.json()).id;
+    };
+    const ids = [await send('批次甲', '0955001001', 'bulk-1'), await send('批次乙', '0955001002', 'bulk-2')]
+      .filter(Boolean);
+    equal(ids.length, 2, '兩筆申請都要收進來');
+    const r = await admin.ok('POST', '/api/bookings/bulk', { ids, action: 'create-client' });
+    equal(r.done, 2, '兩筆都建檔或對應到既有個案：' + JSON.stringify(r));
+    const again = await admin.ok('POST', '/api/bookings/bulk', { ids, action: 'create-client' });
+    equal(again.done, 0, '第二次全部跳過');
+    assert(again.skipped.every(x => x.why.includes('已對應個案')), '跳過原因要說清楚');
+    const back = await admin.ok('POST', '/api/bookings/bulk', { ids, action: 'reject', reply_note: '重複申請' });
+    equal(back.done, 2, '批次退回');
+    const list = await admin.ok('GET', '/api/bookings?status=rejected');
+    assert(ids.every(id => list.some(x => x.id === id)), '狀態要變成已退回');
+    await admin.fails('POST', '/api/bookings/bulk', { ids: [], action: 'reject' }, '請先勾選');
+    await admin.fails('POST', '/api/bookings/bulk', { ids, action: 'nope' }, '不支援');
+    await admin.ok('POST', '/api/bookings/bulk', { ids, action: 'delete' });
+    await admin.ok('PUT', '/api/integrations/google-form', { secret: '' });
+  });
+  await test('重複申請清單標出同電話或已建檔者', async () => {
+    const dup = await admin.ok('GET', '/api/bookings/duplicates');
+    assert(Array.isArray(dup), '應回傳清單');
+    assert(dup.every(r => r.client_match || r.same_phone || r.same_name), '只列出有重複疑慮的');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

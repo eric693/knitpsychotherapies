@@ -168,6 +168,21 @@ router.post('/receipts/:id/void', requireStaff('billing'), (req, res) => {
   res.json({ ok: true });
 });
 
+// 撤銷作廢：作廢當下按錯時用；若已因重開而產生後續收據則不允許撤銷（號碼會重複勾稽）
+router.post('/receipts/:id/unvoid', requireStaff('billing'), (req, res) => {
+  const r = db.prepare('SELECT * FROM receipts WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: '找不到此收據' });
+  if (r.status !== 'void') return res.status(400).json({ error: '此收據不是作廢狀態' });
+  const reissued = db.prepare("SELECT receipt_no FROM receipts WHERE reissue_of = ? AND status = 'valid'")
+    .get(r.receipt_no);
+  if (reissued) {
+    return res.status(400).json({ error: `已重開為 ${reissued.receipt_no}，如要恢復本張請先作廢重開的那張` });
+  }
+  db.prepare("UPDATE receipts SET status = 'valid', void_reason = '' WHERE id = ?").run(r.id);
+  audit('staff', req.user.id, req.user.name, '撤銷作廢收據', r.receipt_no, { was: r.void_reason });
+  res.json({ ok: true });
+});
+
 // 重開：作廢原收據並以相同內容開新號，兩張互相勾稽
 router.post('/receipts/:id/reissue', requireStaff('billing'), (req, res) => {
   const r = db.prepare('SELECT * FROM receipts WHERE id = ?').get(req.params.id);

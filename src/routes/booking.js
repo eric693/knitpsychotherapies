@@ -277,6 +277,66 @@ router.get('/bookings', requireStaff('bookings'), (req, res) => {
   })));
 });
 
+// 批次處理：舊表單一次匯入上百筆，一筆一筆開太慢。
+// 支援「批次建檔」與「批次退回」；成立預約仍需逐筆確認時段，不做批次。
+router.post('/bookings/bulk', requireStaff('bookings'), (req, res) => {
+  const b = req.body || {};
+  const ids = (Array.isArray(b.ids) ? b.ids : []).map(Number).filter(Boolean).slice(0, 300);
+  const action = b.action;
+  if (!ids.length) return res.status(400).json({ error: '請先勾選要處理的申請' });
+  if (!['create-client', 'reject', 'delete'].includes(action)) {
+    return res.status(400).json({ error: '不支援的批次動作' });
+  }
+  if (action === 'create-client' && req.user.role !== 'admin' && !(req.userModules || []).includes('clients')) {
+    return res.status(403).json({ error: '批次建檔需要個案管理權限' });
+  }
+  const rows = db.prepare(`SELECT * FROM booking_requests
+    WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+  const done = [], skipped = [];
+  const note = String(b.reply_note || '');
+  for (const r of rows) {
+    try {
+      if (action === 'reject') {
+        if (r.status === 'confirmed') { skipped.push({ id: r.id, name: r.name, why: '已成立，請改為取消晤談' }); continue; }
+        db.prepare(`UPDATE booking_requests SET status = 'rejected', reply_note = ?, handled_by = ?, handled_at = ?
+          WHERE id = ?`).run(note, req.user.id, nowStamp(), r.id);
+        done.push(r.id);
+      } else if (action === 'delete') {
+        if (r.status === 'confirmed') { skipped.push({ id: r.id, name: r.name, why: '已成立，不可刪除' }); continue; }
+        db.prepare('DELETE FROM booking_requests WHERE id = ?').run(r.id);
+        done.push(r.id);
+      } else {
+        if (r.client_id) { skipped.push({ id: r.id, name: r.name, why: '已對應個案' }); continue; }
+        if (!r.name || !r.phone) { skipped.push({ id: r.id, name: r.name || '(無姓名)', why: '缺姓名或電話' }); continue; }
+        const exist = db.prepare('SELECT id FROM clients WHERE phone = ? AND active = 1').get(r.phone);
+        if (exist) {
+          db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(exist.id, r.id);
+          done.push(r.id);
+          continue;
+        }
+        const made = createClientFromBooking(r, req.user);
+        done.push(r.id);
+        if (!made) skipped.push({ id: r.id, name: r.name, why: '建檔失敗' });
+      }
+    } catch (e) {
+      skipped.push({ id: r.id, name: r.name, why: e.message });
+    }
+  }
+  audit('staff', req.user.id, req.user.name, '批次處理預約申請', action, { count: done.length, skipped: skipped.length });
+  res.json({ ok: true, done: done.length, skipped });
+});
+
+// 重複申請：同電話或同姓名已經有個案／其他申請，先標出來，避免重複建檔
+router.get('/bookings/duplicates', requireStaff('bookings'), (req, res) => {
+  const rows = db.prepare(`SELECT b.id, b.name, b.phone, b.created_at, b.status,
+      (SELECT c.id FROM clients c WHERE c.phone = b.phone AND c.active = 1 LIMIT 1) AS client_match,
+      (SELECT COUNT(*) FROM booking_requests x WHERE x.phone = b.phone AND x.id != b.id) AS same_phone,
+      (SELECT COUNT(*) FROM booking_requests x WHERE x.name = b.name AND x.phone != b.phone) AS same_name
+    FROM booking_requests b WHERE b.status = 'new' AND b.phone != ''
+    ORDER BY b.created_at DESC LIMIT 300`).all();
+  res.json(rows.filter(r => r.client_match || r.same_phone || r.same_name));
+});
+
 router.get('/bookings/:id', requireStaff('bookings'), (req, res) => {
   const b = db.prepare(`${BOOKING_SQL} WHERE b.id = ?`).get(req.params.id);
   if (!b) return res.status(404).json({ error: '找不到此預約申請' });
@@ -334,16 +394,8 @@ router.delete('/bookings/:id', requireStaff('bookings'), (req, res) => {
   res.json({ ok: true });
 });
 
-// 未建檔者一鍵建檔：把表單資料帶進個案基本資料，省去重打一次
-router.post('/bookings/:id/create-client', requireStaff('clients'), (req, res) => {
-  const b = db.prepare('SELECT * FROM booking_requests WHERE id = ?').get(req.params.id);
-  if (!b) return res.status(404).json({ error: '找不到此預約申請' });
-  if (b.client_id) return res.status(400).json({ error: '此申請已對應個案' });
-  const exist = db.prepare('SELECT * FROM clients WHERE phone = ? AND active = 1').get(b.phone);
-  if (exist) {
-    db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(exist.id, b.id);
-    return res.json({ client_id: exist.id, matched: true });
-  }
+// 由預約申請建檔（單筆與批次共用；回傳 { client_id, code }）
+function createClientFromBooking(b, user) {
   const code = nextClientCode();
   const adultAge = Number(getSetting('adult_age', '18'));
   const age = ageYears(b.birth_date, today());
@@ -370,8 +422,21 @@ router.post('/bookings/:id/create-client', requireStaff('clients'), (req, res) =
     // 個案在預約表單自己點名心理師的算「指定案」，其餘由所方派案（年報表類別代碼要分）
     b.counselor_id ? 'designated' : 'assigned');
   db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(info.lastInsertRowid, b.id);
-  audit('staff', req.user.id, req.user.name, '由預約申請建檔', code);
-  res.json({ client_id: info.lastInsertRowid, code });
+  audit('staff', user.id, user.name, '由預約申請建檔', code);
+  return { client_id: info.lastInsertRowid, code };
+}
+
+// 未建檔者一鍵建檔：把表單資料帶進個案基本資料，省去重打一次
+router.post('/bookings/:id/create-client', requireStaff('clients'), (req, res) => {
+  const b = db.prepare('SELECT * FROM booking_requests WHERE id = ?').get(req.params.id);
+  if (!b) return res.status(404).json({ error: '找不到此預約申請' });
+  if (b.client_id) return res.status(400).json({ error: '此申請已對應個案' });
+  const exist = db.prepare('SELECT * FROM clients WHERE phone = ? AND active = 1').get(b.phone);
+  if (exist) {
+    db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(exist.id, b.id);
+    return res.json({ client_id: exist.id, matched: true });
+  }
+  res.json(createClientFromBooking(b, req.user));
 });
 
 // 成立預約：寫進排程、指派諮商室、鎖定方案金額與心理師報酬，並以 LINE 通知雙方
