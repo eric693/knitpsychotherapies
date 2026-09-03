@@ -200,13 +200,16 @@ const App = {
       /搜尋/.test(i.placeholder || '') && !i.classList.contains('fb-q'));
     if (own) return;
     const min = def.searchMin || 5;
+    // 排班、週排程、諮商室這類「格子要點的」表不加搜尋列（會擋住操作也沒有意義）
+    const GRID = '.shift-table, .week-table, .rb-table, .cal-table';
     const cards = Array.from(body.querySelectorAll('.card'))
-      .filter(c => c.querySelectorAll('table.list tbody tr').length >= min && !c.querySelector('.fb-q'));
+      .filter(c => c.querySelectorAll('table.list tbody tr').length >= min
+        && !c.querySelector('.fb-q') && !c.querySelector(GRID));
     for (const card of cards) UI.filterBar(card, { search: def.searchHint || '搜尋這張表' });
     // 卡片外的獨立表格（有些頁面直接放表）
     if (!body.querySelector('.card table.list')
       && body.querySelectorAll('table.list tbody tr').length >= min
-      && !body.querySelector('.fb-q')) {
+      && !body.querySelector('.fb-q') && !body.querySelector(GRID)) {
       UI.filterBar(body, { search: def.searchHint || '搜尋這張表' });
     }
   },

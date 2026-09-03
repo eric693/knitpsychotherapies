@@ -275,7 +275,8 @@ App.page('schedule', {
       </div>
       <div class="table-wrap"><table class="list week-table"><thead><tr>
         ${days.map(dt => `<th>${dt.slice(5)}（${UI.weekdayName(dt)}）${dt === UI.today() ? ' ●' : ''}</th>`).join('')}
-      </tr></thead><tbody><tr>${days.map(dt => `<td style="vertical-align:top;min-width:150px">${cell(dt)}</td>`).join('')}</tr></tbody></table></div>
+      </tr></thead><tbody><tr>${days.map(dt => `<td class="week-day" data-day="${dt}"
+        style="vertical-align:top;min-width:150px;cursor:pointer" title="點空白處可在這天新增預約">${cell(dt)}</td>`).join('')}</tr></tbody></table></div>
       <h3 style="margin:18px 0 8px">排班設定</h3>
       <div id="shift-panel"><div class="empty">載入中...</div></div>`;
 
@@ -284,6 +285,16 @@ App.page('schedule', {
     el.querySelector('#this').onclick = () => App.go('schedule/' + UI.today());
     el.querySelector('#fc').onchange = e => { localStorage.setItem('mc-week-counselor', e.target.value); App.go('schedule/' + start); };
     el.querySelector('#add').onclick = () => apptDialog(null, () => App.go('schedule/' + start));
+    // 點某一天的空白處就在那天開新預約（點在既有的預約上則走下方的明細）
+    el.querySelectorAll('.week-day').forEach(td => {
+      td.addEventListener('click', e => {
+        if (e.target.closest('[data-appt], [data-gs]')) return;
+        apptDialog(null, () => App.go('schedule/' + start), {
+          date: td.dataset.day, start_time: '14:00',
+          counselor_id: Number(filterC) || App.me.id
+        });
+      });
+    });
     el.querySelectorAll('[data-gs]').forEach(c => { c.onclick = () => { location.hash = 'group/' + c.dataset.gs; }; });
     el.querySelectorAll('[data-appt]').forEach(c => {
       c.onclick = () => {

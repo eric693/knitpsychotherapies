@@ -29,9 +29,12 @@ const UI = {
       </div>`;
     const bodyEl = mask.querySelector('.modal-body');
     if (typeof body === 'string') bodyEl.innerHTML = body; else bodyEl.appendChild(body);
-    const close = () => mask.remove();
+    const onEsc = e => { if (e.key === 'Escape') close(); };
+    const close = () => { document.removeEventListener('keydown', onEsc); mask.remove(); };
     mask.querySelector('.close').onclick = close;
     mask.addEventListener('mousedown', e => { if (e.target === mask) close(); });
+    // 鍵盤 Esc 也能關掉（與點右上角 ×、點視窗外同一個行為）
+    document.addEventListener('keydown', onEsc);
     if (!hideFooter) {
       mask.querySelector('[data-act="cancel"]').onclick = close;
       mask.querySelector('[data-act="ok"]').onclick = async () => {

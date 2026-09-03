@@ -672,7 +672,7 @@ App.page('room-board', {
     '「單日總覽」一列一個時段、各諮商室並排，一眼看得出同一時段三間有沒有人；空白就是沒人用。',
     '「整週逐間」是每間諮商室一張整週表，適合看某一間的一週使用狀況。',
     '通訊（視訊）諮商不在所內進行，不會佔用諮商室，因此不會出現在這張表上。',
-    '上方可切換週次。這頁只看不改，要調整請到「預約排程」。',
+    '上方可切換週次。點有人的格子可直接改那筆預約，點空格則會在那個時段、那間諮商室新增一筆。',
     '格子底色代表方案別（自費白底、市民方案藍底、國軍黃底、青壯粉紅底、EAP 綠底、馬太鞍／北捷土黃底），沒指定方案的以自費白底呈現。',
     '點任一格晤談可直接開啟修改預約，改完方案底色就會跟著變。',
   ],
@@ -715,7 +715,10 @@ App.page('room-board', {
       for (let m = from; m < to; m += step) {
         const cells = d.rooms.map(room => {
           const it = cellFor(room.id, date, m);
-          if (!it) return '<td class="rb-free"></td>';
+          if (!it) {
+            return `<td class="rb-free" data-free="${room.id}" data-date="${date}" data-min="${label(m)}"
+              style="cursor:pointer" title="空的：點一下可在這個時段、這間諮商室新增預約"></td>`;
+          }
           const head = toMin(it.start_time) === m;
           const pc = it.kind === 'group'
             ? { bg: 'var(--warn-bg)', line: 'var(--warn)' }
@@ -741,7 +744,10 @@ App.page('room-board', {
           <td style="white-space:nowrap;color:var(--muted);font-size:12.5px">${label(m)}-${label(m + step)}</td>
           ${days.map(date => {
     const it = cellFor(room.id, date, m);
-    if (!it) return '<td></td>';
+    if (!it) {
+      return `<td class="rb-free" data-free="${room.id}" data-date="${date}" data-min="${label(m)}"
+        style="cursor:pointer" title="空的：點一下可在這個時段、這間諮商室新增預約"></td>`;
+    }
     const head = toMin(it.start_time) === m;   // 只在第一格寫字，後續格子只上色
     const pc = it.kind === 'group'
       ? { name: '團體', bg: 'var(--warn-bg)', line: 'var(--warn)' }
@@ -820,6 +826,13 @@ App.page('room-board', {
         if (a) apptDialog(a, () => App.go('room-board/' + d.start));
         else UI.toast('找不到這筆預約，請重新整理', true);
       };
+    });
+
+    // 空格子＝那個時段那間諮商室沒人用，點下去直接排一筆進去
+    el.querySelectorAll('[data-free]').forEach(td => {
+      td.onclick = () => apptDialog(null, () => App.go('room-board/' + (view === 'day' ? pickDay : d.start)), {
+        date: td.dataset.date, start_time: td.dataset.min, room_id: Number(td.dataset.free)
+      });
     });
 
     el.querySelector('#v-day').onclick = () => { localStorage.setItem('mc-rb-view', 'day'); App.go('room-board/' + pickDay); };
