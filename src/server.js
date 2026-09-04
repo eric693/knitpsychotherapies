@@ -43,13 +43,13 @@ app.post('/api/login', loginRateLimit, (req, res) => {
     return res.status(401).json({ error: '帳號或密碼錯誤' });
   }
   loginSucceeded(lockKey);
-  setAuthCookie(res, STAFF_COOKIE, signToken({ t: 'staff', id: user.id }));
+  setAuthCookie(res, STAFF_COOKIE, signToken({ t: 'staff', id: user.id }), req);
   audit('staff', user.id, user.name, '員工登入');
   res.json({ id: user.id, name: user.name, role: user.role });
 });
 
 app.post('/api/logout', (req, res) => {
-  clearAuthCookie(res, STAFF_COOKIE);
+  clearAuthCookie(res, STAFF_COOKIE, req);
   res.json({ ok: true });
 });
 
@@ -181,6 +181,7 @@ const BACKUP_MIRROR = process.env.MINDCARE_BACKUP_MIRROR !== undefined
   ? process.env.MINDCARE_BACKUP_MIRROR
   : '/root/backups/mindcare';
 const BACKUP_KEEP = 14;
+const PRE_DEPLOY_KEEP = 5;
 
 function unlinkBackup(dir, name) {
   for (const suffix of ['', '-wal', '-shm']) {
@@ -192,6 +193,10 @@ function sweepBackupDir(dir) {
   const all = fs.readdirSync(dir);
   const dbs = all.filter(f => /^mindcare-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort();
   while (dbs.length > BACKUP_KEEP) unlinkBackup(dir, dbs.shift());
+  // 部署前備份（scripts/deploy.sh 每次留一份）原本沒人清，一天部署幾次就疊幾份，
+  // 每份都是完整資料庫，久了會把磁碟吃光。只留最近幾份。
+  const pre = all.filter(f => /^pre-deploy-\d{8}-\d{6}\.db$/.test(f)).sort();
+  while (pre.length > PRE_DEPLOY_KEEP) unlinkBackup(dir, pre.shift());
   const kept = new Set(dbs);
   for (const f of all) {
     const m = f.match(/^(mindcare-\d{4}-\d{2}-\d{2}\.db)-(wal|shm)$/);

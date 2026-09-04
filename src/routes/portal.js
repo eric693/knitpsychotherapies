@@ -14,6 +14,22 @@ const { freeSlots, conflictOf } = require('./schedule');
 const router = express.Router();
 const loginRateLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 30, prefix: 'portal:' });
 
+// 個案在專區自行改期或取消，心理師的行程就變了——沒有通知的話他只能靠自己重看行事曆。
+// 未綁定 LINE 或未串接時，pushFlex 會記成「待人工發送」，不會靜靜地漏掉。
+async function notifyCounselor(counselorId, title, text) {
+  const u = db.prepare('SELECT name, line_user_id FROM users WHERE id = ? AND active = 1').get(Number(counselorId) || 0);
+  if (!u || !u.line_user_id) return;
+  try {
+    await line.pushFlex({
+      to: u.line_user_id, kind: 'schedule_change',
+      flex: line.card({
+        title, subtitle: getSetting('center_name'), altText: `${title}：${text}`,
+        body: [{ type: 'text', size: 'sm', wrap: true, color: '#3b4a55', text }]
+      })
+    });
+  } catch (e) { console.error('通知心理師失敗：', e.message); }
+}
+
 // 個案端只提供行政功能（預約、量表、費用、同意書），不提供任何晤談紀錄內容
 router.post('/login', loginRateLimit, (req, res) => {
   const { phone = '', password = '' } = req.body || {};
@@ -26,13 +42,13 @@ router.post('/login', loginRateLimit, (req, res) => {
     return res.status(401).json({ error: '手機號碼或密碼錯誤' });
   }
   loginSucceeded(lockKey);
-  setAuthCookie(res, CLIENT_COOKIE, signToken({ t: 'client', id: c.id }));
+  setAuthCookie(res, CLIENT_COOKIE, signToken({ t: 'client', id: c.id }), req);
   audit('client', c.id, c.name, '個案端登入');
   res.json({ ok: true, must_change_password: !!c.must_change_password });
 });
 
 router.post('/logout', (req, res) => {
-  clearAuthCookie(res, CLIENT_COOKIE);
+  clearAuthCookie(res, CLIENT_COOKIE, req);
   res.json({ ok: true });
 });
 
@@ -163,7 +179,7 @@ router.post('/appointments', requireClient, async (req, res) => {
 
 // 改期：與線上預約走同一套規則（開放時段、提前天數、不換心理師），
 // 且必須在免收費取消期限之前；逾期者一律只能提出申請由櫃檯處理。
-router.post('/appointments/:id/reschedule', requireClient, (req, res) => {
+router.post('/appointments/:id/reschedule', requireClient, async (req, res) => {
   if (getSetting('portal_reschedule_enabled', '1') !== '1') {
     return res.status(403).json({ error: '目前未開放線上改期，請來電洽詢' });
   }
@@ -203,12 +219,14 @@ router.post('/appointments/:id/reschedule', requireClient, (req, res) => {
     date, start_time, slot.end_time, roomId, original,
     (a.note ? a.note + '；' : '') + `個案自行改期（原 ${original}）` + roomNote, a.id);
   audit('client', req.client.id, req.client.name, '個案端改期', req.client.code, { from: original, to: `${date} ${start_time}` });
+  await notifyCounselor(a.counselor_id, '個案自行改期',
+    `${req.client.name}（${req.client.code}）已將晤談由 ${original} 改為 ${date} ${start_time}。`);
   res.json({ ok: true, date, start_time, end_time: slot.end_time });
 });
 
 // 取消：期限內直接取消；不足時數者留下取消申請與事由，並同步發一則訊息給櫃檯，
 // 由櫃檯決定是否依未到比例計費（不讓個案端自行決定收費結果）
-router.post('/appointments/:id/cancel', requireClient, (req, res) => {
+router.post('/appointments/:id/cancel', requireClient, async (req, res) => {
   const a = db.prepare('SELECT * FROM appointments WHERE id = ? AND client_id = ?').get(req.params.id, req.client.id);
   if (!a) return res.status(404).json({ error: '找不到此預約' });
   if (a.status !== 'booked') return res.status(400).json({ error: '此預約無法自行取消，請來電洽詢' });
@@ -234,6 +252,9 @@ router.post('/appointments/:id/cancel', requireClient, (req, res) => {
   db.prepare("UPDATE appointments SET status = 'cancelled', cancel_reason = ? WHERE id = ?")
     .run(reason || '個案自行取消', a.id);
   audit('client', req.client.id, req.client.name, '個案端取消預約', req.client.code, { date: a.date });
+  await notifyCounselor(a.counselor_id, '個案取消晤談',
+    `${req.client.name}（${req.client.code}）已取消 ${a.date} ${a.start_time} 的晤談`
+    + `${reason ? `，事由：${reason}` : ''}。此時段已釋出，可於「候補遞補」頁安排。`);
   res.json({ ok: true, pending: false, message: '已取消預約' });
 });
 

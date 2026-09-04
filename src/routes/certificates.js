@@ -6,7 +6,7 @@
 // 套版只負責帶入預設值與當事人資料，不限制所方最後怎麼寫。
 
 const express = require('express');
-const { db, audit, today, getSetting, setSetting, listSetting, ageYears } = require('../db');
+const { db, audit, today, nowStamp, getSetting, setSetting, listSetting, ageYears } = require('../db');
 const { requireStaff } = require('../auth');
 
 const router = express.Router();
@@ -836,7 +836,7 @@ router.get('/certificates/:id/print', requireStaff(), (req, res) => {
   const data = JSON.parse(c.data || '{}');
   const forWord = req.query.format === 'doc';
   db.prepare('UPDATE certificates SET print_count = print_count + 1, last_printed_at = ? WHERE id = ?')
-    .run(new Date().toISOString().slice(0, 16).replace('T', ' '), c.id);
+    .run(nowStamp(), c.id);
   audit('staff', req.user.id, req.user.name, forWord ? '匯出證明書（Word）' : '列印證明書',
     `${KINDS[c.kind].label}／${c.subject_name}`, { cert_no: c.cert_no });
   if (forWord) {

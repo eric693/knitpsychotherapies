@@ -89,11 +89,18 @@ function parseCookies(req) {
 }
 
 function signToken(payload) { return jwt.sign(payload, SECRET, { expiresIn: TOKEN_TTL }); }
-function setAuthCookie(res, name, token) {
-  res.setHeader('Set-Cookie', `${name}=${token}; HttpOnly; Path=/; Max-Age=${7 * 86400}; SameSite=Lax`);
+// 正式站走 https（nginx 轉發時帶 x-forwarded-proto），此時 cookie 要加 Secure，
+// 免得使用者誤連 http:// 就把登入憑證明文送出去。本機以 http 測試時不加，否則存不進瀏覽器。
+function isHttps(req) {
+  return !!req && (req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https');
 }
-function clearAuthCookie(res, name) {
-  res.setHeader('Set-Cookie', `${name}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`);
+function setAuthCookie(res, name, token, req) {
+  res.setHeader('Set-Cookie', `${name}=${token}; HttpOnly; Path=/; Max-Age=${7 * 86400}; SameSite=Lax`
+    + (isHttps(req) ? '; Secure' : ''));
+}
+function clearAuthCookie(res, name, req) {
+  res.setHeader('Set-Cookie', `${name}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`
+    + (isHttps(req) ? '; Secure' : ''));
 }
 
 function parsePermissions(raw) {
