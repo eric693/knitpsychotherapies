@@ -440,6 +440,7 @@ node scripts/preflight.js               # 設定、方案金額、排班、帳�
 node scripts/migrate-fee-semantics.js   # 舊制「fee＝總額」的預約轉為「fee＝個案自付」（--apply 才寫入）
 node scripts/purge-demo.js              # 清除 seed 的示範帳號與示範個案（--apply 才刪，會先自動備份）
 npm run smoke                           # API 冒煙測試（拋棄式資料庫，不碰正式資料）
+npm run check:edits                     # 逐一確認每種資料都改得動，且該鎖的（簽核、作廢）鎖得住
 npm run smoke:ui                        # 無頭瀏覽器巡過所有頁面，抓 JS 例外與空白頁
 bash scripts/deploy.sh                  # 驗 → 備份 → 重啟 → 再驗
 ```

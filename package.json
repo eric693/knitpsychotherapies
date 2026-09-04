@@ -9,6 +9,7 @@
     "seed": "node scripts/seed.js",
     "smoke": "node scripts/smoke.js",
     "smoke:ui": "node scripts/smoke-ui.js",
+    "check:edits": "node scripts/check-edits.js",
     "deploy": "bash scripts/deploy.sh"
   },
   "dependencies": {
