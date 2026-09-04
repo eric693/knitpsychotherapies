@@ -541,6 +541,10 @@ const LINEPAGE = {
         </div>
       </div>
 
+      <div class="card"><h3>未送出的通知
+          <span style="font-size:13px;font-weight:400;color:var(--muted)">送失敗或待人工發送的都列在這裡</span></h3>
+        <div id="failed"><div class="empty">載入中...</div></div></div>
+
       <div class="card"><h3>近期推播紀錄</h3>
         ${UI.table(['時間', '類型', '對象', '內容', '結果'], (s.recent || []).map(n => `<tr>
           <td>${UI.esc(n.created_at.slice(5, 16))}</td><td>${UI.esc(n.kind)}</td>
@@ -550,6 +554,38 @@ const LINEPAGE = {
     : n.status === 'manual' ? UI.tag('待人工', 'warn') : UI.tag('失敗', 'danger')}
             ${n.error ? `<br><span style="font-size:12px;color:var(--muted)">${UI.esc(n.error)}</span>` : ''}</td>
         </tr>`), '尚無推播紀錄')}</div>`;
+
+    // 未送出的通知：可逐筆重送，或標記成已用電話等方式處理
+    const drawFailed = async () => {
+      const box = el.querySelector('#failed');
+      const d = await GET('/notifications/failed');
+      box.innerHTML = `${UI.table(['時間', '類型', '對象', '內容', '狀態', ''], d.rows.map(n => `<tr>
+          <td>${UI.esc(n.created_at.slice(5, 16))}</td><td>${UI.esc(n.kind)}</td>
+          <td>${UI.esc(n.client_name || n.target || '-')}</td>
+          <td><div class="ellipsis" style="max-width:260px" title="${UI.esc(n.content || '')}">${UI.esc(n.content || '')}</div></td>
+          <td>${n.status === 'manual' ? UI.tag('待人工發送', 'warn') : UI.tag('送出失敗', 'danger')}
+            ${n.error ? `<br><span style="font-size:12px;color:var(--muted)">${UI.esc(n.error)}</span>` : ''}
+            ${n.retry_count ? `<br><span style="font-size:12px;color:var(--muted)">已重試 ${n.retry_count} 次</span>` : ''}</td>
+          <td style="white-space:nowrap">
+            <button class="btn tiny" data-rt="${n.id}"${d.line_enabled && n.target ? '' : ' disabled'}>重送</button>
+            <button class="btn tiny secondary" data-rv="${n.id}">已人工處理</button></td></tr>`),
+    '沒有未送出的通知')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
+          失敗的推播每天會自動重送，每筆最多 3 次；${d.line_enabled ? '' : '目前尚未串接 LINE，只能標記為已人工處理。'}</div>`;
+      box.querySelectorAll('[data-rt]').forEach(b2 => {
+        b2.onclick = async () => {
+          try { await POST(`/notifications/${b2.dataset.rt}/retry`, {}); UI.toast('已重送'); drawFailed(); }
+          catch (e) { UI.err(e); }
+        };
+      });
+      box.querySelectorAll('[data-rv]').forEach(b2 => {
+        b2.onclick = async () => {
+          await POST(`/notifications/${b2.dataset.rv}/resolve`, {});
+          UI.toast('已標記處理'); drawFailed();
+        };
+      });
+    };
+    drawFailed();
 
     el.querySelector('#test').onclick = async () => { const o = await POST('/line/test'); UI.toast(o.message); };
     el.querySelector('#remind').onclick = async () => {

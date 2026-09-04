@@ -185,6 +185,14 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at);`);
+// 推播失敗要能重送：把訊息內容（Flex JSON）與重試次數留著，
+// 否則失敗的提醒只會靜靜地留在清單裡，沒人會發現個案沒收到。
+ensureColumns('notifications', {
+  payload: "TEXT NOT NULL DEFAULT ''",            // 原始訊息（JSON），重送時直接用
+  retry_count: 'INTEGER NOT NULL DEFAULT 0',
+  last_retry_at: "TEXT NOT NULL DEFAULT ''",
+  resolved: 'INTEGER NOT NULL DEFAULT 0'          // 人工確認已另行處理，不再列在待處理
+});
 
 // 報酬單拆單：同一筆報酬拆成數筆各低於扣繳門檻時，用 batch_* 記住它們原屬同一次結算
 ensureColumns('payouts', {
@@ -1171,6 +1179,29 @@ ensureColumns('service_plans', {
   register_url: "TEXT NOT NULL DEFAULT ''",
   signin_url: "TEXT NOT NULL DEFAULT ''"
 });
+// 清單頁常用的排序與篩選欄位：資料累積後沒有索引會整表掃描。
+// 這些是實際會被 WHERE／ORDER BY 用到的組合（排程看某人某天、收費看狀態與日期…）。
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_appt_counselor_date ON appointments(counselor_id, date);
+CREATE INDEX IF NOT EXISTS idx_appt_status_date ON appointments(status, date);
+CREATE INDEX IF NOT EXISTS idx_inv_status_date ON invoices(status, date);
+CREATE INDEX IF NOT EXISTS idx_inv_appt ON invoices(appointment_id);
+CREATE INDEX IF NOT EXISTS idx_note_appt ON session_notes(appointment_id);
+CREATE INDEX IF NOT EXISTS idx_receipt_invoice ON receipts(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_booking_created ON booking_requests(created_at);
+CREATE INDEX IF NOT EXISTS idx_assess_scale ON assessments(scale, date);`);
+
+// 月報快照：每月 1 號把上個月的營運數字定版存起來。
+// 好處有二：報表不必每次即時重算（資料多了會變慢），
+// 以及「當時報的數字」有留底，事後補登或改動不會讓上個月的報表跟著變。
+db.exec(`CREATE TABLE IF NOT EXISTS report_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  month TEXT NOT NULL UNIQUE,                  -- YYYY-MM
+  data TEXT NOT NULL DEFAULT '{}',             -- 當月彙總（JSON）
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);`);
+
 // 個案合併紀錄：同一個人用不同電話重複建檔時，把資料併到留下的那筆，
 // 並記下「哪張表的哪幾列被搬過」，需要時可以整批還原。
 db.exec(`CREATE TABLE IF NOT EXISTS client_merges (

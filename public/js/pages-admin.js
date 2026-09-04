@@ -884,14 +884,25 @@ App.page('reports', {
   help: [
     '月報：服務量、個案來源、收入與危機事件統計，可切換月份。',
     '數字取自已完成的晤談與已開立的收費單，因此當月未結的部分不會計入。',
+    '月底對完帳可按「定版這個月」把數字存起來（每月 1 號也會自動定版上個月）；之後補登資料不會改動已定版的那一份，勾「看定版數字」即可調閱。',
   ],
   module: 'reports',
   async render(el) {
     const month = (el.querySelector('#m') && el.querySelector('#m').value) || UI.thisMonth();
-    const d = await GET('/reports?month=' + month);
+    const useSnap = el.querySelector('#snap') ? el.querySelector('#snap').checked : false;
+    const d = await GET(`/reports?month=${month}${useSnap ? '&snapshot=1' : ''}`);
     const exps = await GET('/exports');
+    const snaps = await GET('/report-snapshots').catch(() => []);
+    const snapped = snaps.find(x => x.month === month);
     el.innerHTML = `<div class="toolbar"><label>月份</label><input id="m" type="month" value="${d.month}">
-        <div class="spacer"></div><button class="btn secondary small" onclick="window.print()">列印</button></div>
+        ${snapped ? `<label style="font-size:13px"><input type="checkbox" id="snap"${useSnap ? ' checked' : ''}>
+          看定版數字（${UI.esc(snapped.created_at.slice(0, 16))}）</label>` : ''}
+        <div class="spacer"></div>
+        <button class="btn secondary small" id="dosnap">${snapped ? '重新定版' : '定版這個月'}</button>
+        ${snapped ? '<button class="btn secondary small" id="delsnap">刪除定版</button>' : ''}
+        <button class="btn secondary small" onclick="window.print()">列印</button></div>
+      ${d.snapshot_at ? `<div class="notice" style="margin-bottom:12px">
+        目前顯示的是 ${UI.esc(d.snapshot_at.slice(0, 16))} 定版的數字，之後補登的資料不會影響這一份。</div>` : ''}
       <div class="card"><h3>報表匯出</h3>
         ${UI.table(['報表', '範圍', '匯出格式'], exps.map(x => `<tr>
           <td>${UI.esc(x.name)}</td><td>${x.range ? '選定月份' : '全部'}</td>
@@ -971,6 +982,22 @@ App.page('reports', {
         ${UI.table(['團體', '本月場次', '成員數'], d.groups.map(r => `<tr><td>${UI.esc(r.name)}</td>
           <td>${r.sessions}</td><td>${r.members}</td></tr>`), '本月無團體場次')}</div>`;
     el.querySelector('#m').onchange = () => App.pages.reports.render(el);
+    // 定版：把這個月的數字存成快照，之後補登不會回頭改動已報出去的數字
+    if (el.querySelector('#snap')) el.querySelector('#snap').onchange = () => App.pages.reports.render(el);
+    el.querySelector('#dosnap').onclick = async () => {
+      const m = el.querySelector('#m').value;
+      if (!await UI.confirm(`把 ${m} 的月報定版存起來？之後補登的資料不會影響這一份。`)) return;
+      try { await POST('/report-snapshots', { month: m }); UI.toast('已定版'); App.pages.reports.render(el); }
+      catch (e) { UI.err(e); }
+    };
+    if (el.querySelector('#delsnap')) {
+      el.querySelector('#delsnap').onclick = async () => {
+        const m = el.querySelector('#m').value;
+        if (!await UI.confirm(`刪除 ${m} 的定版？之後這個月一律看即時數字。`)) return;
+        try { await DEL(`/report-snapshots/${m}`); UI.toast('已刪除定版'); App.pages.reports.render(el); }
+        catch (e) { UI.err(e); }
+      };
+    }
     el.querySelectorAll('[data-x]').forEach(b => {
       b.onclick = () => {
         const m = el.querySelector('#m').value;

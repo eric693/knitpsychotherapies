@@ -277,6 +277,25 @@ async function dailyMaintenance(force = false) {
     if (retention > 0) {
       db.prepare("DELETE FROM audit_logs WHERE created_at < datetime('now','localtime',?)").run(`-${retention} days`);
     }
+    // 每月 1 號把上個月的月報定版存起來：報表不必每次重算，
+    // 「當時報出去的數字」也留得住（事後補登不會回頭改動上月報表）。
+    try {
+      const now = new Date();
+      if (now.getDate() === 1) {
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const month = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+        const exist = db.prepare('SELECT 1 FROM report_snapshots WHERE month = ?').get(month);
+        if (!exist) {
+          require('./routes/org').saveMonthlySnapshot(month, '每月自動定版');
+          console.log(`已定版 ${month} 月報`);
+        }
+      }
+    } catch (e) { console.error('月報定版失敗：', e.message); }
+    // 失敗的 LINE 推播自動重送（每筆最多 3 次）：不然提醒沒送出去也沒人發現
+    try {
+      const r = await require('./line').retryFailedNotifications();
+      if (r.tried) console.log(`重送失敗的推播：${r.sent}/${r.tried} 成功`);
+    } catch (e) { console.error('推播重送失敗：', e.message); }
   } catch (e) { console.error('每日維護作業失敗：', e.message); }
 }
 dailyMaintenance();

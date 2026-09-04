@@ -235,10 +235,48 @@ function textMessage(text) { return { type: 'text', text: String(text).slice(0, 
 
 // ---- 送出 ------------------------------------------------------------------
 
-function logNotification({ kind, client_id, appointment_id, channel, target, content, status, error, user }) {
-  db.prepare(`INSERT INTO notifications (kind, client_id, appointment_id, channel, target, content, status, error, sent_by)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(kind, client_id || null, appointment_id || null, channel,
-    target || '', content || '', status, error || '', user ? user.id : null);
+function logNotification({ kind, client_id, appointment_id, channel, target, content, status, error, user, payload }) {
+  const info = db.prepare(`INSERT INTO notifications
+      (kind, client_id, appointment_id, channel, target, content, status, error, sent_by, payload)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(kind, client_id || null, appointment_id || null, channel,
+    target || '', content || '', status, error || '', user ? user.id : null,
+    payload ? JSON.stringify(payload).slice(0, 20000) : '');
+  return info.lastInsertRowid;
+}
+
+// 重送一則失敗的推播：用當初存下來的訊息內容再打一次，成功就把該筆改為已送出
+async function retryNotification(id, user) {
+  const n = db.prepare('SELECT * FROM notifications WHERE id = ?').get(id);
+  if (!n) return { ok: false, error: '找不到此通知' };
+  if (n.status === 'sent') return { ok: false, error: '這筆已經送出過了' };
+  if (!lineEnabled()) return { ok: false, error: '尚未設定 LINE 權杖，無法重送' };
+  if (!n.target) return { ok: false, error: '沒有收件對象（對方尚未綁定 LINE）' };
+  let flex = null;
+  try { flex = n.payload ? JSON.parse(n.payload) : null; } catch { flex = null; }
+  const message = flex || textMessage(n.content || '（原訊息內容未保存）');
+  const r = await callLine(PUSH_URL, { to: n.target, messages: [message] });
+  db.prepare(`UPDATE notifications SET status = ?, error = ?, retry_count = retry_count + 1,
+      last_retry_at = datetime('now','localtime') WHERE id = ?`)
+    .run(r.ok ? 'sent' : 'failed', r.error || '', n.id);
+  if (user) {
+    db.prepare('UPDATE notifications SET sent_by = ? WHERE id = ?').run(user.id, n.id);
+  }
+  return r.ok ? { ok: true } : { ok: false, error: r.error };
+}
+
+// 自動重試：每日維護時把最近失敗、重試未滿上限的再送一次（每筆最多 3 次）
+async function retryFailedNotifications(max = 20) {
+  if (!lineEnabled()) return { tried: 0, sent: 0 };
+  const rows = db.prepare(`SELECT id FROM notifications
+    WHERE status = 'failed' AND resolved = 0 AND retry_count < 3 AND target != ''
+      AND created_at >= datetime('now','localtime','-3 days')
+    ORDER BY id DESC LIMIT ?`).all(max);
+  let sent = 0;
+  for (const r of rows) {
+    const out = await retryNotification(r.id, null);
+    if (out.ok) sent++;
+  }
+  return { tried: rows.length, sent };
 }
 
 async function callLine(url, body) {
@@ -277,7 +315,7 @@ async function pushFlex({ to, flex, kind = 'line', client_id = null, appointment
   }
   const r = await callLine(PUSH_URL, { to, messages: [flex] });
   logNotification({ kind, client_id, appointment_id, channel: 'line', target: to, content,
-    status: r.ok ? 'sent' : 'failed', error: r.error, user });
+    status: r.ok ? 'sent' : 'failed', error: r.error, user, payload: flex });
   return r.ok ? { status: 'sent', message: '已以 LINE 推播' } : { status: 'failed', message: r.error };
 }
 
@@ -301,5 +339,6 @@ module.exports = {
   card, kv, noteBox, actionButton, textMessage,
   bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, portalUrl,
   counselorScheduleFlex, counselorBookingFlex, receiptFlex,
-  pushFlex, replyMessages, verifySignature, logNotification
+  pushFlex, replyMessages, verifySignature, logNotification,
+  retryNotification, retryFailedNotifications
 };

@@ -568,9 +568,17 @@ router.post('/messages', requireStaff('messages'), (req, res) => {
 });
 
 // ---- 統計報表 ----
-router.get('/reports', requireStaff('reports'), (req, res) => {
+// 月報：預設即時計算；已定版（快照）的月份可用 snapshot=1 取回當時報出去的數字
+function reportsHandler(req, res) {
   const month = req.query.month || today().slice(0, 7);
   const like = month + '%';
+  if (req.query.snapshot === '1') {
+    const snap = db.prepare('SELECT * FROM report_snapshots WHERE month = ?').get(month);
+    if (snap) {
+      try { return res.json({ ...JSON.parse(snap.data), month, snapshot_at: snap.created_at }); }
+      catch { /* 快照壞掉就照常即時算 */ }
+    }
+  }
   res.json({
     month,
     by_counselor: db.prepare(`SELECT u.name,
@@ -687,9 +695,52 @@ router.get('/reports', requireStaff('reports'), (req, res) => {
       };
     })()
   });
-});
+}
+router.get('/reports', requireStaff('reports'), reportsHandler);
 
 // ---- 報表匯出（CSV，含 BOM 供 Excel 直接開啟）----
+// 月報定版：把某個月的數字存成快照。每月 1 號由每日維護自動存上個月，
+// 也可以手動重存（例如上月資料補登完才要定版）。
+function buildMonthlyReport(month) {
+  // 直接重用上面的 /reports 邏輯：以假的 req/res 取得同一份 JSON，
+  // 免得同一組統計寫兩份、日後只改到一邊。
+  let out = null;
+  const fakeReq = { query: { month }, user: { id: 0, name: '系統', role: 'admin' } };
+  const fakeRes = { json: v => { out = v; } };
+  reportsHandler(fakeReq, fakeRes);
+  return out;
+}
+
+function saveMonthlySnapshot(month, note = '') {
+  const data = buildMonthlyReport(month);
+  if (!data) return null;
+  db.prepare(`INSERT INTO report_snapshots (month, data, note) VALUES (?,?,?)
+    ON CONFLICT(month) DO UPDATE SET data = excluded.data, note = excluded.note,
+      created_at = datetime('now','localtime')`).run(month, JSON.stringify(data), note);
+  return data;
+}
+
+router.get('/report-snapshots', requireStaff('reports'), (req, res) => {
+  res.json(db.prepare(`SELECT id, month, note, created_at,
+      length(data) AS size FROM report_snapshots ORDER BY month DESC LIMIT 60`).all());
+});
+
+router.post('/report-snapshots', requireStaff('reports'), (req, res) => {
+  const month = String((req.body || {}).month || '').slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: '請指定月份（YYYY-MM）' });
+  const data = saveMonthlySnapshot(month, String((req.body || {}).note || ''));
+  if (!data) return res.status(400).json({ error: '無法產生該月報表' });
+  audit('staff', req.user.id, req.user.name, '定版月報', month);
+  res.json({ ok: true, month });
+});
+
+router.delete('/report-snapshots/:month', requireStaff('reports'), (req, res) => {
+  const r = db.prepare('DELETE FROM report_snapshots WHERE month = ?').run(req.params.month);
+  if (!r.changes) return res.status(404).json({ error: '找不到此月份的定版' });
+  audit('staff', req.user.id, req.user.name, '刪除月報定版', req.params.month);
+  res.json({ ok: true });
+});
+
 const EXPORTS = {
   clients: {
     name: '個案清單',
@@ -863,3 +914,5 @@ router.get('/audit-logs', requireAdmin, (req, res) => {
 });
 
 module.exports = router;
+// 每日維護要用（每月 1 號自動定版上個月）
+module.exports.saveMonthlySnapshot = saveMonthlySnapshot;

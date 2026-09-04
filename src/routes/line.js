@@ -389,6 +389,38 @@ router.get('/line/status', requireStaff(), (req, res) => {
   });
 });
 
+// 未送出的推播：沒設定權杖時記成「待人工發送」，送失敗的則留下錯誤訊息。
+// 這張清單是為了「不要靜靜地漏掉提醒」，可逐筆重送或標記為已人工處理。
+router.get('/notifications/failed', requireStaff('messages'), (req, res) => {
+  const rows = db.prepare(`SELECT n.*, c.name AS client_name, c.code AS client_code
+    FROM notifications n LEFT JOIN clients c ON c.id = n.client_id
+    WHERE n.status IN ('failed','manual') AND n.resolved = 0
+    ORDER BY n.id DESC LIMIT 200`).all();
+  res.json({
+    rows,
+    line_enabled: line.lineEnabled(),
+    failed: rows.filter(r => r.status === 'failed').length,
+    manual: rows.filter(r => r.status === 'manual').length
+  });
+});
+
+router.post('/notifications/:id/retry', requireStaff('messages'), async (req, res) => {
+  const r = await line.retryNotification(Number(req.params.id), req.user);
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  audit('staff', req.user.id, req.user.name, '重送通知', String(req.params.id));
+  res.json({ ok: true });
+});
+
+// 標記為已人工處理（例如已改用電話通知），不再列在待處理清單
+router.post('/notifications/:id/resolve', requireStaff('messages'), (req, res) => {
+  const n = db.prepare('SELECT * FROM notifications WHERE id = ?').get(req.params.id);
+  if (!n) return res.status(404).json({ error: '找不到此通知' });
+  const on = n.resolved ? 0 : 1;
+  db.prepare('UPDATE notifications SET resolved = ? WHERE id = ?').run(on, n.id);
+  audit('staff', req.user.id, req.user.name, on ? '標記通知已處理' : '取消通知已處理', String(n.id));
+  res.json({ ok: true, resolved: on });
+});
+
 // ---- 推播：晤談提醒（個案）----
 
 function apptForFlex(id) {

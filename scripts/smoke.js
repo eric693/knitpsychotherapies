@@ -2099,6 +2099,38 @@ function startServer() {
     assert(d.groups.every(g => g.clients.every(c => !c.merged_into)), '已合併的不再列入');
   });
 
+  await test('未送出的通知列得出來，可重送或標記已人工處理', async () => {
+    // 未設定權杖時，推播只會記成「待人工發送」，正好用來驗這條流程
+    await admin.ok('POST', '/api/line/remind-tomorrow', {}).catch(() => null);
+    const d = await admin.ok('GET', '/api/notifications/failed');
+    assert(Array.isArray(d.rows), '應回傳清單');
+    if (d.rows.length) {
+      const n = d.rows[0];
+      await admin.fails('POST', `/api/notifications/${n.id}/retry`, {}, '無法重送');
+      await admin.ok('POST', `/api/notifications/${n.id}/resolve`, {});
+      const after = await admin.ok('GET', '/api/notifications/failed');
+      assert(!after.rows.some(x => x.id === n.id), '標記後不再列出');
+    }
+  });
+
+  await test('月報可定版留底，之後補登不會改動已定版的數字', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    const live = await admin.ok('GET', `/api/reports?month=${month}`);
+    await admin.ok('POST', '/api/report-snapshots', { month, note: '冒煙測試' });
+    const list = await admin.ok('GET', '/api/report-snapshots');
+    assert(list.some(x => x.month === month), '應列出定版');
+    // 補一筆收費，即時報表會變、定版不變
+    await admin.ok('POST', '/api/invoices',
+      { client_id: clientId, date: ymd(new Date()), item: '定版後補登', amount: 999 });
+    const live2 = await admin.ok('GET', `/api/reports?month=${month}`);
+    const snap = await admin.ok('GET', `/api/reports?month=${month}&snapshot=1`);
+    assert(live2.income.unpaid > live.income.unpaid, '即時報表要跟著變');
+    equal(snap.income.unpaid, live.income.unpaid, '定版的數字不動');
+    assert(snap.snapshot_at, '要標示定版時間');
+    await admin.ok('DELETE', `/api/report-snapshots/${month}`);
+    await admin.fails('POST', '/api/report-snapshots', { month: '亂填' }, '請指定月份');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {
