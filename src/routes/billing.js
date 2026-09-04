@@ -1,18 +1,9 @@
 const express = require('express');
-const { db, audit, today, nowStamp, getSetting, listSetting } = require('../db');
+const { db, audit, today, nowStamp, getSetting, listSetting, nextReceiptNo, withUniqueRetry } = require('../db');
 const { requireStaff } = require('../auth');
 const { sendNotification } = require('../notify');
 
 const router = express.Router();
-
-function nextReceiptNo() {
-  const prefix = getSetting('receipt_prefix', 'MC');
-  const ym = today().slice(0, 7).replace('-', '');
-  const row = db.prepare("SELECT receipt_no FROM invoices WHERE receipt_no LIKE ? ORDER BY receipt_no DESC LIMIT 1")
-    .get(`${prefix}${ym}%`);
-  const seq = row ? Number(row.receipt_no.slice(-4)) + 1 : 1;
-  return `${prefix}${ym}${String(seq).padStart(4, '0')}`;
-}
 
 // ---- 收費單 ----
 
@@ -92,10 +83,15 @@ router.post('/invoices/:id/pay', requireStaff('billing'), (req, res) => {
   if (!i) return res.status(404).json({ error: '找不到此收費單' });
   if (i.status === 'paid') return res.status(400).json({ error: '此筆已收款' });
   const { method = '現金' } = req.body || {};
-  db.prepare("UPDATE invoices SET status = 'paid', method = ?, paid_at = ?, receipt_no = ? WHERE id = ?")
-    .run(method, nowStamp(), i.receipt_no || nextReceiptNo(), i.id);
-  audit('staff', req.user.id, req.user.name, '收款', String(i.client_id), { id: i.id, amount: i.amount });
-  res.json({ ok: true });
+  // 號碼由資料庫的唯一索引把關，萬一撞號就重算一個再寫（見 db.js 的 withUniqueRetry）
+  const no = withUniqueRetry(() => {
+    const n = i.receipt_no || nextReceiptNo();
+    db.prepare("UPDATE invoices SET status = 'paid', method = ?, paid_at = ?, receipt_no = ? WHERE id = ?")
+      .run(method, nowStamp(), n, i.id);
+    return n;
+  });
+  audit('staff', req.user.id, req.user.name, '收款', String(i.client_id), { id: i.id, amount: i.amount, receipt_no: no });
+  res.json({ ok: true, receipt_no: no });
 });
 
 // 發票號碼、載具、補助核銷資料常在收款後才補登，故已收款者仍可編輯；已作廢者不可改

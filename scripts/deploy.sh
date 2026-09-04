@@ -44,10 +44,30 @@ for i in $(seq 1 30); do
 done
 
 step "4/4 前端冒煙測試"
+# 正式站已清掉展示帳號，直接對正式站跑只會「無法登入，略過」，等於什麼都沒驗到。
+# 因此另起一台帶展示資料的臨時站（拋棄式資料庫與埠號，不碰正式資料）來巡所有畫面。
 if [ "$SKIP_UI" = "--skip-ui" ]; then
   echo "  （依參數略過）"
 else
-  BASE="http://localhost:$PORT" npm run --silent smoke:ui || fail "前端冒煙測試未通過，請檢查（服務已是新版）"
+  UI_TMP=$(mktemp -d)
+  UI_PORT=$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')
+  cleanup_ui() {
+    [ -n "${UI_PID:-}" ] && kill "$UI_PID" 2>/dev/null || true
+    rm -rf "$UI_TMP"
+  }
+  trap cleanup_ui EXIT
+  export MINDCARE_DATA_DIR="$UI_TMP/data" MINDCARE_UPLOAD_DIR="$UI_TMP/uploads" MINDCARE_BACKUP_MIRROR="$UI_TMP/mirror"
+  node scripts/seed.js >/dev/null 2>&1 || fail "臨時站灌展示資料失敗"
+  PORT="$UI_PORT" node src/server.js > "$UI_TMP/server.log" 2>&1 &
+  UI_PID=$!
+  for i in $(seq 1 20); do
+    curl -fsS -o /dev/null "http://127.0.0.1:$UI_PORT/api/public/ui-texts" 2>/dev/null && break
+    [ "$i" = 20 ] && { cat "$UI_TMP/server.log"; fail "臨時站起不來，無法執行前端冒煙"; }
+    sleep 1
+  done
+  echo "  臨時站（埠 $UI_PORT，展示資料）已就緒"
+  BASE="http://127.0.0.1:$UI_PORT" npm run --silent smoke:ui || fail "前端冒煙測試未通過，請檢查（正式站已是新版）"
+  unset MINDCARE_DATA_DIR MINDCARE_UPLOAD_DIR MINDCARE_BACKUP_MIRROR
 fi
 
 printf '\n\033[32m✓ 部署完成\033[0m\n'

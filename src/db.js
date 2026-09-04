@@ -1191,6 +1191,39 @@ CREATE INDEX IF NOT EXISTS idx_receipt_invoice ON receipts(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_booking_created ON booking_requests(created_at);
 CREATE INDEX IF NOT EXISTS idx_assess_scale ON assessments(scale, date);`);
 
+// 憑證號碼不得重號：兩張單同時開立時，「先查最大號再寫入」可能算出同一個號。
+// 交給資料庫把關（同一個號寫第二次就失敗），程式收到衝突後重算重試。
+// 空字串代表尚未開立憑證，會有很多筆，故以部分索引排除。
+db.exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_no_uniq ON receipts(receipt_no) WHERE receipt_no != '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_receipt_no_uniq ON invoices(receipt_no) WHERE receipt_no != '';`);
+
+// 憑證流水號：前綴 + 西元年月 + 四碼序號（同月遞增），如 KN2026090001。
+// 收費單（收款時）與收據（開立時）共用同一條序列——兩邊各算各的話，
+// 同一個月會各自從 0001 開始，等於兩份不同單據印出同一個號。
+// 作廢的號碼不回收，才符合憑證連號的要求。
+function nextReceiptNo() {
+  const prefix = getSetting('receipt_prefix', 'MC');
+  const ym = today().slice(0, 7).replace('-', '');
+  const like = `${prefix}${ym}%`;
+  const max = db.prepare(`SELECT MAX(no) AS no FROM (
+      SELECT MAX(receipt_no) AS no FROM receipts WHERE receipt_no LIKE ?
+      UNION ALL SELECT MAX(receipt_no) FROM invoices WHERE receipt_no LIKE ?)`).get(like, like);
+  const seq = max && max.no ? Number(String(max.no).slice(-4)) + 1 : 1;
+  return `${prefix}${ym}${String(seq).padStart(4, '0')}`;
+}
+
+// 重號時重算號碼再寫一次；連續失敗才回報，避免無限重試把請求卡住。
+function withUniqueRetry(fn, tries = 5) {
+  for (let i = 1; ; i++) {
+    try { return fn(); } catch (e) {
+      const dup = String(e.code || '') === 'SQLITE_CONSTRAINT_UNIQUE'
+        || /UNIQUE constraint failed/.test(String(e.message || ''));
+      if (!dup || i >= tries) throw e;
+    }
+  }
+}
+
 // 月報快照：每月 1 號把上個月的營運數字定版存起來。
 // 好處有二：報表不必每次即時重算（資料多了會變慢），
 // 以及「當時報的數字」有留底，事後補登或改動不會讓上個月的報表跟著變。
@@ -1373,6 +1406,7 @@ if (getSetting('military_urls_seeded', '') !== '1') {
 // 免得正式站上出現兩套方案名稱。
 
 module.exports = {
+  withUniqueRetry, nextReceiptNo,
   db, SECRET, DATA_DIR, UPLOAD_DIR, getSetting, setSetting, listSetting, audit,
   ALL_SETTING_DEFAULTS, CONSENT_TEMPLATE_DEFAULTS,
   today, nowTime, nowStamp, addDays, ageYears, nextClientCode, UI_TEXT_KEYS

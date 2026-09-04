@@ -1134,6 +1134,18 @@ function startServer() {
     receiptId = r.id;
     receiptNo = r.receipt_no;
   });
+  await test('收費單與收據共用同一條號碼序列，不會兩張單同號', async () => {
+    // 兩邊各算各的話，同一個月都會從 0001 開始，等於不同單據印出同一個號
+    const c = await admin.ok('POST', '/api/invoices',
+      { client_id: clientId, item: '號碼測試', amount: 1000 });
+    const paid = await admin.ok('POST', `/api/invoices/${c.id}/pay`, { method: '現金' });
+    assert(paid.receipt_no, '收款應配發號碼');
+    const r2 = await admin.ok('POST', '/api/receipts', { client_id: clientId, amount: 1000, item: '號碼測試' });
+    assert(r2.receipt_no !== paid.receipt_no, `收費單與收據撞號：${paid.receipt_no}`);
+    assert(r2.receipt_no !== receiptNo, '收據號碼應遞增不重複');
+    const seq = x => Number(String(x).slice(-4));
+    assert(seq(r2.receipt_no) > seq(paid.receipt_no), '號碼應接在前一號之後');
+  });
   await test('同一收費單不會重複開立收據', async () => {
     const list = await admin.ok('GET', '/api/receipts');
     const r = list.rows.find(x => x.id === receiptId);

@@ -5,22 +5,11 @@
 // 只要依原收費單補開一張收據即可。開錯則作廢並重開新號，兩張互相勾稽。
 
 const express = require('express');
-const { db, audit, today, nowStamp, getSetting, listSetting } = require('../db');
+const { db, audit, today, nowStamp, getSetting, listSetting, nextReceiptNo, withUniqueRetry } = require('../db');
 const { requireStaff } = require('../auth');
 const line = require('../line');
 
 const router = express.Router();
-
-// 流水編號：前綴 + 西元年月 + 四碼序號（同月遞增），如 GM2026080001。
-// 以 receipts 表本身為序號來源，作廢的號碼不回收，才符合憑證連號的要求。
-function nextReceiptNo() {
-  const prefix = getSetting('receipt_prefix', 'GM');
-  const ym = today().slice(0, 7).replace('-', '');
-  const row = db.prepare('SELECT receipt_no FROM receipts WHERE receipt_no LIKE ? ORDER BY receipt_no DESC LIMIT 1')
-    .get(`${prefix}${ym}%`);
-  const seq = row ? Number(row.receipt_no.slice(-4)) + 1 : 1;
-  return `${prefix}${ym}${String(seq).padStart(4, '0')}`;
-}
 
 function centerBlock() {
   return {
@@ -116,22 +105,25 @@ router.post('/receipts', requireStaff('billing'), (req, res) => {
   const counselorName = b.counselor_name || (inv && inv.counselor_id
     ? (db.prepare('SELECT name FROM users WHERE id = ?').get(inv.counselor_id) || {}).name || '' : '');
 
-  const no = nextReceiptNo();
-  const info = db.prepare(`INSERT INTO receipts
-    (receipt_no, invoice_id, client_id, date, title, tax_id, item, amount, method,
-     plan_name, counselor_name, service_date, note, reissue_of, issued_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    no, inv ? inv.id : null, client.id,
-    b.date || (inv && inv.paid_at ? inv.paid_at.slice(0, 10) : today()),
-    String(b.title || client.name), String(b.tax_id || '').trim(),
-    String(b.item || (inv ? inv.item : '心理諮商服務費')), amount,
-    String(b.method || (inv ? inv.method : '') || ''),
-    planName, counselorName,
-    b.service_date || (inv ? inv.service_date || inv.date : ''),
-    String(b.note || ''), String(b.reissue_of || ''), req.user.id);
-
-  // 收費單上也留一份收據號，帳務畫面才看得出這筆已開過憑證
-  if (inv && !inv.receipt_no) db.prepare('UPDATE invoices SET receipt_no = ? WHERE id = ?').run(no, inv.id);
+  // 號碼與寫入綁在一起重試：撞號時重算一個再寫，不會靜靜地開出重號憑證
+  const { no, info } = withUniqueRetry(() => {
+    const receiptNo = nextReceiptNo();
+    const row = db.prepare(`INSERT INTO receipts
+      (receipt_no, invoice_id, client_id, date, title, tax_id, item, amount, method,
+       plan_name, counselor_name, service_date, note, reissue_of, issued_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      receiptNo, inv ? inv.id : null, client.id,
+      b.date || (inv && inv.paid_at ? inv.paid_at.slice(0, 10) : today()),
+      String(b.title || client.name), String(b.tax_id || '').trim(),
+      String(b.item || (inv ? inv.item : '心理諮商服務費')), amount,
+      String(b.method || (inv ? inv.method : '') || ''),
+      planName, counselorName,
+      b.service_date || (inv ? inv.service_date || inv.date : ''),
+      String(b.note || ''), String(b.reissue_of || ''), req.user.id);
+    // 收費單上也留一份收據號，帳務畫面才看得出這筆已開過憑證
+    if (inv && !inv.receipt_no) db.prepare('UPDATE invoices SET receipt_no = ? WHERE id = ?').run(receiptNo, inv.id);
+    return { no: receiptNo, info: row };
+  });
   audit('staff', req.user.id, req.user.name, '開立收據', client.code, { receipt_no: no, amount });
   res.json({ id: info.lastInsertRowid, receipt_no: no });
 });
@@ -189,26 +181,28 @@ router.post('/receipts/:id/reissue', requireStaff('billing'), (req, res) => {
   if (!r) return res.status(404).json({ error: '找不到此收據' });
   const b = req.body || {};
   const reason = String(b.reason || '重開').trim();
-  const no = nextReceiptNo();
-  const tx = db.transaction(() => {
-    if (r.status === 'valid') {
-      db.prepare("UPDATE receipts SET status = 'void', void_reason = ? WHERE id = ?")
-        .run(`重開為 ${no}：${reason}`, r.id);
-    }
-    db.prepare(`INSERT INTO receipts
-      (receipt_no, invoice_id, client_id, date, title, tax_id, item, amount, method,
-       plan_name, counselor_name, service_date, note, reissue_of, issued_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      no, r.invoice_id, r.client_id, b.date || r.date,
-      String(b.title !== undefined ? b.title : r.title), String(b.tax_id !== undefined ? b.tax_id : r.tax_id),
-      String(b.item !== undefined ? b.item : r.item),
-      Math.max(0, Math.round(Number(b.amount !== undefined && b.amount !== '' ? b.amount : r.amount))),
-      String(b.method !== undefined ? b.method : r.method),
-      r.plan_name, r.counselor_name, r.service_date,
-      String(b.note !== undefined ? b.note : r.note), r.receipt_no, req.user.id);
-    if (r.invoice_id) db.prepare('UPDATE invoices SET receipt_no = ? WHERE id = ?').run(no, r.invoice_id);
+  const no = withUniqueRetry(() => {
+    const newNo = nextReceiptNo();
+    db.transaction(() => {
+      if (r.status === 'valid') {
+        db.prepare("UPDATE receipts SET status = 'void', void_reason = ? WHERE id = ?")
+          .run(`重開為 ${newNo}：${reason}`, r.id);
+      }
+      db.prepare(`INSERT INTO receipts
+        (receipt_no, invoice_id, client_id, date, title, tax_id, item, amount, method,
+         plan_name, counselor_name, service_date, note, reissue_of, issued_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        newNo, r.invoice_id, r.client_id, b.date || r.date,
+        String(b.title !== undefined ? b.title : r.title), String(b.tax_id !== undefined ? b.tax_id : r.tax_id),
+        String(b.item !== undefined ? b.item : r.item),
+        Math.max(0, Math.round(Number(b.amount !== undefined && b.amount !== '' ? b.amount : r.amount))),
+        String(b.method !== undefined ? b.method : r.method),
+        r.plan_name, r.counselor_name, r.service_date,
+        String(b.note !== undefined ? b.note : r.note), r.receipt_no, req.user.id);
+      if (r.invoice_id) db.prepare('UPDATE invoices SET receipt_no = ? WHERE id = ?').run(newNo, r.invoice_id);
+    })();
+    return newNo;
   });
-  tx();
   audit('staff', req.user.id, req.user.name, '重開收據', r.receipt_no, { new_no: no, reason });
   res.json({ ok: true, receipt_no: no });
 });
