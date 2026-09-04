@@ -4,6 +4,7 @@ const { requireStaff } = require('../auth');
 const { sendNotification } = require('../notify');
 const { ensureToken, resetToken } = require('../ics');
 const plans = require('../plans');
+const line = require('../line');
 const { endTime, defaultSessionMinutes } = plans;
 
 const router = express.Router();
@@ -108,7 +109,7 @@ router.get('/schedule/week', requireStaff('schedule'), (req, res) => {
   });
 });
 
-router.post('/appointments', requireStaff('schedule'), (req, res) => {
+router.post('/appointments', requireStaff('schedule'), async (req, res) => {
   const b = req.body || {};
   const client = db.prepare('SELECT * FROM clients WHERE id = ? AND active = 1').get(Number(b.client_id) || 0);
   if (!client) return res.status(400).json({ error: '請選擇個案' });
@@ -184,7 +185,24 @@ router.post('/appointments', requireStaff('schedule'), (req, res) => {
   // 全所只有 2-3 間，排滿時要講清楚，不要靜悄悄留一筆沒有空間的預約
   const warnings = [...check.warnings];
   if (!roomId && b.mode !== 'online') warnings.push('此時段所有諮商室都已排滿，這筆預約尚未指定空間，請確認場地安排');
-  res.json({ id: info.lastInsertRowid, room_id: roomId, warnings, usage: check.usage });
+  // 櫃檯直接排約也要推「預約已成立」給個案（原本只有線上申請確認時才推），
+  // 否則同一件事在 LINE 上有沒有通知，取決於這筆預約是從哪個入口進來的。
+  let notify = null;
+  if (client.line_user_id) {
+    const quotePlan = quote.plan;
+    notify = await line.pushFlex({
+      to: client.line_user_id, kind: 'booking_confirm', client_id: client.id,
+      appointment_id: info.lastInsertRowid, user: req.user,
+      flex: line.bookingConfirmedFlex({
+        date: b.date, start_time: b.start_time, end_time,
+        counselor_name: (db.prepare('SELECT name FROM users WHERE id = ?').get(Number(b.counselor_id)) || {}).name || '',
+        plan_name: quotePlan ? quotePlan.name : '', topic_name: quote.topic ? quote.topic.name : '',
+        mode: b.mode || 'onsite', fee, self_pay: quote.self_pay, subsidy_amount: quote.subsidy_amount,
+        meeting_url
+      })
+    });
+  }
+  res.json({ id: info.lastInsertRowid, room_id: roomId, warnings, usage: check.usage, notify });
 });
 
 router.put('/appointments/:id', requireStaff('schedule'), (req, res) => {

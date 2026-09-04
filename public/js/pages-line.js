@@ -371,7 +371,7 @@ const LINEPAGE = {
 
       <div class="card"><h3>3. 通知時間與樣式</h3>
         <div class="form-grid" id="opts">
-          ${UI.input('line_reminder_hours', '晤談提醒提前時數', { type: 'number', value: s.line_reminder_hours })}
+          ${UI.input('line_reminder_hours', '晤談提醒提前時數（0 = 不推提醒）', { type: 'number', value: s.line_reminder_hours })}
           ${UI.select('line_counselor_daily_enabled', '每日推播心理師隔日行程',
     [['1', '啟用'], ['0', '關閉']], { value: s.line_counselor_daily_enabled })}
           ${UI.input('line_counselor_daily_time', '每日推播時間', { type: 'time', value: s.line_counselor_daily_time })}

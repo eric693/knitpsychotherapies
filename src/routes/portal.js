@@ -8,6 +8,7 @@ const {
 } = require('../auth');
 const { SCALE_KEYS, score, publicScales } = require('../scales');
 const plans = require('../plans');
+const line = require('../line');
 const { freeSlots, conflictOf } = require('./schedule');
 
 const router = express.Router();
@@ -114,7 +115,7 @@ router.get('/slots', requireClient, (req, res) => {
 });
 
 // 個案自行送出預約（狀態為 booked，櫃檯可再調整；不可自行指定費用）
-router.post('/appointments', requireClient, (req, res) => {
+router.post('/appointments', requireClient, async (req, res) => {
   if (getSetting('portal_booking_enabled', '1') !== '1') return res.status(403).json({ error: '目前未開放線上預約，請來電預約' });
   const { date = '', start_time = '', counselor_id, note = '' } = req.body || {};
   // 與對外表單同一套：最快幾天後 + 前一天幾點截止
@@ -136,12 +137,28 @@ router.post('/appointments', requireClient, (req, res) => {
   if (!slot) return res.status(400).json({ error: '此時段已被預約或非開放時段，請重新選擇' });
   const type = db.prepare("SELECT 1 FROM appointments WHERE client_id = ? AND status = 'done'").get(req.client.id) ? 'individual' : 'intake';
   const fee = Number(getSetting(type === 'intake' ? 'intake_fee' : 'default_fee', '2000'));
+  // 諮商室由系統指派（個案端不顯示空間配置）；排滿時留空由櫃檯安排，
+  // 週檢視的「未指定空間」清單會列出來。原本個案端排的約一律沒有諮商室。
+  const roomId = plans.pickRoom({ date, start_time, end_time: slot.end_time });
   const info = db.prepare(`INSERT INTO appointments
-    (client_id, counselor_id, date, start_time, end_time, type, status, fee, source, note)
-    VALUES (?,?,?,?,?,?, 'booked', ?, 'portal', ?)`).run(
-    req.client.id, cid, date, start_time, slot.end_time, type, fee, note);
+    (client_id, counselor_id, room_id, date, start_time, end_time, type, status, fee, source, note)
+    VALUES (?,?,?,?,?,?,?, 'booked', ?, 'portal', ?)`).run(
+    req.client.id, cid, roomId, date, start_time, slot.end_time, type, fee, note);
   audit('client', req.client.id, req.client.name, '個案端預約', req.client.code, { date, start_time });
-  res.json({ id: info.lastInsertRowid });
+  // 心理師端通知：個案自己在專區排進來的，跟線上申請成立時一樣要讓心理師知道
+  const counselor = db.prepare('SELECT name, line_user_id FROM users WHERE id = ?').get(cid);
+  if (counselor && counselor.line_user_id) {
+    try {
+      await line.pushFlex({
+        to: counselor.line_user_id, kind: 'booking_staff',
+        flex: line.counselorBookingFlex({
+          counselor_name: counselor.name, kind: '新排入的晤談',
+          b: { name: `${req.client.name}（${req.client.code}）`, date, start_time, main_issue: note }
+        })
+      });
+    } catch (e) { console.error('個案端預約通知心理師失敗：', e.message); }
+  }
+  res.json({ id: info.lastInsertRowid, room_id: roomId });
 });
 
 // 改期：與線上預約走同一套規則（開放時段、提前天數、不換心理師），

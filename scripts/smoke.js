@@ -346,11 +346,14 @@ function startServer() {
   });
   await test('個案可在 LINE 提醒卡片上按「我會準時前往」', async () => {
     // 提醒卡片帶 postback 按鈕，webhook 收到後記下確認時間；改期則轉為取消申請通知櫃檯
-    const line = require('../src/line');
     const day = addDays(monday, 63);
     const made = await lin.ok('POST', '/api/appointments',
       { client_id: clientId, counselor_id: 2, date: day, start_time: '11:00' });
-    const flex = JSON.stringify(line.reminderFlex({ id: made.id, date: day, start_time: '11:00', end_time: '11:50' }));
+    // 在子行程產卡片：直接 require 會連到正式資料庫（src/line 讀設定），冒煙測試不碰正式資料
+    const flex = execFileSync(process.execPath, ['-e',
+      `process.stdout.write(JSON.stringify(require('./src/line').reminderFlex(`
+      + `{ id: ${made.id}, date: '${day}', start_time: '11:00', end_time: '11:50' })))`],
+    { cwd: ROOT, env, encoding: 'utf8' });
     assert(flex.includes(`act=confirm&id=${made.id}`), '提醒卡片應有確認出席的按鈕');
     assert(flex.includes(`act=change&id=${made.id}`), '提醒卡片應有改期按鈕');
     await admin.ok('DELETE', `/api/appointments/${made.id}`);
@@ -491,6 +494,8 @@ function startServer() {
     const r = await portal.ok('POST', '/api/portal/appointments',
       { date: target, start_time: c.slots[0].start_time, counselor_id: c.id });
     portalAppt = r.id;
+    // 個案端排的約也要由系統指派諮商室，否則週檢視會一直掛在「未指定空間」
+    assert(r.room_id, '個案端預約應自動指派諮商室');
   });
   await test('改期後不會與他人共用同一諮商室', async () => {
     // 先讓櫃檯把同一時段的諮商室 1 排給別的心理師，再讓個案改期過去
@@ -2245,6 +2250,50 @@ function startServer() {
     const d = await r.json().catch(() => ({}));
     assert(d.ok, '簽章正確時應處理事件');
     await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '' });
+  });
+  await test('綁定 LINE 的個案，櫃檯直接排約也會收到「預約已成立」', async () => {
+    // 原本只有「線上申請確認」才推卡片，櫃檯自己排的約個案完全收不到通知。
+    await admin.ok('PUT', '/api/line/settings', { line_channel_secret: 'smoke-secret' });
+    const bind = await admin.ok('POST', '/api/line/bind-code', { client_id: clientId });
+    const body = JSON.stringify({
+      events: [{ type: 'message', replyToken: 'r2', source: { userId: 'Ubound001' },
+        message: { type: 'text', text: bind.code } }]
+    });
+    const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+    await fetch(BASE + '/api/line/webhook', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body
+    });
+    const st = await admin.ok('GET', '/api/line/status');
+    assert(st.clients_bound >= 1, '綁定碼輸入後應完成綁定');
+    const day = addDays(monday, 56);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: day, start_time: '15:00' });
+    assert(a.notify, '櫃檯排約應產生給個案的通知');
+    const recent = (await admin.ok('GET', '/api/line/status')).recent;
+    assert(recent.some(n => n.kind === 'booking_confirm' && n.appointment_id === a.id),
+      '通知紀錄應留下「預約已成立」一筆');
+    await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '' });
+  });
+  await test('晤談提醒依提前時數推送，且不受心理師行程推播開關影響', async () => {
+    // 提醒原本綁在「心理師隔日行程」推播裡：關掉行程推播連個案提醒也一起停，
+    // 而且不論提前時數設幾小時，都只在前一天的推播時間才送。
+    await admin.ok('PUT', '/api/line/settings', { line_reminder_hours: '48', line_counselor_daily_enabled: '0' });
+    const day = addDays(ymd(new Date()), 1);
+    const soon = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: day, start_time: '21:00' });
+    const later = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: addDays(ymd(new Date()), 10), start_time: '21:00' });
+    // 排程函式在獨立的子行程跑（本行程稍早已載入 src/line，連的是正式資料庫，不能重用）；
+    // 未設權杖時只會記成「待人工發送」，不對外連線
+    execFileSync(process.execPath,
+      ['-e', "require('./src/routes/line').pushClientReminders().then(()=>process.exit(0))"],
+      { cwd: ROOT, env, stdio: 'pipe' });
+    const recent = (await admin.ok('GET', '/api/line/status')).recent;
+    assert(recent.some(n => n.kind === 'reminder' && n.appointment_id === soon.id),
+      '48 小時內的晤談應被提醒（行程推播已關閉仍要送）');
+    assert(!recent.some(n => n.kind === 'reminder' && n.appointment_id === later.id),
+      '超出提前時數的晤談不應提前提醒');
+    await admin.ok('PUT', '/api/line/settings', { line_reminder_hours: '24', line_counselor_daily_enabled: '1' });
   });
   await test('偽造簽章的訊息不會被處理', async () => {
     await admin.ok('PUT', '/api/line/settings', { line_channel_secret: 'smoke-secret' });

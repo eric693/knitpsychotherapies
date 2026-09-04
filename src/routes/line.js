@@ -509,16 +509,23 @@ router.post('/line/test', requireStaff(), async (req, res) => {
 });
 
 // ---- 排程：每日自動推播 ----
-// server.js 每 10 分鐘呼叫一次；到了設定時間且當天尚未推過就送出。
-let lastDailyRun = '';
-async function runDailyPush() {
-  if (getSetting('line_counselor_daily_enabled', '1') !== '1' || !line.lineEnabled()) return;
+// server.js 每 10 分鐘呼叫一次。兩件事各自獨立：
+//   1. 心理師的「明日晤談行程」：到了設定時間、當天尚未推過就送出
+//   2. 個案的晤談提醒：依設定的提前時數，只要晤談落在「現在 ~ 現在＋時數」內就推
+// 原本提醒是綁在行程推播裡的，關掉行程推播會連個案提醒一起停掉，
+// 而且不論提前時數設幾小時，實際都固定在前一天的行程推播時間才送。
+
+// 已推過的日期存在設定表，重開機不會在同一天重推一次心理師行程
+const DAILY_KEY = 'line_daily_push_date';
+
+async function pushCounselorDaily() {
+  if (getSetting('line_counselor_daily_enabled', '1') !== '1') return;
   const now = new Date();
   const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
   const at = getSetting('line_counselor_daily_time', '20:00');
   const day = today();
-  if (lastDailyRun === day || hhmm < at) return;
-  lastDailyRun = day;
+  if (getSetting(DAILY_KEY, '') === day || hhmm < at) return;
+  setSetting(DAILY_KEY, day);
   const date = addDays(day, 1);
   const staff = db.prepare(`SELECT id, name, line_user_id FROM users
     WHERE active = 1 AND role IN ('counselor','supervisor','admin') AND line_user_id != ''`).all();
@@ -527,21 +534,35 @@ async function runDailyPush() {
     if (!rows.length) continue;
     try { await pushCounselorDay(u, date, '明日晤談行程'); } catch (e) { console.error('LINE 行程推播失敗：', e.message); }
   }
-  // 個案的晤談提醒：依設定的提前時數，推明天有晤談且尚未提醒過的個案
+}
+
+// 個案晤談提醒：提前時數內、尚未提醒過、且已綁定 LINE 的預約。
+// 時數設 0 即關閉提醒。
+async function pushClientReminders() {
   const hours = Number(getSetting('line_reminder_hours', '24'));
-  if (hours >= 12) {
-    const appts = db.prepare(`SELECT id FROM appointments WHERE date = ? AND status = 'booked' AND reminded_at = ''`).all(date);
-    for (const r of appts) {
-      const a = apptForFlex(r.id);
-      if (!a || !a.line_user_id) continue;
-      try {
-        const out = await line.pushFlex({ to: a.line_user_id, flex: line.reminderFlex(a), kind: 'reminder',
-          client_id: a.client_id, appointment_id: a.id });
-        if (out.status === 'sent') db.prepare('UPDATE appointments SET reminded_at = ? WHERE id = ?').run(nowStamp(), a.id);
-      } catch (e) { console.error('LINE 晤談提醒失敗：', e.message); }
-    }
+  if (!(hours > 0)) return;
+  const rows = db.prepare(`SELECT id FROM appointments
+    WHERE status = 'booked' AND reminded_at = ''
+      AND datetime(date || ' ' || start_time) BETWEEN datetime('now','localtime')
+        AND datetime('now','localtime','+' || ? || ' hours')
+    ORDER BY date, start_time LIMIT 200`).all(hours);
+  for (const r of rows) {
+    const a = apptForFlex(r.id);
+    if (!a || !a.line_user_id) continue;
+    try {
+      const out = await line.pushFlex({ to: a.line_user_id, flex: line.reminderFlex(a), kind: 'reminder',
+        client_id: a.client_id, appointment_id: a.id });
+      if (out.status === 'sent') db.prepare('UPDATE appointments SET reminded_at = ? WHERE id = ?').run(nowStamp(), a.id);
+    } catch (e) { console.error('LINE 晤談提醒失敗：', e.message); }
   }
+}
+
+async function runDailyPush() {
+  if (!line.lineEnabled()) return;
+  await pushCounselorDaily();
+  await pushClientReminders();
 }
 
 module.exports = router;
 module.exports.runDailyPush = runDailyPush;
+module.exports.pushClientReminders = pushClientReminders;
