@@ -1351,6 +1351,17 @@ if (getSetting('military_urls_seeded', '') !== '1') {
     line_counselor_daily_time: '20:00', // 每日推播心理師隔日行程的時間
     line_counselor_daily_enabled: '1',
     line_flex_color: '#0e7c7b',         // Flex 卡片主色
+    // 卡片上的說明文字：所方會想改口氣、加自家規定，因此全部做成設定，
+    // 留空即用系統預設。可用代入值：{center} 機構名稱、{phone} 電話、{hours} 取消期限時數、{name} 對方姓名。
+    line_text_help_intro: '',
+    line_text_help_note: '',
+    line_text_bound: '',
+    line_text_bound_note: '',
+    line_text_request_intro: '',
+    line_text_request_note: '',
+    line_text_booked_note: '',
+    line_text_remind_note: '',
+    line_text_receipt_note: '',
     // ---- 線上預約表單 ----
     // 個案專區網址：留空時自動由線上預約表單網址推得（booking.html → portal.html），
     // 用於預約成立與晤談提醒的 LINE 卡片、以及預約完成頁的按鈕。

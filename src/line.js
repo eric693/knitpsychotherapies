@@ -24,6 +24,34 @@ function centerInfo() {
     address: getSetting('center_address', '')
   };
 }
+// 卡片上的說明文字：所方可在「LINE 串接」頁改寫，留空就用這裡的預設。
+// {center} 機構名稱、{phone} 電話、{hours} 取消期限時數、{name} 對方姓名，寫在文字裡即自動代入。
+const TEXT_DEFAULTS = {
+  line_text_help_intro: '點下方「開始預約」填寫表單，送出後我們會在這裡通知您預約結果與晤談提醒。',
+  line_text_help_note: '已是本所個案並收到 6 碼綁定碼，直接在此輸入即可接收提醒。\n電話預約：{phone}\n如遇立即危機請撥 1925 或 119，本帳號非緊急聯絡管道。',
+  line_text_bound: '{name} 您好，之後預約成立與晤談提醒都會透過這裡通知您。',
+  line_text_bound_note: '本帳號僅提供預約與行政通知，不處理晤談內容；如遇立即危機請撥 1925 或 119。',
+  line_text_request_intro: '我們將盡快與您確認，確認後會再以此通知您。',
+  line_text_request_note: '此為預約申請，尚未成立。若急需協助請直接來電；如遇立即危機請撥 1925 或 119。',
+  line_text_booked_note: '請提前 10 分鐘到所。如需改期或取消，請提前 {hours} 小時來電告知。',
+  line_text_remind_note: '如需改期或取消，請提前 {hours} 小時來電；未於期限前告知者，本所得依公告收取部分費用。',
+  line_text_receipt_note: '如需紙本收據或補印，請於下次晤談時或來電告知。'
+};
+
+// 取一段卡片文字：設定留空就用預設，再把 {center}／{phone}／{hours}／{name} 代進去。
+// 代入後仍是空字串（例如沒填電話又整段只有電話）時回空字串，呼叫端據此決定要不要放這一段。
+function msgText(key, vars = {}) {
+  const c = centerInfo();
+  const fill = { center: c.name, phone: c.phone, hours: getSetting('cancel_hours', '24'), ...vars };
+  const raw = getSetting(key, '').trim() || TEXT_DEFAULTS[key] || '';
+  return raw.split('\n')
+    // 代入值是空的那一行整行拿掉（例如沒填電話時的「電話預約：{phone}」），不留半截句子
+    .filter(line => (line.match(/\{(\w+)\}/g) || []).every(m => String(fill[m.slice(1, -1)] ?? '').trim()))
+    .map(line => line.replace(/\{(\w+)\}/g, (m, k) => String(fill[k] ?? '')))
+    .filter(line => line.trim())
+    .join('\n');
+}
+
 const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六'];
 function weekdayOf(date) {
   const d = new Date(date + 'T00:00:00');
@@ -85,7 +113,7 @@ function bookingReceivedFlex(b) {
     subtitle: `${c.name}`,
     altText: `已收到預約申請：${b.date || '未指定日期'} ${b.start_time || ''}`,
     body: [
-      { type: 'text', text: '我們將盡快與您確認，確認後會再以此通知您。', size: 'sm', color: '#3b4a55', wrap: true },
+      { type: 'text', text: msgText('line_text_request_intro'), size: 'sm', color: '#3b4a55', wrap: true },
       sep(),
       kv('姓名', b.name),
       kv('方案', b.plan_name),
@@ -93,7 +121,7 @@ function bookingReceivedFlex(b) {
       ...(b.counselor_name ? [kv('心理師', b.counselor_name)] : []),
       kv('希望時段', b.date ? `${b.date}（${weekdayOf(b.date)}）${b.start_time || ''}` : (b.alt_note || '由所方安排')),
       ...(b.fee ? [kv('您需支付', `NT$ ${Number(b.fee).toLocaleString('zh-TW')}`)] : []),
-      noteBox('此為預約申請，尚未成立。若急需協助請直接來電；如遇立即危機請撥 1925 或 119。')
+      noteBox(msgText('line_text_request_note'))
     ],
     footer: c.phone ? [actionButton('打電話給諮商所', { type: 'uri', label: '打電話給諮商所', uri: `tel:${c.phone}` })] : []
   });
@@ -130,7 +158,7 @@ function bookingConfirmedFlex(a) {
       ...(a.mode === 'online' ? [] : [kv('地點', c.address || c.name)]),
       ...(a.fee ? [kv('您需支付', `NT$ ${Number(a.self_pay !== undefined ? a.self_pay : a.fee).toLocaleString('zh-TW')}`
         + `${a.subsidy_amount ? `（方案另給付 ${a.subsidy_amount}）` : ''}`)] : []),
-      noteBox(a.notice || `請提前 10 分鐘到所。如需改期或取消，請提前 ${getSetting('cancel_hours', '24')} 小時來電告知。`)
+      noteBox(a.notice || msgText('line_text_booked_note'))
     ],
     footer
   });
@@ -164,7 +192,7 @@ function reminderFlex(a) {
       ...(a.plan_name ? [kv('方案', a.plan_name)] : []),
       kv('形式', a.mode === 'online' ? '線上視訊' : '到所晤談'),
       ...(a.mode === 'online' ? [] : [kv('地點', c.address || c.name)]),
-      noteBox(`如需改期或取消，請提前 ${getSetting('cancel_hours', '24')} 小時來電；未於期限前告知者，本所得依公告收取部分費用。`)
+      noteBox(msgText('line_text_remind_note'))
     ],
     footer
   });
@@ -226,7 +254,7 @@ function receiptFlex(r) {
       kv('項目', r.item),
       kv('金額', `NT$ ${Number(r.amount).toLocaleString('zh-TW')}`),
       ...(r.title ? [kv('抬頭', r.title)] : []),
-      noteBox('如需紙本收據或補印，請於下次晤談時或來電告知。')
+      noteBox(msgText('line_text_receipt_note'))
     ]
   });
 }
@@ -336,7 +364,7 @@ function verifySignature(rawBody, signature) {
 
 module.exports = {
   lineEnabled, weekdayOf, centerInfo,
-  card, kv, noteBox, actionButton, textMessage,
+  card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
   bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, portalUrl,
   counselorScheduleFlex, counselorBookingFlex, receiptFlex,
   pushFlex, replyMessages, verifySignature, logNotification,

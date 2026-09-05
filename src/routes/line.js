@@ -33,8 +33,8 @@ function bindingWelcome(name) {
     altText: '綁定完成',
     body: [
       { type: 'text', size: 'sm', wrap: true, color: '#3b4a55',
-        text: `${name} 您好，之後預約成立與晤談提醒都會透過這裡通知您。` },
-      line.noteBox('本帳號僅提供預約與行政通知，不處理晤談內容；如遇立即危機請撥 1925 或 119。')
+        text: line.msgText('line_text_bound', { name }) },
+      line.noteBox(line.msgText('line_text_bound_note'))
     ]
   });
 }
@@ -60,10 +60,8 @@ function helpFlex(lineUserId) {
     altText: '線上預約',
     body: [
       { type: 'text', size: 'sm', wrap: true, color: '#3b4a55',
-        text: '點下方「開始預約」填寫表單，送出後我們會在這裡通知您預約結果與晤談提醒。' },
-      line.noteBox('已是本所個案並收到 6 碼綁定碼，直接在此輸入即可接收提醒。\n'
-        + (phone ? `電話預約：${phone}\n` : '')
-        + '如遇立即危機請撥 1925 或 119，本帳號非緊急聯絡管道。')
+        text: line.msgText('line_text_help_intro') },
+      line.noteBox(line.msgText('line_text_help_note'))
     ],
     footer: [
       ...(url ? [line.actionButton('開始預約', { type: 'uri', label: '開始預約', uri: url })] : []),
@@ -152,7 +150,8 @@ async function handleEvent(ev) {
 // 綁定與自動回覆就會生效，不必自己到 LINE 後台貼網址。
 
 const LINE_SETTING_KEYS = ['line_official_name', 'line_official_id', 'line_add_friend_url', 'line_reminder_hours',
-  'line_counselor_daily_enabled', 'line_counselor_daily_time', 'line_flex_color', 'booking_public_url'];
+  'line_counselor_daily_enabled', 'line_counselor_daily_time', 'line_flex_color', 'booking_public_url',
+  ...Object.keys(line.TEXT_DEFAULTS)];
 const MASK = '••••••••';
 
 function maskSecret(v) {
@@ -167,7 +166,8 @@ function webhookUrl(req) {
 }
 
 router.get('/line/settings', requireStaff('settings'), (req, res) => {
-  const out = { webhook_url: webhookUrl(req), enabled: line.lineEnabled() };
+  // 文案的系統預設一併回傳：畫面上留空的欄位就用它當提示文字，所方看得到「不填會長怎樣」
+  const out = { webhook_url: webhookUrl(req), enabled: line.lineEnabled(), text_defaults: line.TEXT_DEFAULTS };
   for (const k of LINE_SETTING_KEYS) out[k] = getSetting(k, '');
   // 權杖與密鑰只回傳遮罩後的尾碼，畫面上看得出「有沒有填、是不是同一組」，但不外流內容
   out.line_channel_token = maskSecret(getSetting('line_channel_token', ''));

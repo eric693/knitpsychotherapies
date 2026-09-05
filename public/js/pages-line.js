@@ -1,5 +1,18 @@
 // 線上預約申請的審核，以及 LINE 官方帳號設定與推播
 
+// LINE 卡片上可由所方改寫的說明文字（對應 settings 的 line_text_*）
+const TEXT_FIELDS = [
+  ['line_text_help_intro', '預約說明卡：開頭一句'],
+  ['line_text_help_note', '預約說明卡：灰底注意事項', 3],
+  ['line_text_bound', '綁定完成卡：開頭一句（{name} 為對方姓名）'],
+  ['line_text_bound_note', '綁定完成卡：灰底注意事項', 2],
+  ['line_text_request_intro', '收到預約申請：開頭一句'],
+  ['line_text_request_note', '收到預約申請：灰底注意事項', 2],
+  ['line_text_booked_note', '預約已成立：灰底注意事項', 2],
+  ['line_text_remind_note', '晤談提醒：灰底注意事項', 2],
+  ['line_text_receipt_note', '收據已開立：灰底注意事項', 2]
+];
+
 const BOOKING_STATUS = { new: '待處理', confirmed: '已成立', rejected: '未成立', cancelled: '已取消' };
 
 // Google 表單的問題會增刪，同步時整份回應都留了一份；
@@ -380,6 +393,23 @@ const LINEPAGE = {
         </div>
         <div class="toolbar" style="margin-top:10px"><div class="spacer"></div>
           <button class="btn" id="save-opts">儲存</button></div>
+      </div>
+
+      <div class="card"><h3>4. 訊息文案</h3>
+        <div style="font-size:13px;color:var(--muted);line-height:1.9;margin-bottom:10px">
+          個案在 LINE 上收到的說明文字，改這裡即刻生效，不必重啟。
+          留空就用系統預設（灰字提示即為預設內容）。<br>
+          可用代入值：<code>{center}</code> 機構名稱、<code>{phone}</code> 電話、
+          <code>{hours}</code> 取消期限時數、<code>{name}</code> 對方姓名。
+          某一行的代入值是空的（例如沒填電話），那一行會整行略過。
+        </div>
+        <div class="form-grid" id="texts">
+          ${TEXT_FIELDS.map(([k, label, rows]) =>
+    UI.textarea(k, label, { value: s[k] || '', full: true, rows: rows || 2,
+      placeholder: (s.text_defaults || {})[k] || '' })).join('')}
+        </div>
+        <div class="toolbar" style="margin-top:10px"><div class="spacer"></div>
+          <button class="btn" id="save-texts">儲存文案</button></div>
       </div>`;
 
     const save = async (scope) => {
@@ -390,6 +420,7 @@ const LINEPAGE = {
     };
     el.querySelector('#save-cred').onclick = () => save('#cred');
     el.querySelector('#save-opts').onclick = () => save('#opts');
+    el.querySelector('#save-texts').onclick = () => save('#texts');
     el.querySelector('#verify').onclick = async () => {
       const out = el.querySelector('#verify-out');
       out.textContent = '連線中…';

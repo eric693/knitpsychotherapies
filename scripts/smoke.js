@@ -1379,6 +1379,18 @@ function startServer() {
     await admin.ok('PUT', '/api/line/settings', { line_channel_token: '' });
     equal((await admin.ok('GET', '/api/line/settings')).line_channel_token, '', '可清空權杖');
   });
+  await test('LINE 卡片文案可改寫，留空回到系統預設', async () => {
+    const s0 = await admin.ok('GET', '/api/line/settings');
+    assert(s0.text_defaults && s0.text_defaults.line_text_booked_note.includes('提前'), '應回傳系統預設文案供畫面提示');
+    await admin.ok('PUT', '/api/line/settings', { line_text_booked_note: '請提前 15 分鐘到所，逾時恕不補時。' });
+    const s1 = await admin.ok('GET', '/api/line/settings');
+    equal(s1.line_text_booked_note, '請提前 15 分鐘到所，逾時恕不補時。', '文案已改寫');
+    await admin.ok('PUT', '/api/line/settings', { line_text_booked_note: '' });
+    equal((await admin.ok('GET', '/api/line/settings')).line_text_booked_note, '', '清空後回到系統預設');
+  });
+  await test('一般行政不得改文案', async () => {
+    await office.fails('PUT', '/api/line/settings', { line_text_help_intro: 'x' }, '權限');
+  });
   await test('未填權杖時不可設定 Webhook', async () => {
     await admin.fails('POST', '/api/line/webhook-endpoint', {}, 'Channel access token');
   });
