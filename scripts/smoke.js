@@ -1772,6 +1772,7 @@ function startServer() {
     const html = await admin.get('/api/consent-templates/child_guardian/print');
     assert(html.text.includes('家長留存聯') && html.text.includes('留存聯］'), '應印兩聯');
     assert(r && r.body.includes('錄音錄影') && r.allow_decline, '錄音錄影同意書可選擇不同意');
+    assert(!r.audience, '錄音錄影同意書成人也適用，不限年齡分群');
   });
   await test('未成年個案基本資料表帶入就學資料與主要照顧者', async () => {
     await admin.ok('PUT', `/api/clients/${clientId}`, {
@@ -1900,20 +1901,20 @@ function startServer() {
   });
 
   await test('可逐案指派同意書：指派後個案專區只列指派的那幾張', async () => {
-    await admin.ok('PUT', `/api/clients/${clientId}/consent-assignments`, { keys: ['privacy', 'recording'] });
+    await admin.ok('PUT', `/api/clients/${clientId}/consent-assignments`, { keys: ['privacy', 'recording_child'] });
     const c = await admin.ok('GET', `/api/clients/${clientId}`);
-    deepEqual(c.assigned_consents.slice().sort(), ['privacy', 'recording'], '指派清單');
-    deepEqual(c.pending_consents.map(x => x.key).sort(), ['privacy', 'recording'], '待簽署只剩指派的兩張');
+    deepEqual(c.assigned_consents.slice().sort(), ['privacy', 'recording_child'], '指派清單');
+    deepEqual(c.pending_consents.map(x => x.key).sort(), ['privacy', 'recording_child'], '待簽署只剩指派的兩張');
     const list = await portal.ok('GET', '/api/portal/consents');
-    deepEqual(list.map(t => t.key).sort(), ['privacy', 'recording'], '個案專區也只列指派的兩張');
+    deepEqual(list.map(t => t.key).sort(), ['privacy', 'recording_child'], '個案專區也只列指派的兩張');
     // 沒被指派的同意書，個案專區直接簽也要擋下
     await portal.fails('POST', '/api/portal/consents',
-      { key: 'informed', signer_name: '測試', signature: 'data:,x' }, '不適用');
+      { key: 'counseling', signer_name: '測試', signature: 'data:,x' }, '不適用');
     // 清除指派後回到年齡與方案自動判斷
     await admin.ok('PUT', `/api/clients/${clientId}/consent-assignments`, { keys: [] });
     const back = await admin.ok('GET', `/api/clients/${clientId}`);
     equal(back.assigned_consents.length, 0, '指派已清除');
-    assert(back.pending_consents.some(x => x.key === 'informed'), '回到自動判斷後知情同意書又出現');
+    assert(back.pending_consents.some(x => x.key === 'counseling'), '回到自動判斷後諮商／治療同意書又出現');
   });
 
   section('機構核銷');

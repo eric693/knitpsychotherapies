@@ -472,23 +472,6 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
   const CONSENT_DEFAULTS = CONSENT_TEMPLATE_DEFAULTS;
   CONSENT_DEFAULTS.push(
     {
-      key: 'informed', title: '心理諮商知情同意書', sort: 1, required: 1, allow_decline: 0, minor_only: 0,
-      body: `一、服務內容：本所提供之心理諮商由領有證照之心理師提供，每次晤談時間約 50 分鐘，次數依評估與雙方討論後決定。
-
-二、保密原則：心理師依《心理師法》第 17 條負保密義務，晤談內容非經您同意不對外揭露。惟有下列情形，心理師應依法揭露或通報：
-　（一）您有危及自己或他人生命、身體、自由或財產之虞。
-　（二）涉及兒童及少年、老人、身心障礙者受虐或家庭暴力、性侵害等應通報情事。
-　（三）法院命令或其他法律規定應提供之情形。
-
-三、紀錄保存：心理師依規定製作晤談紀錄並妥善保存，您得依個人資料保護法申請查閱或複製與您有關之紀錄；涉及第三人或可能造成傷害之部分，本所得部分限制提供。
-
-四、您的權利：您有權隨時詢問處遇方式與進度、要求更換心理師、或終止諮商關係，並不因此影響您接受其他服務之權益。
-
-五、費用與取消：收費標準與退費、改期規則依本所公告辦理；未於規定時間前告知之取消或未到，本所得依公告收取部分費用。
-
-本人已充分閱讀並理解上述內容，同意接受本所提供之心理諮商服務。`
-    },
-    {
       key: 'guardian', title: '未成年人接受心理諮商法定代理人同意書', sort: 2, required: 1, allow_decline: 0, minor_only: 1,
       body: `本人為受服務者之法定代理人，同意其接受本所之心理諮商服務，並瞭解下列事項：
 
@@ -508,26 +491,6 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 四、利用期間、地區、對象及方式：於服務關係存續期間及法令規定之保存期限內，於中華民國境內，由本所及依法令應提供之機關，以電子或紙本方式於蒐集目的必要範圍內利用。
 五、當事人權利：您得請求查詢、閱覽、製給複製本、補充或更正、停止蒐集處理利用或刪除您的個人資料。
 六、不提供之影響：若不提供必要資料，本所將無法完成報到與服務安排。`
-    },
-    {
-      key: 'recording', title: '晤談錄音／錄影同意書', sort: 4, required: 0, allow_decline: 1, minor_only: 0,
-      body: `為提升服務品質，心理師於接受督導或個案研討時，可能需要錄製晤談之錄音或錄影，其使用方式如下：
-
-一、僅供心理師接受專業督導與所內個案研討使用，不作其他用途，不公開播放。
-二、檔案以加密方式保存，於督導目的完成後刪除，保存期間最長不超過一年。
-3、參與研討之人員均負相同之保密義務。
-四、您得隨時撤回本項同意，撤回後不再錄製，已錄製之檔案將立即刪除，且不影響您接受服務之權益。
-
-本人已瞭解上述內容，並就晤談錄音／錄影乙事表示同意與否如下。`
-    },
-    {
-      key: 'contact', title: '緊急聯絡與危機處理同意書', sort: 5, required: 1, allow_decline: 0, minor_only: 0,
-      body: `一、當心理師評估您有危及自身或他人生命安全之虞時，得聯繫您所指定之緊急聯絡人、協助送醫，或通知警消及相關主管機關。
-二、前項聯繫以維護生命安全為限，心理師僅告知必要之資訊，不揭露其他晤談內容。
-三、您應提供正確之緊急聯絡人資訊，如有異動請即時通知本所更新。
-四、非晤談時段之緊急狀況，請撥打 1925 安心專線或 119；本所留言與線上訊息非即時回覆管道。
-
-本人已瞭解並同意上述緊急聯絡與危機處理方式。`
     },
     {
       key: 'counseling', title: '諮商／治療同意書', sort: 6, required: 1, allow_decline: 0, minor_only: 0,
@@ -675,7 +638,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
 　在您簽署同意書後，將開始進行心理治療，心理師會安排孩子進行心理治療的時間，每次治療時間為 50 分鐘。請務必準時，遲到恕不補課。若孩子生病或有事無法來上課，請務必至少在治療當天來電請假；為維護治療品質，無特殊狀況請勿連續請假。治療之結束應由心理師及家長共同討論決議。`
     },
     {
-      key: 'recording_child', audience: 'minor', title: '諮商／治療錄音錄影同意書（兒少）',
+      key: 'recording_child', title: '諮商／治療錄音錄影同意書',
       sort: 11, required: 0, allow_decline: 1, minor_only: 0,
       copy_labels: '個案留存聯,{center}留存聯',
       sign_block: `※ 本人已經詳細閱讀前述文字並了解其內容，有疑問時可洽詢{center}。
@@ -753,6 +716,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
         (t.copy_labels || '').replace(/\{center\}/g, center), t.audience || '');
     }
   }
+
 }
 
 // 系統簽章密鑰（首次啟動自動產生）
@@ -1268,6 +1232,23 @@ db.exec(`CREATE TABLE IF NOT EXISTS client_consents (
   UNIQUE(client_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_client_consents ON client_consents(client_id);`);
+
+// 三張內容已被其他同意書涵蓋的範本收掉（知情同意、緊急聯絡與危機處理、晤談錄音／錄影），
+// 並把錄音錄影同意書改為成人也適用。只跑一次；已有簽署紀錄的範本保留不動，舊簽署才找得到出處。
+if (getSetting('consent_merge_2026_seeded', '') !== '1') {
+  const signed = db.prepare('SELECT COUNT(*) n FROM consents WHERE key = ?');
+  const del = db.prepare('DELETE FROM consent_templates WHERE key = ?');
+  const unassign = db.prepare('DELETE FROM client_consents WHERE key = ?');
+  for (const key of ['informed', 'contact', 'recording']) {
+    if (signed.get(key).n) continue;
+    del.run(key);
+    unassign.run(key);   // 逐案指派也一併移除，否則指派清單會留下不存在的範本
+  }
+  // 所方若已自行改過標題就不動它
+  db.prepare("UPDATE consent_templates SET title = ?, audience = '' WHERE key = 'recording_child' AND title = ?")
+    .run('諮商／治療錄音錄影同意書', '諮商／治療錄音錄影同意書（兒少）');
+  setSetting('consent_merge_2026_seeded', '1');
+}
 
 // 機構核銷：每家合作單位的核銷頻率與該附哪些資料，
 // 櫃檯每個月照「機構核銷」總表就知道這個月要跟誰請款、要準備什麼。
