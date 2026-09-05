@@ -686,13 +686,34 @@ App.page('client', {
               <td>${r.date}</td><td><strong>${r.total}</strong></td>
               <td>${r.alert ? UI.tag(r.severity, 'danger') : UI.esc(r.severity)}</td>
               <td>${r.filled_by === 'client' ? '個案自填' : '所內登錄'}</td>
-              <td><button class="btn tiny danger" data-da="${r.id}">刪除</button></td></tr>`))}
+              <td><button class="btn tiny secondary" data-ea="${r.id}">修改</button>
+                <button class="btn tiny danger" data-da="${r.id}">刪除</button></td></tr>`))}
             ${rows.length > 1 ? `<div style="font-size:13px;color:var(--muted);margin-top:8px">
               首測 ${rows[0].total} 分 → 最近 ${rows[rows.length - 1].total} 分
               （${rows[rows.length - 1].total < rows[0].total ? '下降' : rows[rows.length - 1].total > rows[0].total ? '上升' : '持平'}
               ${Math.abs(rows[rows.length - 1].total - rows[0].total)} 分）</div>` : ''}
           </div>`).join('') : '<div class="empty">尚無量表紀錄</div>'}`;
         body.querySelector('#fill').onclick = () => scaleFillDialog(c.id, () => tabsRefresh('assessments'));
+        // 日期打錯或要補一句說明時直接改；作答內容不開放修改（改答案分數就對不上，誤填請刪除重登）
+        body.querySelectorAll('[data-ea]').forEach(b => {
+          b.onclick = async () => {
+            const r = await GET(`/assessments/${b.dataset.ea}`);
+            UI.modal({
+              title: `修改量表紀錄　${r.scale}　${r.total} 分`,
+              body: `<div class="form-grid">
+                ${UI.input('date', '施測日期', { type: 'date', value: r.date })}
+                ${UI.textarea('note', '備註', { value: r.note || '', rows: 3 })}
+                <div class="form-row full" style="font-size:12.5px;color:var(--muted)">
+                  作答內容與分數不可修改；若是填錯人或填錯量表，請刪除後重新登錄。</div>
+              </div>`,
+              onSubmit: async e => {
+                await PUT(`/assessments/${r.id}`, UI.formData(e));
+                UI.toast('已修改');
+                tabsRefresh('assessments');
+              }
+            });
+          };
+        });
         body.querySelectorAll('[data-da]').forEach(b => {
           b.onclick = async () => {
             if (!await UI.confirm('刪除此筆量表結果？（誤填時使用，刪除後不可復原）')) return;

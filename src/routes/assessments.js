@@ -44,6 +44,22 @@ router.post('/assessments', requireStaff('assessments'), (req, res) => {
   res.json({ id: info.lastInsertRowid, ...s });
 });
 
+// 修改：日期填錯、要補一句說明時直接改，不必刪掉重登。
+// 作答內容不開放修改——改答案等於竄改施測結果，分數與嚴重度也會對不上；
+// 真的填錯就刪掉重登一份，稽核上看得出「刪除」與「重新登錄」兩個動作。
+router.put('/assessments/:id', requireStaff('assessments'), (req, res) => {
+  const a = db.prepare('SELECT * FROM assessments WHERE id = ?').get(req.params.id);
+  if (!a) return res.status(404).json({ error: '找不到此紀錄' });
+  const b = req.body || {};
+  if (b.answers !== undefined) {
+    return res.status(400).json({ error: '作答內容不可修改，請刪除後重新登錄' });
+  }
+  db.prepare('UPDATE assessments SET date = ?, note = ? WHERE id = ?')
+    .run(b.date || a.date, b.note === undefined ? a.note : String(b.note), a.id);
+  audit('staff', req.user.id, req.user.name, '修改量表紀錄', String(a.client_id), { id: a.id, scale: a.scale });
+  res.json({ ok: true });
+});
+
 router.delete('/assessments/:id', requireStaff('assessments'), (req, res) => {
   const a = db.prepare('SELECT * FROM assessments WHERE id = ?').get(req.params.id);
   if (!a) return res.status(404).json({ error: '找不到此紀錄' });

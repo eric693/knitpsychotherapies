@@ -56,8 +56,16 @@ function session() {
     try { data = JSON.parse(text); } catch { data = text; }
     return { ok: r.ok, status: r.status, data };
   };
+  // 附件是 multipart 上傳，不能走上面的 JSON 版本（Content-Type 要讓 fetch 自己帶 boundary）
+  const upload = async (url, form) => {
+    const r = await fetch(BASE + url, { method: 'POST', headers: cookie ? { Cookie: cookie } : {}, body: form });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`POST ${url} → ${r.status} ${text.slice(0, 200)}`);
+    return JSON.parse(text);
+  };
   return {
     call,
+    upload,
     async ok(method, url, body) {
       const r = await call(method, url, body);
       if (!r.ok) throw new Error(`${method} ${url} → ${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
@@ -81,6 +89,9 @@ async function check(label, fn) {
 }
 function equal(a, b, what) {
   if (String(a) !== String(b)) throw new Error(`${what}：預期 ${b}，實際 ${a}`);
+}
+function assert(cond, what) {
+  if (!cond) throw new Error(what);
 }
 
 (async () => {
@@ -304,6 +315,101 @@ function equal(a, b, what) {
     equal(got.title, '改過的同意書標題', '標題');
   });
 
+  await check('量表紀錄（日期與備註）', async () => {
+    const scales = await admin.ok('GET', '/api/scales');
+    const key = Object.keys(scales)[0];
+    const def = scales[key];
+    const answers = def.items.map(() => 0);
+    const a = await admin.ok('POST', '/api/assessments',
+      { client_id: client.id, scale: key, answers, note: '原備註' });
+    await admin.ok('PUT', `/api/assessments/${a.id}`, { note: '改過的備註', date: addDays(today(), -3) });
+    const got = await admin.ok('GET', `/api/assessments/${a.id}`);
+    equal(got.note, '改過的備註', '備註');
+    equal(got.date, addDays(today(), -3), '施測日期');
+    return '作答內容仍不可改';
+  });
+
+  await check('轉介紀錄', async () => {
+    const r = await lin.ok('POST', `/api/clients/${client.id}/referrals`,
+      { target: '原轉介對象', reason: '原轉介原因' });
+    await lin.ok('PUT', `/api/referrals/${r.id}`, { target: '改過的轉介對象', status: 'accepted' });
+    const got = (await lin.ok('GET', `/api/clients/${client.id}/referrals`)).rows.find(x => x.id === r.id);
+    equal(got.target, '改過的轉介對象', '轉介對象');
+    assert(got.replied_at, '改為已接案時自動記下回覆時間');
+  });
+
+  await check('結案追蹤', async () => {
+    const f = await lin.ok('POST', `/api/clients/${client.id}/follow-ups`,
+      { due_date: addDays(today(), 30), note: '原備註' });
+    await lin.ok('PUT', `/api/follow-ups/${f.id}`, { note: '改過的備註' });
+    const got = (await lin.ok('GET', `/api/clients/${client.id}/follow-ups`)).rows.find(x => x.id === f.id);
+    equal(got.note, '改過的備註', '備註');
+  });
+
+  await check('督導紀錄', async () => {
+    const r = await lin.ok('POST', '/api/supervisions',
+      { counselor_id: counselor.id, hours: 1, content: '原內容' });
+    await lin.ok('PUT', `/api/supervisions/${r.id}`, { hours: 2, content: '改過的內容' });
+    const got = (await lin.ok('GET', '/api/supervisions')).find(x => x.id === r.id);
+    equal(got.content, '改過的內容', '內容');
+    equal(got.hours, 2, '時數');
+  });
+
+  await check('合作單位', async () => {
+    const p = await admin.ok('POST', '/api/partners', { name: '編輯檢查單位' });
+    await admin.ok('PUT', `/api/partners/${p.id}`, { name: '改過的單位', billing_cycle: 'quarterly' });
+    const got = (await admin.ok('GET', '/api/partners')).find(x => x.id === p.id);
+    equal(got.name, '改過的單位', '單位名稱');
+    equal(got.billing_cycle, 'quarterly', '核銷頻率');
+  });
+
+  await check('個案附件（分類、備註、是否給個案看）', async () => {
+    const form = new FormData();
+    form.append('file', new Blob(['編輯檢查用附件'], { type: 'text/plain' }), 'check.txt');
+    form.append('kind', '其他');
+    const up = await admin.upload(`/api/clients/${client.id}/attachments`, form);
+    await admin.ok('PUT', `/api/attachments/${up.id}`, { note: '改過的附件備註', visible_to_client: 1 });
+    const got = (await admin.ok('GET', `/api/clients/${client.id}/attachments`)).find(x => x.id === up.id);
+    equal(got.note, '改過的附件備註', '附件備註');
+    equal(got.visible_to_client, 1, '開放個案查看');
+  });
+
+  await check('同意書逐案指派', async () => {
+    const tpls = await admin.ok('GET', '/api/consent-templates');
+    const keys = tpls.slice(0, 2).map(t => t.key);
+    await admin.ok('PUT', `/api/clients/${client.id}/consent-assignments`, { keys });
+    const c1 = await admin.ok('GET', `/api/clients/${client.id}`);
+    equal(c1.assigned_consents.slice().sort().join(','), keys.slice().sort().join(','), '指派清單');
+    await admin.ok('PUT', `/api/clients/${client.id}/consent-assignments`, { keys: [] });
+    equal((await admin.ok('GET', `/api/clients/${client.id}`)).assigned_consents.length, 0, '可清除指派');
+  });
+
+  await check('方案額度（已用人次的人工調整）', async () => {
+    const board = await admin.ok(`GET`, `/api/plan-board?date=${today()}`);
+    const row = board.rows[0];
+    if (!row) return '此站沒有設上限的方案，略過';
+    await admin.ok('PUT', '/api/plan-board/limit',
+      { plan_id: row.plan_id, counselor_id: row.counselor_id, week_limit: 7 });
+    const got = (await admin.ok('GET', `/api/plan-board?date=${today()}`))
+      .rows.find(x => x.plan_id === row.plan_id && x.counselor_id === row.counselor_id);
+    equal(got.week_limit, 7, '每週上限');
+  });
+
+  await check('LINE 串接設定與卡片文案', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_reminder_hours: 36, line_text_booked_note: '請提前 15 分鐘到所。' });
+    const got = await admin.ok('GET', '/api/line/settings');
+    equal(got.line_reminder_hours, '36', '提醒提前時數');
+    equal(got.line_text_booked_note, '請提前 15 分鐘到所。', '卡片文案');
+    await admin.ok('PUT', '/api/line/settings', { line_reminder_hours: 24, line_text_booked_note: '' });
+  });
+
+  await check('Google 表單同步設定', async () => {
+    await admin.ok('PUT', '/api/integrations/google-form', { form_url: 'https://docs.google.com/forms/d/CHECK/edit' });
+    const got = await admin.ok('GET', '/api/integrations/google-form');
+    equal(got.form_url, 'https://docs.google.com/forms/d/CHECK/edit', '表單網址');
+  });
+
   await check('自己的密碼', async () => {
     const u = session();
     await u.ok('POST', '/api/login', { username: 'chen', password: '123456' });
@@ -336,6 +442,9 @@ function equal(a, b, what) {
       return msg;
     });
   };
+
+  await fails('量表作答內容不可修改', 'PUT', `/api/assessments/${(await admin.ok('GET', `/api/assessments?client_id=${client.id}`))[0].id}`,
+    { answers: [0, 0, 0] }, '刪除後重新登錄');
 
   const day = addDays(today(), 45);
   const appt = await lin.ok('POST', '/api/appointments',
