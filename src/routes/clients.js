@@ -6,6 +6,7 @@ const { db, audit, today, nowStamp, nextClientCode, ageYears, getSetting, UPLOAD
 const { requireStaff, requireAdmin, canViewClientNotes, clientIp } = require('../auth');
 
 const { createCloseFollowUps } = require('./aftercare');
+const { ageGroupOf, clientPlanIds, parsePlanIds, assignedKeys, consentsForClient } = require('../consents');
 
 const router = express.Router();
 
@@ -148,8 +149,10 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
     can_view_notes: canViewClientNotes(req.user, c),
     consents,
     age_group: ageGroupOf(c.birth_date),
-    pending_consents: templates
-      .filter(t => consentFits(t, ageGroupOf(c.birth_date)))
+    plan_ids: clientPlanIds(c.id),
+    // 逐案指派的同意書 key；有指派時個案專區只列這幾張，空陣列表示照年齡與方案自動判斷
+    assigned_consents: assignedKeys(c.id),
+    pending_consents: consentsForClient(c)
       .filter(t => !consents.some(s => s.key === t.key && s.version === t.version))
       .map(t => ({ key: t.key, title: t.title })),
     appointments: db.prepare(`SELECT a.*, u.name AS counselor_name, sp.name AS plan_name FROM appointments a
@@ -304,6 +307,23 @@ router.get('/consent-templates', requireStaff(), (req, res) => {
   res.json(db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all());
 });
 
+// 逐案指派同意書：櫃檯直接指定這位個案要簽哪幾張（空陣列＝清除指派，回到年齡與方案自動判斷）。
+router.put('/clients/:id/consent-assignments', requireStaff('clients'), (req, res) => {
+  const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!c) return res.status(404).json({ error: '找不到此個案' });
+  const valid = new Set(db.prepare('SELECT key FROM consent_templates').all().map(r => r.key));
+  const keys = [...new Set((Array.isArray(req.body?.keys) ? req.body.keys : [])
+    .map(k => String(k)).filter(k => valid.has(k)))];
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM client_consents WHERE client_id = ?').run(c.id);
+    const ins = db.prepare('INSERT INTO client_consents (client_id, key, assigned_by) VALUES (?,?,?)');
+    for (const k of keys) ins.run(c.id, k, req.user.id);
+  });
+  tx();
+  audit('staff', req.user.id, req.user.name, keys.length ? '指派同意書' : '清除同意書指派', c.code, { keys });
+  res.json({ ok: true, keys });
+});
+
 // 用不到的同意書範本：沒人簽過就刪掉，簽過的保留（簽署紀錄要對得回範本）
 router.delete('/consent-templates/:id', requireStaff('settings'), (req, res) => {
   const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
@@ -332,9 +352,9 @@ router.post('/consent-templates/:id/reset', requireStaff('settings'), (req, res)
   const body = fill(d.body);
   const version = body !== t.body ? t.version + 1 : t.version;
   db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?,
-      minor_only = ?, sign_block = ?, copy_labels = ?, audience = ? WHERE id = ?`)
+      minor_only = ?, sign_block = ?, copy_labels = ?, audience = ?, plan_ids = ? WHERE id = ?`)
     .run(d.title, body, version, d.required, d.allow_decline, d.minor_only,
-      fill(d.sign_block), fill(d.copy_labels), d.audience || '', t.id);
+      fill(d.sign_block), fill(d.copy_labels), d.audience || '', t.plan_ids, t.id);
   audit('staff', req.user.id, req.user.name, '還原同意書範本', t.key, { version });
   res.json({ ok: true, version });
 });
@@ -343,37 +363,21 @@ router.put('/consent-templates/:id', requireStaff('settings'), (req, res) => {
   const t = db.prepare('SELECT * FROM consent_templates WHERE id = ?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '找不到此範本' });
   const { title = t.title, body = t.body, required, allow_decline, minor_only,
-    sign_block = t.sign_block, copy_labels = t.copy_labels, audience = t.audience } = req.body || {};
+    sign_block = t.sign_block, copy_labels = t.copy_labels, audience = t.audience,
+    plan_ids = t.plan_ids } = req.body || {};
   // 內容有變動即遞增版本，已簽署者需重新簽署新版（簽署欄只影響紙本版面，不動版本）
   const version = body !== t.body ? t.version + 1 : t.version;
   db.prepare(`UPDATE consent_templates SET title = ?, body = ?, version = ?, required = ?, allow_decline = ?,
-      minor_only = ?, sign_block = ?, copy_labels = ?, audience = ? WHERE id = ?`)
+      minor_only = ?, sign_block = ?, copy_labels = ?, audience = ?, plan_ids = ? WHERE id = ?`)
     .run(title, body, version,
       required === undefined ? t.required : (required ? 1 : 0),
       allow_decline === undefined ? t.allow_decline : (allow_decline ? 1 : 0),
       minor_only === undefined ? t.minor_only : (minor_only ? 1 : 0), String(sign_block || ''),
-      String(copy_labels || ''), String(audience || ''), t.id);
+      String(copy_labels || ''), String(audience || ''),
+      parsePlanIds(Array.isArray(plan_ids) ? plan_ids.join(',') : plan_ids).join(','), t.id);
   audit('staff', req.user.id, req.user.name, '修改同意書範本', t.key, { version });
   res.json({ ok: true, version });
 });
-
-// 兒少再分兒童與青少年：同意書與表單的用語、適用對象都不同。
-function ageGroupOf(birthDate) {
-  const age = birthDate ? ageYears(birthDate) : null;
-  if (age === null) return '';
-  if (age < 12) return 'child';
-  if (age < 18) return 'teen';
-  return 'adult';
-}
-
-// 同意書愈來愈多，個案頁只列出跟這位個案有關的：
-// audience 留空表示全部適用；minor 涵蓋兒童與青少年。
-function consentFits(t, group) {
-  const a = t.audience || '';
-  if (!a || !group) return true;
-  if (a === 'minor') return group === 'child' || group === 'teen';
-  return a === group;
-}
 
 // ---- 重複個案合併 ----
 //
@@ -387,6 +391,8 @@ const MERGE_TABLES = ['appointments', 'session_notes', 'treatment_plans', 'asses
   'group_members', 'group_attendance', 'attachments', 'notifications', 'assessment_reports',
   'safety_plans', 'referrals', 'follow_ups', 'refunds', 'plan_usage_adjustments', 'receipts',
   'booking_requests', 'line_bindings', 'certificates'];
+// client_consents 不搬：它是 UNIQUE(client_id, key)，兩筆個案指派到同一張同意書時整批 UPDATE 會撞鍵。
+// 指派只是「這位個案要簽哪幾張」的操作提示，留下的那筆維持自己的指派即可（被併走的已停用）。
 
 router.post('/clients/:id/merge', requireStaff('clients'), (req, res) => {
   const keptId = Number(req.params.id);

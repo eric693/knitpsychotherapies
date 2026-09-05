@@ -802,14 +802,22 @@ App.page('client', {
 
       if (key === 'consents') {
         const templates = await GET('/consent-templates');
+        // 與後端 src/consents.js 同一套規則：有逐案指派就以指派為準，否則年齡分群 + 方案
+        const assigned = c.assigned_consents || [];
         const fits = t => {
+          if (assigned.length) return assigned.includes(t.key);
           const a = t.audience || '';
-          if (!a || !c.age_group) return true;
-          if (a === 'minor') return c.age_group === 'child' || c.age_group === 'teen';
-          return a === c.age_group;
+          if (a && c.age_group) {
+            if (a === 'minor') { if (c.age_group !== 'child' && c.age_group !== 'teen') return false; }
+            else if (a !== c.age_group) return false;
+          }
+          const need = String(t.plan_ids || '').split(',').map(Number).filter(Boolean);
+          if (need.length && !need.some(id => (c.plan_ids || []).includes(id))) return false;
+          return true;
         };
         // 全部都畫出來，不適用這位個案的先隱藏；勾「顯示全部」就地顯示，不必重新載入整頁
-        const list = templates.filter(t => !t.minor_only || c.is_minor);
+        // 未成年專用的同意書成人看不到，但櫃檯若明確指派了就照指派
+        const list = templates.filter(t => !t.minor_only || c.is_minor || assigned.includes(t.key));
         body.innerHTML = `<div class="card">${UI.table(['同意書', '版本', '狀態', '簽署人', '簽署時間', ''],
           list.map(t => {
             const s = c.consents.find(x => x.key === t.key && x.version === t.version);
@@ -825,8 +833,12 @@ App.page('client', {
     : `<button class="btn tiny secondary" data-bp="${t.key}">列印空白</button>`}</td></tr>`;
           }))}
           <label style="display:block;margin-top:8px;font-size:13px">
-            <input type="checkbox" id="allconsents"> 顯示全部同意書（預設只列出適用${
-  { child: '兒童', teen: '青少年', adult: '成人' }[c.age_group] || '這位個案'}的）</label>
+            <input type="checkbox" id="allconsents"> 顯示全部同意書（預設只列出${
+  assigned.length ? '指派給這位個案' : '適用' + ({ child: '兒童', teen: '青少年', adult: '成人' }[c.age_group] || '這位個案')}的）</label>
+          <div style="margin-top:10px"><button class="btn tiny secondary" id="assignconsents">指派同意書…</button>
+            <span style="font-size:12.5px;color:var(--muted);margin-left:8px">${assigned.length
+    ? `目前指派 ${assigned.length} 張，個案專區只會看到這幾張`
+    : '目前依年齡與方案自動判斷；要自己指定就按這裡'}</span></div>
           <div style="font-size:12.5px;color:var(--muted);margin-top:8px">標示 * 為必要同意書；範本內容修改後版本會遞增，需重新簽署。</div></div>`;
         const allBox = body.querySelector('#allconsents');
         if (allBox) {
@@ -836,6 +848,27 @@ App.page('client', {
             });
           };
         }
+        // 逐案指派：勾起來的就是這位個案要簽的；全部不勾＝清除指派，回到年齡與方案自動判斷
+        body.querySelector('#assignconsents').onclick = () => UI.modal({
+          title: '指派同意書給 ' + c.name, wide: true,
+          body: `<div style="font-size:13px;color:var(--muted);margin-bottom:10px">
+              勾選這位個案需要簽署的同意書。指派後，個案專區的「待簽署同意書」只會列出勾選的這幾張；
+              全部取消勾選則回到依年齡與方案自動判斷。</div>
+            <div style="display:flex;flex-direction:column;gap:8px">${templates.map(t => `
+              <label style="display:flex;gap:8px;align-items:flex-start;font-size:14px">
+                <input type="checkbox" class="as-consent" value="${t.key}" style="width:auto;margin-top:3px"${
+  (assigned.length ? assigned.includes(t.key) : fits(t) && (!t.minor_only || c.is_minor)) ? ' checked' : ''}>
+                <span>${UI.esc(t.title)}${t.required ? ' *' : ''}${
+  t.audience || t.plan_ids ? `<br><span style="font-size:12px;color:var(--muted)">自動規則：${
+    UI.esc([{ child: '限兒童', teen: '限青少年', minor: '限未成年', adult: '限成人' }[t.audience] || '',
+      t.plan_ids ? '限特定方案' : ''].filter(Boolean).join('、'))}</span>` : ''}</span></label>`).join('')}</div>`,
+          onSubmit: async e => {
+            const keys = [...e.querySelectorAll('.as-consent:checked')].map(i => i.value);
+            await PUT(`/clients/${c.id}/consent-assignments`, { keys });
+            UI.toast(keys.length ? '已指派' : '已清除指派');
+            App.go('client/' + id);
+          }
+        });
         body.querySelectorAll('[data-c]').forEach(b => {
           b.onclick = () => consentDialog(c.id, b.dataset.c, b.dataset.minor === '1', () => App.go('client/' + id));
         });

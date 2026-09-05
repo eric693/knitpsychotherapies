@@ -10,6 +10,7 @@ const { SCALE_KEYS, score, publicScales } = require('../scales');
 const plans = require('../plans');
 const line = require('../line');
 const { freeSlots, conflictOf } = require('./schedule');
+const { consentsForClient } = require('../consents');
 
 const router = express.Router();
 const loginRateLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 30, prefix: 'portal:' });
@@ -63,8 +64,8 @@ router.put('/password', requireClient, (req, res) => {
 
 router.get('/me', requireClient, (req, res) => {
   const c = req.client;
-  const templates = db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all()
-    .filter(t => !t.minor_only || c.is_minor);
+  // 只列跟這位個案有關的同意書（逐案指派優先，否則依年齡分群＋方案），跟所方個案頁同一套規則
+  const templates = consentsForClient(c);
   const signed = db.prepare('SELECT key, version, agreed FROM consents WHERE client_id = ?').all(c.id);
   res.json({
     id: c.id, name: c.name, code: c.code, phone: c.phone,
@@ -291,8 +292,7 @@ router.get('/assessments', requireClient, (req, res) => {
 
 // ---- 同意書線上簽署 ----
 router.get('/consents', requireClient, (req, res) => {
-  const templates = db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all()
-    .filter(t => !t.minor_only || req.client.is_minor);
+  const templates = consentsForClient(req.client);
   const signed = db.prepare('SELECT key, version, agreed, signer_name, signed_at FROM consents WHERE client_id = ?').all(req.client.id);
   res.json(templates.map(t => ({
     key: t.key, title: t.title, body: t.body, version: t.version,
@@ -308,7 +308,10 @@ router.post('/consents', requireClient, (req, res) => {
   if (!agreed && !t.allow_decline) return res.status(400).json({ error: '此同意書為必要項目' });
   if (!signer_name) return res.status(400).json({ error: '請填寫簽署人姓名' });
   if (!signature) return res.status(400).json({ error: '請完成簽名' });
-  if (t.minor_only && !req.client.is_minor) return res.status(400).json({ error: '此同意書不適用' });
+  // 該不該出現在這位個案面前，由 consentsForClient 一處決定（逐案指派優先，否則年齡＋方案）
+  if (!consentsForClient(req.client).some(x => x.key === t.key)) {
+    return res.status(400).json({ error: '此同意書不適用' });
+  }
   const role = t.minor_only ? 'guardian' : 'client';
   db.prepare(`INSERT INTO consents (client_id, key, title, body, version, agreed, signer_name, signer_role, signature, signed_ip)
     VALUES (?,?,?,?,?,?,?,?,?,?)`).run(

@@ -82,7 +82,10 @@ ensureColumns('consent_templates', {
   copy_labels: "TEXT NOT NULL DEFAULT ''",
   // 適用對象：同意書愈來愈多，個案頁只列出跟這位個案有關的。
   // '' 全部適用 / child 兒童（未滿 12）/ teen 青少年（12-17）/ minor 未成年 / adult 成人
-  audience: "TEXT NOT NULL DEFAULT ''"
+  audience: "TEXT NOT NULL DEFAULT ''",
+  // 適用方案：逗號分隔的 service_plans.id，留空表示不限方案。
+  // 國軍、青壯這類方案專屬的同意書只給實際走該方案的個案看到，個案專區不會一次列出全部。
+  plan_ids: "TEXT NOT NULL DEFAULT ''"
 });
 ensureColumns('session_notes', {
   // 覆核狀態：none 不需覆核（正式心理師）／pending 待督導覆核／approved 已覆核／returned 退回補正
@@ -417,7 +420,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     ce_required_credits: '120',
     ce_required_special: '12',          // 專業品質＋專業倫理＋專業相關法規合計下限
     ce_required_ethics: '2',            // 其中「專業倫理」類別之個別下限
-    ce_categories: '專業課程,專業品質,專業倫理,專業相關法規',
+    ce_categories: '專業課程,專業品質,專業倫理,專業相關法規,療育補助人員時數',
     license_alert_days: '180',          // 執照更新提前提醒天數
     // 晤談提醒訊息範本（可貼到 LINE／簡訊；{} 內為代入欄位）
     reminder_template: '{client} 您好，提醒您與 {counselor} 心理師的晤談時間為 {date}（{weekday}）{time}，地點 {center}。如需改期請提前 {cancel_hours} 小時來電 {phone}。',
@@ -1254,6 +1257,18 @@ ensureColumns('clients', {
   merged_into: 'INTEGER REFERENCES clients(id)'   // 被併走的個案指向留下的那筆
 });
 
+// 逐案指派同意書：自動規則（年齡分群、方案）之外，櫃檯可以直接指定「這位個案要簽哪幾張」。
+// 一旦有指派，個案專區就只列指派的那幾張，自動規則不再套用；清空指派即回到自動判斷。
+db.exec(`CREATE TABLE IF NOT EXISTS client_consents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,                             -- consent_templates.key
+  assigned_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  UNIQUE(client_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_client_consents ON client_consents(client_id);`);
+
 // 機構核銷：每家合作單位的核銷頻率與該附哪些資料，
 // 櫃檯每個月照「機構核銷」總表就知道這個月要跟誰請款、要準備什麼。
 ensureColumns('partners', {
@@ -1277,6 +1292,24 @@ if (getSetting('report_code_seeded', '') !== '1') {
       .run(mark, `%${mark}%`);
   }
   setSetting('report_code_seeded', '1');
+}
+
+// 方案專屬同意書（國軍、青壯）綁到對應的服務方案：沒走該方案的個案就不會看到這兩張。
+// 靠方案的 code_prefix／名稱比對，因為方案 id 各站不同；找不到方案就略過，之後可在設定頁自行綁。
+// 必須排在 service_plans 建表與 code_prefix 帶入之後。
+if (getSetting('consent_plan_seeded', '') !== '1') {
+  const findPlan = kw => db.prepare(
+    "SELECT id FROM service_plans WHERE code_prefix = ? OR name LIKE ? ORDER BY id LIMIT 1").get(kw, '%' + kw + '%');
+  const updPlanConsent = db.prepare("UPDATE consent_templates SET plan_ids = ? WHERE key = ? AND plan_ids = ''");
+  let done = true;
+  for (const [key, kw] of [['military', '國軍'], ['youth', '青壯']]) {
+    const p = findPlan(kw);
+    if (p) updPlanConsent.run(String(p.id), key);
+    else done = false;
+  }
+  // 全新安裝時方案還沒建（由 seed 帶入），這次沒綁到就先不記旗標，下次啟動再試一次；
+  // 綁好之後才記旗標，所方之後自行改回「不限方案」不會被覆蓋。
+  if (done) setSetting('consent_plan_seeded', '1');
 }
 
 // 機構核銷方式：所方原本用一張表管的三家，第一次升級時帶進來（已存在的只補空欄位）

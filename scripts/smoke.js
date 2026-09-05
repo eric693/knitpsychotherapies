@@ -61,6 +61,11 @@ function assert(cond, msg) { if (!cond) throw new Error(msg || '條件不成立'
 function equal(actual, expected, msg) {
   if (actual !== expected) throw new Error(`${msg || '值不符'}（預期 ${expected}，實際 ${actual}）`);
 }
+// 比清單用：兩邊都先排序再比，避免被順序影響
+function deepEqual(actual, expected, msg) {
+  const a = JSON.stringify(actual), b = JSON.stringify(expected);
+  if (a !== b) throw new Error(`${msg || '值不符'}（預期 ${b}，實際 ${a}）`);
+}
 
 // ---- HTTP 工具（各自帶 cookie，模擬不同登入身分）----
 function session() {
@@ -1873,6 +1878,42 @@ function startServer() {
     equal(c.age_group, 'adult', '30 歲為成人');
     assert(!c.pending_consents.some(x => x.key === 'ei_service'), '成人不該出現療育服務同意書');
     assert(c.pending_consents.some(x => x.key === 'privacy'), '未設對象的同意書仍對所有人顯示');
+  });
+
+  await test('方案專屬同意書只給走該方案的個案：沒排過青壯方案就不列出', async () => {
+    const plans = await admin.ok('GET', '/api/service-plans');
+    // 展示資料另有一筆同名的示範方案，這裡要的是內建那筆（有編碼標記「青壯」）
+    const youthPlan = plans.find(p => p.code_prefix === '青壯');
+    assert(youthPlan, '應內建青壯方案');
+    const tpls = await admin.ok('GET', '/api/consent-templates');
+    equal(tpls.find(t => t.key === 'youth').plan_ids, String(youthPlan.id), '青壯同意書應綁到青壯方案');
+    // 這位個案已是成人，但還沒有任何青壯方案的預約／收費／申請，所以不該看到
+    let c = await admin.ok('GET', `/api/clients/${clientId}`);
+    assert(!c.pending_consents.some(x => x.key === 'youth'), '沒走青壯方案就不該列出青壯同意書');
+    const day = addDays(ymd(new Date()), 37);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: day, start_time: '11:00', plan_id: youthPlan.id });
+    c = await admin.ok('GET', `/api/clients/${clientId}`);
+    assert(c.plan_ids.includes(youthPlan.id), '個案的方案清單應含青壯方案');
+    assert(c.pending_consents.some(x => x.key === 'youth'), '排了青壯方案後就要列出青壯同意書');
+    await admin.ok('DELETE', `/api/appointments/${a.id}`);
+  });
+
+  await test('可逐案指派同意書：指派後個案專區只列指派的那幾張', async () => {
+    await admin.ok('PUT', `/api/clients/${clientId}/consent-assignments`, { keys: ['privacy', 'recording'] });
+    const c = await admin.ok('GET', `/api/clients/${clientId}`);
+    deepEqual(c.assigned_consents.slice().sort(), ['privacy', 'recording'], '指派清單');
+    deepEqual(c.pending_consents.map(x => x.key).sort(), ['privacy', 'recording'], '待簽署只剩指派的兩張');
+    const list = await portal.ok('GET', '/api/portal/consents');
+    deepEqual(list.map(t => t.key).sort(), ['privacy', 'recording'], '個案專區也只列指派的兩張');
+    // 沒被指派的同意書，個案專區直接簽也要擋下
+    await portal.fails('POST', '/api/portal/consents',
+      { key: 'informed', signer_name: '測試', signature: 'data:,x' }, '不適用');
+    // 清除指派後回到年齡與方案自動判斷
+    await admin.ok('PUT', `/api/clients/${clientId}/consent-assignments`, { keys: [] });
+    const back = await admin.ok('GET', `/api/clients/${clientId}`);
+    equal(back.assigned_consents.length, 0, '指派已清除');
+    assert(back.pending_consents.some(x => x.key === 'informed'), '回到自動判斷後知情同意書又出現');
   });
 
   section('機構核銷');

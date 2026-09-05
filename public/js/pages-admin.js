@@ -1526,16 +1526,27 @@ App.page('settings', {
     });
 
     const templates = await GET('/consent-templates');
+    // 方案專屬同意書（國軍、青壯等）只給走該方案的個案看到，這裡列出可綁的方案
+    const consentPlans = await GET('/service-plans');
     const cb = el.querySelector('#consents');
-    cb.innerHTML = UI.table(['同意書', '版本', '必要', '可不同意', '限未成年', ''], templates.map(t => `<tr>
-      <td>${UI.esc(t.title)}</td><td>v${t.version}</td><td>${t.required ? '是' : '否'}</td>
+    const audienceText = { '': '全部', child: '兒童', teen: '青少年', minor: '未成年', adult: '成人' };
+    const planText = t => {
+      const ids = String(t.plan_ids || '').split(',').filter(Boolean);
+      if (!ids.length) return '不限方案';
+      return ids.map(id => (consentPlans.find(p => String(p.id) === id) || {}).name || '（方案已刪除）').join('、');
+    };
+    cb.innerHTML = UI.table(['同意書', '版本', '適用對象', '適用方案', '必要', '可不同意', '限未成年', ''], templates.map(t => `<tr>
+      <td>${UI.esc(t.title)}</td><td>v${t.version}</td>
+      <td>${UI.esc(audienceText[t.audience || ''] || t.audience)}</td>
+      <td>${UI.esc(planText(t))}</td><td>${t.required ? '是' : '否'}</td>
       <td>${t.allow_decline ? '是' : '否'}</td><td>${t.minor_only ? '是' : '否'}</td>
       <td style="white-space:nowrap"><button class="btn tiny secondary" data-t="${t.id}">編輯</button>
         <button class="btn tiny secondary" data-tp="${t.key}">列印空白（兩聯）</button>
         <button class="btn tiny secondary" data-tw="${t.key}">匯出 Word</button>
         <button class="btn tiny secondary" data-trs="${t.id}">↺ 還原</button>
         <button class="btn tiny danger" data-td="${t.id}">刪除</button></td></tr>`)) +
-      '<div style="font-size:12.5px;color:var(--muted);margin-top:8px">修改內容會使版本遞增，已簽署者需重新簽署；舊版簽署紀錄保留全文快照。</div>';
+      '<div style="font-size:12.5px;color:var(--muted);margin-top:8px">修改內容會使版本遞增，已簽署者需重新簽署；舊版簽署紀錄保留全文快照。'
+      + '適用對象與適用方案決定個案專區「待簽署同意書」列出哪幾張。</div>';
     cb.querySelectorAll('[data-trs]').forEach(b => {
       const t = templates.find(x => x.id === Number(b.dataset.trs));
       b.onclick = async () => {
@@ -1569,10 +1580,20 @@ App.page('settings', {
           ${UI.select('audience', '適用對象（個案頁預設只列出相符的）',
     [['', '全部個案'], ['child', '兒童（未滿 12 歲）'], ['teen', '青少年（12-17 歲）'],
       ['minor', '未成年（兒童與青少年）'], ['adult', '成人']], { value: t.audience || '' })}
+          <div class="form-row full"><label>適用方案（都不勾＝不限方案；勾了就只有走該方案的個案看得到）</label>
+            <div style="display:flex;flex-wrap:wrap;gap:10px 16px">${consentPlans.map(p => `
+              <label style="display:flex;gap:6px;align-items:center;font-size:14px;color:var(--text)">
+                <input type="checkbox" class="cs-plan" value="${p.id}" style="width:auto"${
+  String(t.plan_ids || '').split(',').includes(String(p.id)) ? ' checked' : ''}>${UI.esc(p.name)}</label>`).join('')}</div></div>
           ${UI.checkbox('required', '必要同意書', t.required)}
           ${UI.checkbox('allow_decline', '允許選擇不同意', t.allow_decline)}
           ${UI.checkbox('minor_only', '僅未成年個案需簽', t.minor_only)}</div>`,
-        onSubmit: async e => { await PUT(`/consent-templates/${t.id}`, UI.formData(e)); UI.toast('已儲存'); App.go('settings'); }
+        onSubmit: async e => {
+          const d = UI.formData(e);
+          d.plan_ids = [...e.querySelectorAll('.cs-plan:checked')].map(i => i.value).join(',');
+          await PUT(`/consent-templates/${t.id}`, d);
+          UI.toast('已儲存'); App.go('settings');
+        }
       });
     });
   }
