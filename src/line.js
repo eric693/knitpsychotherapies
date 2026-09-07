@@ -349,6 +349,26 @@ async function pushFlex({ to, flex, kind = 'line', client_id = null, appointment
   return r.ok ? { status: 'sent', message: '已以 LINE 推播' } : { status: 'failed', message: r.error };
 }
 
+// 推一則純文字。櫃檯在「晤談提醒」頁按發送時走這裡 ——
+// 他常會臨時改一句話，送出的內容要跟畫面上看到的一致，所以不套 Flex 卡片。
+async function pushText({ to, text, kind = 'line', client_id = null, appointment_id = null, user = null }) {
+  const content = String(text || '').trim();
+  if (!lineEnabled()) {
+    logNotification({ kind, client_id, appointment_id, channel: 'manual', target: to, content, status: 'manual' });
+    return { status: 'manual', error: '尚未設定 LINE 官方帳號' };
+  }
+  if (!to) {
+    logNotification({ kind, client_id, appointment_id, channel: 'line', target: '', content,
+      status: 'failed', error: '尚未綁定 LINE' });
+    return { status: 'failed', error: '對方尚未綁定 LINE 官方帳號' };
+  }
+  if (!content) return { status: 'failed', error: '訊息內容是空的' };
+  const r = await callLine(PUSH_URL, { to, messages: [textMessage(content)] });
+  logNotification({ kind, client_id, appointment_id, channel: 'line', target: to, content,
+    status: r.ok ? 'sent' : 'failed', error: r.error, user });
+  return r.ok ? { status: 'sent' } : { status: 'failed', error: r.error };
+}
+
 async function replyMessages(replyToken, messages) {
   if (!lineEnabled() || !replyToken) return { ok: false };
   return callLine(REPLY_URL, { replyToken, messages });
@@ -369,6 +389,6 @@ module.exports = {
   card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
   bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, portalUrl,
   counselorScheduleFlex, counselorBookingFlex, receiptFlex,
-  pushFlex, replyMessages, verifySignature, logNotification,
+  pushFlex, pushText, replyMessages, verifySignature, logNotification,
   retryNotification, retryFailedNotifications
 };

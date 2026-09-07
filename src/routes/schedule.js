@@ -875,10 +875,24 @@ router.get('/reminders', requireStaff('schedule'), (req, res) => {
     if (text.includes('{meeting}')) return text.replace('{meeting}', line);
     return line ? `${text}\n${line}` : text;
   };
+  // 每位個案實際會走哪條通道：櫃檯看不出「誰已經被排程自動推過 LINE」就會重複打擾
+  const mode = getSetting('notify_channel', 'auto');
+  const lineOn = require('../line').lineEnabled();
+  const hasWebhook = !!getSetting('notify_webhook_url', '').trim();
+  const channelOf = a => {
+    const bound = !!db.prepare('SELECT line_user_id FROM clients WHERE id = ?')
+      .get(a.client_id).line_user_id;
+    if (mode === 'manual') return 'manual';
+    if ((mode === 'auto' || mode === 'line') && lineOn && bound) return 'line';
+    if (mode === 'line') return 'manual';
+    return hasWebhook && a.client_phone ? 'webhook' : 'manual';
+  };
   res.json({
     date,
+    channel_mode: mode,
     rows: rows.map(a => ({
       ...a,
+      channel: channelOf(a),
       message: withMeeting(tpl
         .replace('{client}', a.client_name)
         .replace('{counselor}', a.counselor_name || '')

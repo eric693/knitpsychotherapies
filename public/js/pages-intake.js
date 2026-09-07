@@ -204,32 +204,48 @@ App.page('reminders', {
   title: '晤談提醒',
   sub: '設定發送通道後可由系統送出；未設定時產生可複製的訊息供人工發送',
   help: [
-    '列出接下來需要提醒的晤談。已設定 LINE 或簡訊通道時可按「發送」由系統送出，未設定則按「複製訊息」自行貼到 LINE 傳給個案，再按「標記已通知」。',
-    '「全部發送／複製全部」可一次處理整批。',
-    '提醒提前幾小時發，在系統設定裡調。',
+    '列出接下來需要提醒的晤談。每列右邊會標出這位個案實際走哪條通道：官方 LINE、簡訊，或只能人工。',
+    '已綁定 LINE 的個案不必在這裡按 —— 晤談前 N 小時系統會由官方帳號自動推一張提醒卡片（含「我會準時前往／需要改期」按鈕），推完就會顯示已通知。這頁主要是補沒收到的人。',
+    '標「人工」的按「複製訊息」自行貼給個案，再按「標記已通知」。',
+    '通道在「系統設定 → 提醒發送通道」選；自動提醒的提前時數在「LINE 串接」頁調。',
   ],
   module: 'schedule',
   async render(el) {
     const date = (el.querySelector('#d') && el.querySelector('#d').value) || UI.addDays(UI.today(), 1);
     const d = await GET('/reminders?date=' + date);
-    const auto = App.meta.notify_enabled;
+    // 只要有任何一筆走得出去（LINE 或簡訊），發送鈕就該是「發送」而不是「標記已通知」
+    const auto = d.rows.some(r => r.channel !== 'manual');
+    const CH = {
+      line: ['官方 LINE', 'ok'], webhook: ['簡訊', ''], manual: ['人工', 'warn']
+    };
+    const MODE_TEXT = {
+      auto: '已綁定 LINE 的由官方帳號送出，其餘走簡訊 webhook',
+      line: '只用官方 LINE；沒綁定的記為人工',
+      webhook: '一律走簡訊 webhook',
+      manual: '一律人工發送'
+    };
     el.innerHTML = `<div class="toolbar"><label>日期</label><input id="d" type="date" value="${d.date}">
         <div class="spacer"></div>
         <button class="btn secondary small" id="log">發送紀錄</button>
         ${auto ? '<button class="btn small" id="sendall">全部發送</button>' : ''}
         <button class="btn secondary small" id="copyall">複製全部</button></div>
       <div class="notice ${auto ? 'ok' : ''}" style="margin-bottom:14px">
-        ${auto ? '已設定發送通道，按「發送」由系統送出簡訊／LINE，結果會記入發送紀錄。'
-          : '尚未設定發送通道（系統設定 → 提醒發送通道），目前僅產生訊息供人工發送。'}</div>
+        目前通道：<strong>${UI.esc(MODE_TEXT[d.channel_mode] || d.channel_mode)}</strong>
+        （系統設定 → 提醒發送通道可改）。<br>
+        ${auto ? '按「發送」由系統送出，結果會記入發送紀錄。每列右邊標示這位個案實際會走哪一條。'
+          : '目前沒有任何一筆送得出去，僅產生訊息供人工複製發送。'}<br>
+        <span style="color:var(--muted)">已綁定 LINE 的個案，晤談前 ${UI.esc(String(App.meta.line_reminder_hours || 24))} 小時會由官方帳號<strong>自動</strong>推一張提醒卡片；
+        自動推過的這裡會顯示「已通知」，不必再按一次。</span></div>
       <div class="card">
         ${d.rows.length ? d.rows.map(r => `<div style="border-bottom:1px dashed var(--border);padding:10px 0">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <strong>${r.start_time}</strong> ${UI.esc(r.client_name)}
             <span style="color:var(--muted);font-size:13px">${UI.esc(r.counselor_name || '')}　${UI.esc(r.client_phone || '')}</span>
             ${r.reminded_at ? UI.tag('已通知 ' + UI.esc(r.reminded_at.slice(5, 16)), 'ok') : UI.tag('未通知', 'warn')}
+            ${UI.tag((CH[r.channel] || ['人工', 'warn'])[0], (CH[r.channel] || ['', 'warn'])[1])}
             <span class="spacer" style="flex:1"></span>
             <button class="btn tiny secondary" data-copy="${r.id}">複製訊息</button>
-            <button class="btn tiny" data-done="${r.id}">${auto ? '發送' : '標記已通知'}</button>
+            <button class="btn tiny" data-done="${r.id}">${r.channel === 'manual' ? '標記已通知' : '發送'}</button>
           </div>
           <div style="font-size:13px;background:#f7f9fa;border-radius:8px;padding:8px;margin-top:6px" id="m-${r.id}">${UI.esc(r.message)}</div>
         </div>`).join('') : '<div class="empty">當日沒有需要提醒的預約</div>'}

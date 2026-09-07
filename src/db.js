@@ -404,7 +404,10 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
       + '（6）其他：＿＿＿＿＿＿＿＿＿＿',
     cert_treatment_statement: '此份文件提供 {purpose} 做為接受本所心理治療證明之用，不改做其他用途，'
       + '案主需自負保管及保密責任。',
-    // 對外提醒發送：填入 webhook 後由系統送出，留空則僅產生訊息供人工發送
+    // 對外提醒發送。通道：auto 已綁 LINE 的走官方帳號、其餘走 webhook（預設）／
+    // line 只用官方帳號／webhook 只用 webhook／manual 一律人工。
+    notify_channel: 'auto',
+    // webhook 是所方自家簡訊商或自建 bot 的接收網址；留空則沒綁 LINE 的人只能人工發送
     notify_webhook_url: '',
     notify_webhook_token: '',
     supervision_required_hours: '20',   // 年度督導時數目標

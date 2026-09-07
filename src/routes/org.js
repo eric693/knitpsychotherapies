@@ -269,6 +269,9 @@ router.get('/meta', requireStaff(), (req, res) => {
     adult_age: Number(getSetting('adult_age', '18')),
     report_deadline_hours: Number(getSetting('report_deadline_hours', '24')),
     notify_enabled: !!getSetting('notify_webhook_url').trim(),
+    // 提醒頁要說明「已綁定 LINE 的人幾小時前會自動收到」
+    notify_channel: getSetting('notify_channel', 'auto'),
+    line_reminder_hours: Number(getSetting('line_reminder_hours', '24')),
     // 排班表可自訂起訖與間距；快填按鈕由設定字串解析（格式：名稱|星期|時段）
     shift: {
       start: getSetting('shift_start', '08:00'),

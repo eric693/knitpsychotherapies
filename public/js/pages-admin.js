@@ -1226,7 +1226,9 @@ App.page('settings', {
         ['disadv_official_authority', '弱勢療育記錄卡 主管機關'],
         ['disadv_form_note', '弱勢療育記錄卡 注意事項'],
         ['cert_treatment_statement', '治療證明 聲明文字（{purpose} 會代入用途）']]],
-      ['提醒發送通道', [['notify_webhook_url', 'Webhook 網址（留空則僅人工發送）'],
+      ['提醒發送通道', [
+        ['notify_channel', '通道：auto 已綁 LINE 走官方帳號其餘走簡訊／line 只用官方帳號／webhook 只用簡訊／manual 一律人工'],
+        ['notify_webhook_url', '簡訊商 Webhook 網址（留空則沒綁 LINE 的人只能人工發送）'],
         ['notify_webhook_token', 'Webhook 驗證權杖']]],
       ['提醒訊息', [['reminder_template', '晤談提醒範本（{client}{counselor}{date}{weekday}{time}{center}{cancel_hours}{phone}{meeting}）'],
         ['dunning_template', '催繳訊息範本（{client}{date}{item}{amount}{days}{phone}{center}）'],
