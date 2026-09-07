@@ -122,6 +122,35 @@ info.push(`備份檔 ${backups.length} 份，最新：${backups[backups.length -
   }
 }
 
+// ---- 操作說明 ----
+// 每個頁面都要有「怎麼用」的說明（App.page 的 help）。少了它，交接時只能口耳相傳，
+// 而且最先漏掉的一定是最複雜的那幾頁。這裡直接掃前端原始碼，漏一頁就報一次。
+{
+  const fs = require('fs'), path = require('path');
+  const dir = path.join(__dirname, '..', 'public', 'js');
+  const noHelp = [];
+  let pages = 0;
+  for (const f of fs.readdirSync(dir).filter(x => x.startsWith('pages-'))) {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    const re = /App\.page\(\s*'([\w-]+)'\s*,\s*\{/g;
+    let m;
+    while ((m = re.exec(src))) {
+      pages++;
+      // 用大括號配對取出整個定義，巢狀物件才不會把區塊切斷
+      let i = re.lastIndex - 1, depth = 0;
+      for (; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') { depth--; if (!depth) break; }
+      }
+      const body = src.slice(re.lastIndex, i);
+      // 只認這一層的 help:，避免抓到內層物件裡剛好叫 help 的欄位
+      if (!/(^|\n)\s{0,4}help\s*:/.test(body)) noHelp.push(`${m[1]}（${f}）`);
+    }
+  }
+  check(!noHelp.length, `這些頁面沒有操作說明：${noHelp.join('、')}`, 'warn');
+  info.push(`操作說明：${pages} 個頁面，${pages - noHelp.length} 個有說明`);
+}
+
 // ---- 展示資料 ----
 const demoUsers = db.prepare("SELECT name FROM users WHERE username IN ('lin','chen','wu','office') AND active = 1").all();
 const demoClients = db.prepare("SELECT COUNT(*) n FROM clients WHERE code LIKE 'C%'").get().n;
