@@ -12,6 +12,8 @@ const router = express.Router();
 const PLAN_FIELDS = ['name', 'kind', 'appt_type', 'fee_mode', 'fee', 'fee_options', 'subsidy_amount',
   'subsidy_program', 'session_minutes', 'age_min', 'age_max', 'quota_per_year',
   'counselor_week_limit', 'counselor_month_limit', 'share_mode', 'share_percent', 'share_fixed',
+  // 所內派案的另一組抽成（留空＝派案沿用指定案的數字）
+  'share_mode_assigned', 'share_percent_assigned', 'share_fixed_assigned',
   'portal_visible', 'require_review', 'note', 'intro', 'sort', 'active', 'default_mode', 'venue_fee',
   // 年報表用：類別代碼（如 0 指定／1 派案／3 機構／30 機構指定／31 機構派案）與個案編碼標記（如「青壯」「國軍」）
   'report_code', 'code_prefix',
@@ -29,6 +31,12 @@ function normalizePlan(b, base = {}) {
   let pct = Number(d.share_percent) || 0;
   if (pct > 1) pct = pct / 100;
   d.share_percent = Math.min(Math.max(pct, 0), 1);
+  // 派案那組同樣接受 55 或 0.55；留空或 0 代表沿用指定案的比例
+  d.share_mode_assigned = ['percent', 'fixed'].includes(d.share_mode_assigned) ? d.share_mode_assigned : '';
+  let apct = Number(d.share_percent_assigned) || 0;
+  if (apct > 1) apct = apct / 100;
+  d.share_percent_assigned = Math.min(Math.max(apct, 0), 1);
+  d.share_fixed_assigned = Math.max(0, Math.round(Number(d.share_fixed_assigned) || 0));
   d.fee_options = parseOptions(d.fee_options).join(',');
   for (const n of ['fee', 'subsidy_amount', 'venue_fee', 'session_minutes', 'age_min', 'age_max', 'quota_per_year',
     'counselor_week_limit', 'counselor_month_limit', 'share_fixed', 'sort']) {
@@ -155,11 +163,17 @@ router.post('/service-plans/:id/rates', requireStaff('settings'), (req, res) => 
   if (exists) return res.status(400).json({ error: '此心理師在該方案（主題）已設定費率，請直接編輯' });
   let pct = Number(b.share_percent) || 0;
   if (pct > 1) pct = pct / 100;
+  let apct = Number(b.share_percent_assigned) || 0;
+  if (apct > 1) apct = apct / 100;
   const info = db.prepare(`INSERT INTO plan_counselors
-    (plan_id, counselor_id, topic_id, fee, share_mode, share_percent, share_fixed, week_limit, month_limit, bookable, active)
-    VALUES (?,?,?,?,?,?,?,?,?,?,1)`).run(p.id, counselorId, topicId,
+    (plan_id, counselor_id, topic_id, fee, share_mode, share_percent, share_fixed,
+     share_mode_assigned, share_percent_assigned, share_fixed_assigned,
+     week_limit, month_limit, bookable, active)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)`).run(p.id, counselorId, topicId,
     Math.max(0, Number(b.fee) || 0), b.share_mode === 'fixed' || b.share_mode === 'percent' ? b.share_mode : '',
     Math.min(Math.max(pct, 0), 1), Math.max(0, Number(b.share_fixed) || 0),
+    ['percent', 'fixed'].includes(b.share_mode_assigned) ? b.share_mode_assigned : '',
+    Math.min(Math.max(apct, 0), 1), Math.max(0, Number(b.share_fixed_assigned) || 0),
     b.week_limit === '' || b.week_limit === undefined ? -1 : Number(b.week_limit),
     b.month_limit === '' || b.month_limit === undefined ? -1 : Number(b.month_limit),
     b.bookable === false ? 0 : 1);
@@ -173,11 +187,16 @@ router.put('/rates/:id', requireStaff('settings'), (req, res) => {
   const b = { ...r, ...req.body };
   let pct = Number(b.share_percent) || 0;
   if (pct > 1) pct = pct / 100;
+  let apct = Number(b.share_percent_assigned) || 0;
+  if (apct > 1) apct = apct / 100;
   db.prepare(`UPDATE plan_counselors SET fee = ?, share_mode = ?, share_percent = ?, share_fixed = ?,
+      share_mode_assigned = ?, share_percent_assigned = ?, share_fixed_assigned = ?,
       week_limit = ?, month_limit = ?, bookable = ?, active = ? WHERE id = ?`).run(
     Math.max(0, Number(b.fee) || 0),
     b.share_mode === 'fixed' || b.share_mode === 'percent' ? b.share_mode : '',
     Math.min(Math.max(pct, 0), 1), Math.max(0, Number(b.share_fixed) || 0),
+    ['percent', 'fixed'].includes(b.share_mode_assigned) ? b.share_mode_assigned : '',
+    Math.min(Math.max(apct, 0), 1), Math.max(0, Number(b.share_fixed_assigned) || 0),
     b.week_limit === '' ? -1 : Number(b.week_limit), b.month_limit === '' ? -1 : Number(b.month_limit),
     b.bookable ? 1 : 0, b.active ? 1 : 0, r.id);
   audit('staff', req.user.id, req.user.name, '修改心理師方案費率', String(r.id));
@@ -196,7 +215,9 @@ router.get('/plan-quote', requireStaff(), (req, res) => {
   const q = req.query;
   const quote = resolveFee({
     plan_id: q.plan_id, topic_id: q.topic_id, counselor_id: q.counselor_id,
-    fee_choice: q.fee_choice, fee_override: q.fee_override
+    fee_choice: q.fee_choice, fee_override: q.fee_override,
+    // 指定／派案會影響抽成，估價時就要按這位個案的註記算，不然預約單上的報酬是錯的
+    client_id: q.client_id, assign_type: q.assign_type
   });
   const client = q.client_id ? db.prepare('SELECT * FROM clients WHERE id = ?').get(Number(q.client_id)) : null;
   const check = q.plan_id
@@ -211,6 +232,10 @@ router.get('/plan-quote', requireStaff(), (req, res) => {
     share_base: quote.share_base,
     fee_options: quote.fee_options, subsidy_amount: quote.subsidy_amount,
     self_pay: quote.self_pay, counselor_share: quote.counselor_share,
+    // 讓預約單說得出「這筆為什麼抽這個數」：是指定案還是派案、用的是哪一層的設定
+    assign_type: quote.assign_type,
+    share_mode: quote.share_mode, share_percent: quote.share_percent,
+    share_from_assigned: quote.share_from_assigned, share_source: quote.share_source,
     session_minutes: quote.session_minutes, subsidy_program: quote.subsidy_program,
     plan_name: quote.plan ? quote.plan.name : '', topic_name: quote.topic ? quote.topic.name : '',
     ...check
@@ -389,7 +414,8 @@ router.get('/plan-income', requireStaff('reports'), (req, res) => {
 
   for (const a of appts) {
     const row = ensure(a.counselor_id, a.counselor_name);
-    const q = resolveFee({ plan_id: a.plan_id, topic_id: a.topic_id, counselor_id: a.counselor_id, fee_override: a.fee });
+    const q = resolveFee({ plan_id: a.plan_id, topic_id: a.topic_id, counselor_id: a.counselor_id,
+      fee_override: a.fee, client_id: a.client_id });
     // 未到只收部分費用：固定規費時換算成等效比例，各項才會一致縮放
     const rate = a.status === 'no_show' ? noShowCharge(a.fee).rate : 1;
     // 未到只收部分費用：個案自付與方案給付都按同一比例計，心理師報酬亦然
@@ -565,7 +591,8 @@ function annualReport(counselorId, year, canSeeSummary) {
   const noteByDay = new Map(notes.map(n => [`${n.client_id}|${n.date}`, n]));
 
   const rows = appts.map(a => {
-    const q = resolveFee({ plan_id: a.plan_id, topic_id: a.topic_id, counselor_id: a.counselor_id, fee_override: a.fee });
+    const q = resolveFee({ plan_id: a.plan_id, topic_id: a.topic_id, counselor_id: a.counselor_id,
+      fee_override: a.fee, client_id: a.client_id });
     const rate = a.status === 'no_show' ? noShowCharge(a.fee).rate : 1;
     const clientPay = Math.round((a.fee || 0) * rate);
     const subsidy = Math.round((a.subsidy_amount || 0) * rate);

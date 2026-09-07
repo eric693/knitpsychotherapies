@@ -146,7 +146,8 @@ router.post('/appointments', requireStaff('schedule'), async (req, res) => {
   const quote = plans.resolveFee({
     plan_id: b.plan_id, topic_id: b.topic_id, counselor_id: b.counselor_id,
     fee_choice: b.fee_choice,
-    fee_override: b.fee !== undefined && b.fee !== '' ? b.fee : undefined
+    fee_override: b.fee !== undefined && b.fee !== '' ? b.fee : undefined,
+    client_id: b.client_id                   // 指定／派案決定抽成用哪一組比例
   });
   // fee 存「個案要付的錢」；方案給付的部分另存 subsidy_amount，兩者相加才是總額
   const fee = b.plan_id || (b.fee !== undefined && b.fee !== '')
@@ -244,7 +245,8 @@ router.put('/appointments/:id', requireStaff('schedule'), (req, res) => {
   const quote = plans.resolveFee({
     plan_id: b.plan_id, topic_id: b.topic_id, counselor_id: b.counselor_id,
     fee_choice: b.fee_choice,
-    fee_override: req.body.fee !== undefined && req.body.fee !== '' ? req.body.fee : (b.plan_id ? undefined : b.fee)
+    fee_override: req.body.fee !== undefined && req.body.fee !== '' ? req.body.fee : (b.plan_id ? undefined : b.fee),
+    client_id: b.client_id || a.client_id
   });
   const check = plans.checkBooking({
     plan_id: b.plan_id, client: db.prepare('SELECT * FROM clients WHERE id = ?').get(a.client_id),
@@ -311,7 +313,7 @@ router.post('/appointments/:id/status', requireStaff('schedule'), (req, res) => 
         // 收費單只跟個案收「他要付的錢」（補助方案就是場地費），
         // 由方案給付的部分另記在 subsidy_amount 供核銷，不會讓個案看到一張 1800 的帳單
         const q = plans.resolveFee({ plan_id: a.plan_id, topic_id: a.topic_id,
-          counselor_id: a.counselor_id, fee_override: a.fee });
+          counselor_id: a.counselor_id, fee_override: a.fee, client_id: a.client_id });
         db.prepare(`INSERT INTO invoices (client_id, appointment_id, date, item, amount, status, payer,
             plan_id, topic_id, subsidy_program, subsidy_amount, self_pay)
                     VALUES (?,?,?,?,?, 'unpaid', ?,?,?,?,?,?)`).run(

@@ -169,8 +169,10 @@ router.post('/public/bookings', publicWrite, async (req, res) => {
     if (taken) return res.status(400).json({ error: '此時段剛剛已被預約，請另選時段' });
   }
 
+  // 線上預約：個案自己點名心理師的算指定案，否則是所方派案 —— 抽成可能不同，取價時就要分開
   const quote = plans.resolveFee({ plan_id: plan.id, topic_id: topic ? topic.id : null,
-    counselor_id: counselorId, fee_choice: b.fee_choice });
+    counselor_id: counselorId, fee_choice: b.fee_choice,
+    assign_type: counselorId ? 'designated' : 'assigned' });
 
   // 從 LINE 官方帳號的專屬連結進來的：以 token 換回 userId，不讓 userId 走網址列
   let lineUserId = String(b.line_user_id || '').trim();
@@ -456,7 +458,8 @@ router.post('/bookings/:id/confirm', requireStaff('bookings'), async (req, res) 
 
   const quote = plans.resolveFee({
     plan_id: b.plan_id, topic_id: b.topic_id, counselor_id: counselorId,
-    fee_choice: b.fee_choice, fee_override: body.fee
+    fee_choice: b.fee_choice, fee_override: body.fee,
+    client_id: client.id                     // 指定／派案決定抽成用哪一組比例
   });
   const endT = schedule.endTime(startTime, quote.session_minutes);
 

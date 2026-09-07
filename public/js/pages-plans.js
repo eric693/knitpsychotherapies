@@ -28,9 +28,13 @@ function planDialog(p, onDone) {
       ${UI.input('quota_per_year', '每人每年可用次數（0 不限）', { type: 'number', value: d.quota_per_year || 0 })}
       ${UI.input('counselor_week_limit', '每位心理師每週人次（0 不限）', { type: 'number', value: d.counselor_week_limit || 0 })}
       ${UI.input('counselor_month_limit', '每位心理師每月人次（0 不限）', { type: 'number', value: d.counselor_month_limit || 0 })}
-      ${UI.select('share_mode', '心理師報酬方式', [['percent', '抽成比例'], ['fixed', '固定鐘點費']], { value: d.share_mode })}
-      ${UI.input('share_percent', '抽成比例（可填 0.6 或 60）', { value: d.share_percent || 0 })}
-      ${UI.input('share_fixed', '固定鐘點費', { type: 'number', value: d.share_fixed || 0 })}
+      ${UI.select('share_mode', '心理師報酬方式（指定案）', [['percent', '抽成比例'], ['fixed', '固定鐘點費']], { value: d.share_mode })}
+      ${UI.input('share_percent', '指定案抽成比例（可填 0.7 或 70）', { value: d.share_percent || 0 })}
+      ${UI.input('share_fixed', '指定案固定鐘點費', { type: 'number', value: d.share_fixed || 0 })}
+      ${UI.select('share_mode_assigned', '所內派案報酬方式',
+    [['', '同指定案'], ['percent', '抽成比例'], ['fixed', '固定鐘點費']], { value: d.share_mode_assigned || '' })}
+      ${UI.input('share_percent_assigned', '派案抽成比例（留空或 0 = 同指定案）', { value: d.share_percent_assigned || 0 })}
+      ${UI.input('share_fixed_assigned', '派案固定鐘點費（0 = 同指定案）', { type: 'number', value: d.share_fixed_assigned || 0 })}
       ${UI.textarea('intro', '線上預約表單上的說明', { value: d.intro || '' })}
       ${UI.textarea('note', '內部備註', { value: d.note || '' })}
       ${UI.checkbox('portal_visible', '開放線上預約表單顯示此方案', d.portal_visible)}
@@ -90,9 +94,13 @@ function rateDialog(plan, r, onDone) {
       ${r ? '' : UI.select('topic_id', '限定主題（可留空 = 全部主題）',
       [['', '全部主題']].concat((plan.topics || []).filter(t => t.active).map(t => [t.id, t.name])), { value: '' })}
       ${UI.input('fee', '金額（0 沿用方案／主題）', { type: 'number', value: d.fee || 0 })}
-      ${UI.select('share_mode', '報酬方式', [['', '沿用方案'], ['percent', '抽成比例'], ['fixed', '固定鐘點費']], { value: d.share_mode })}
-      ${UI.input('share_percent', '抽成比例（0.6 或 60）', { value: d.share_percent || 0 })}
-      ${UI.input('share_fixed', '固定鐘點費', { type: 'number', value: d.share_fixed || 0 })}
+      ${UI.select('share_mode', '報酬方式（指定案）', [['', '沿用方案'], ['percent', '抽成比例'], ['fixed', '固定鐘點費']], { value: d.share_mode })}
+      ${UI.input('share_percent', '指定案抽成比例（0.7 或 70）', { value: d.share_percent || 0 })}
+      ${UI.input('share_fixed', '指定案固定鐘點費', { type: 'number', value: d.share_fixed || 0 })}
+      ${UI.select('share_mode_assigned', '所內派案報酬方式',
+      [['', '同指定案'], ['percent', '抽成比例'], ['fixed', '固定鐘點費']], { value: d.share_mode_assigned || '' })}
+      ${UI.input('share_percent_assigned', '派案抽成比例（留空或 0 = 同指定案）', { value: d.share_percent_assigned || 0 })}
+      ${UI.input('share_fixed_assigned', '派案固定鐘點費（0 = 同指定案）', { type: 'number', value: d.share_fixed_assigned || 0 })}
       ${UI.input('week_limit', '每週人次（留空沿用方案，0 不限）', { type: 'number', value: d.week_limit === -1 ? '' : d.week_limit })}
       ${UI.input('month_limit', '每月人次（留空沿用方案，0 不限）', { type: 'number', value: d.month_limit === -1 ? '' : d.month_limit })}
       ${UI.checkbox('bookable', '開放此方案的線上預約', d.bookable)}
@@ -113,14 +121,24 @@ App.page('plans', {
   help: [
     '一個「方案」＝一組收費規則：晤談時長、價格、資格限制、次數上限、心理師報酬怎麼算。排約選了方案，結束時間與費用就照它算。',
     '方案底下可再加「主題」（不同主題不同價）與「心理師費率」（同方案不同心理師抽成不同）。',
+    '指定案與所內派案可以設不同抽成：方案與費率各有兩組欄位，派案那組留空就沿用指定案的數字。判斷依據是個案資料裡的「案件來源」。',
     '已經有預約在用的方案不要直接刪，改用「停用」，舊資料才不會對不上。',
   ],
   module: 'settings',
   async render(el) {
     const plans = await GET('/service-plans');
-    const shareText = p => (p.share_mode === 'fixed'
-      ? `固定 ${UI.fmtMoney(p.share_fixed)}`
-      : `${Math.round((p.share_percent || 0) * 100)}%`);
+    // 一層設定在「指定案／派案」下各是什麼數字。派案沒另訂就寫「同指定案」，
+    // 免得畫面上兩個一樣的數字讓人以為設錯了。
+    const oneShare = (mode, pct, fixed) => (mode === 'fixed'
+      ? `固定 ${UI.fmtMoney(fixed)}` : `${Math.round((pct || 0) * 100)}%`);
+    const shareText = p => {
+      const base = oneShare(p.share_mode, p.share_percent, p.share_fixed);
+      const hasA = p.share_mode_assigned || p.share_percent_assigned > 0 || p.share_fixed_assigned > 0;
+      if (!hasA) return `指定案 ${base}／派案同指定案`;
+      const a = oneShare(p.share_mode_assigned || p.share_mode,
+        p.share_percent_assigned || p.share_percent, p.share_fixed_assigned || p.share_fixed);
+      return `指定案 ${base}／派案 ${a}`;
+    };
     el.innerHTML = `<div class="toolbar"><div class="spacer"></div>
         <button class="btn" id="add">新增方案</button></div>
       <div class="card" style="background:var(--primary-light);border:0">
@@ -130,20 +148,31 @@ App.page('plans', {
           <strong>一、在哪裡設</strong><br>
           按方案上的「編輯方案」，往下捲到報酬設定：<br>
           ・<strong>心理師報酬方式</strong>＝抽成比例（拆帳）或固定鐘點費（不論收多少，每場給固定金額）<br>
-          ・<strong>抽成比例</strong>＝填 0.6 或 60 都可以，系統一律當成 60%<br>
+          ・<strong>抽成比例</strong>＝填 0.7 或 70 都可以，系統一律當成 70%<br>
           某位心理師談好不同條件時，用「新增心理師費率」單獨設定，不必動整個方案。<br><br>
-          <strong>二、抽成基數是「應收金額 − 場地費」</strong><br>
+
+          <strong>二、指定案與所內派案分開抽成</strong><br>
+          個案自己點名心理師的是<strong>指定案</strong>（案源算心理師的，通常抽成較高）；
+          所方把案子派給他的是<strong>所內派案</strong>（案源是所方，抽成較低）。<br>
+          方案與心理師費率都有兩組欄位：上面那組是指定案，下面「所內派案」那組留空或填 0
+          就代表<strong>派案沿用指定案的數字</strong>；要分開才填第二個數字。<br>
+          例：指定案 70%、派案 55% → 同樣 2,000 元的晤談，指定案給 1,400、派案給 1,100。<br>
+          某一筆算指定還是派案，看的是<strong>個案資料裡的「案件來源」</strong>（指定／派案），
+          在個案基本資料就能改；沒有註記的舊個案一律當成指定案，帳不會因為多了這個欄位而變動。<br><br>
+          <strong>三、抽成基數是「應收金額 − 場地費」</strong><br>
           場地費算所方收入，不參與拆帳。以青壯世代方案為例：<br>
           總額 1,800（方案給付 1,600 ＋ 個案自付場地費 200），抽成 60% →
           心理師 (1800 − 200) × 60% = <strong>960</strong>，所方 1800 − 960 = <strong>840</strong>。<br>
           不希望場地費影響拆帳的話，把「場地費」留 0 即可。<br><br>
-          <strong>三、三層優先順序（下面蓋上面）</strong><br>
+          <strong>四、三層優先順序（下面蓋上面）</strong><br>
           心理師費率 → 主題 → 方案預設。<br>
-          某位心理師在某個主題有單獨費率就用他的；沒有就看主題；再沒有才用方案預設。<br><br>
-          <strong>四、什麼時候定案</strong><br>
+          某位心理師在某個主題有單獨費率就用他的；沒有就看主題；再沒有才用方案預設。<br>
+          指定／派案的判斷在每一層各自成立：心理師費率只填了指定案的數字時，
+          他的派案就用他自己的指定案數字，不會跳回方案那層。<br><br>
+          <strong>五、什麼時候定案</strong><br>
           報酬在<strong>晤談按下「完成」的當下就鎖定</strong>在那筆預約上。
           之後調整抽成只影響往後完成的晤談，不會回頭改動已結算的月份。<br><br>
-          <strong>五、去哪裡看結果</strong><br>
+          <strong>六、去哪裡看結果</strong><br>
           「心理師收支」頁看每月完成場次、應收、報酬與所方淨收（可列印對帳）；
           「報酬與扣繳」頁把報酬開成給付單，試算代扣所得稅與二代健保補充保費。
         </div>
@@ -186,8 +215,10 @@ App.page('plans', {
             ${p.rates.length ? UI.table(['心理師', '金額', '報酬', '週／月人次', ''], p.rates.map(r => `<tr>
                 <td>${UI.esc(r.counselor_name)}${r.topic_id ? '（限主題）' : ''}</td>
                 <td>${r.fee ? UI.fmtMoney(r.fee) : '沿用'}</td>
-                <td>${r.share_mode === 'fixed' ? UI.fmtMoney(r.share_fixed)
-      : r.share_mode === 'percent' ? Math.round(r.share_percent * 100) + '%' : '沿用'}</td>
+                <td>${r.share_mode ? oneShare(r.share_mode, r.share_percent, r.share_fixed) : '沿用'}
+                  ${(r.share_mode_assigned || r.share_percent_assigned > 0 || r.share_fixed_assigned > 0)
+      ? `<div class="muted">派案 ${oneShare(r.share_mode_assigned || r.share_mode,
+        r.share_percent_assigned || r.share_percent, r.share_fixed_assigned || r.share_fixed)}</div>` : ''}</td>
                 <td>${r.week_limit === -1 ? '沿用' : (r.week_limit || '不限')} / ${r.month_limit === -1 ? '沿用' : (r.month_limit || '不限')}</td>
                 <td><button class="btn tiny secondary" data-er="${r.id}">改</button>
                   <button class="btn tiny danger" data-dr="${r.id}">刪</button></td></tr>`))

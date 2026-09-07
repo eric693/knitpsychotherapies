@@ -47,8 +47,46 @@ function getRate(planId, counselorId, topicId) {
     || null;
 }
 
+// 指定／派案：呼叫端可以直接給 assign_type，或只給 client_id 由這裡查。
+// 個案沒註記時（舊資料）一律當成指定案 —— 這是系統原本的行為，不能因為新增欄位就改變舊帳。
+function resolveAssignType({ assign_type, client_id }) {
+  const given = String(assign_type || '');
+  if (given === 'assigned' || given === 'designated') return given;
+  if (client_id) {
+    const c = db.prepare('SELECT assign_type FROM clients WHERE id = ?').get(Number(client_id) || 0);
+    if (c && c.assign_type === 'assigned') return 'assigned';
+  }
+  return 'designated';
+}
+
 function parseOptions(str) {
   return String(str || '').split(',').map(s => Number(String(s).trim())).filter(n => n > 0);
+}
+
+// 這一層（方案或心理師費率）在「指定案／派案」下實際生效的報酬設定。
+//
+// 指定案與派案的抽成常常不一樣：個案自己點名心理師的（指定案），案源算心理師的，抽成通常較高；
+// 所方派給他的（派案），案源是所方，抽成較低。
+// 派案那組留空（mode 空字串、percent 與 fixed 皆 0）就代表「沒有另訂」，沿用指定案那組 ——
+// 這樣既有資料不必動，只有真的要分開的方案才需要填第二個數字。
+function shareOf(row, assignType) {
+  if (!row) return null;
+  const wantAssigned = assignType === 'assigned';
+  const hasAssigned = wantAssigned && (row.share_mode_assigned
+    || Number(row.share_percent_assigned) > 0 || Number(row.share_fixed_assigned) > 0);
+  const mode = hasAssigned
+    ? (row.share_mode_assigned || row.share_mode || '')
+    : (row.share_mode || '');
+  if (!mode) return null;                     // 這一層沒設定報酬方式，交給上層決定
+  return {
+    mode,
+    percent: hasAssigned && Number(row.share_percent_assigned) > 0
+      ? Number(row.share_percent_assigned) : Number(row.share_percent) || 0,
+    fixed: hasAssigned && Number(row.share_fixed_assigned) > 0
+      ? Number(row.share_fixed_assigned) : Number(row.share_fixed) || 0,
+    // 這次用的是不是「派案」那組數字，前端要據此標示，帳才看得懂
+    assigned: hasAssigned
+  };
 }
 
 // 取價：回傳這次晤談的總額、個案要付多少、方案給付多少、心理師分得多少。
@@ -59,17 +97,22 @@ function parseOptions(str) {
 //   client_pay   個案實際要付的錢 = total - subsidy（補助方案就是那 200 元場地費）
 // 心理師抽成基數是 total 扣掉場地費（venue_fee）——場地費是所方的收入，不參與拆帳。
 // fee_override 讓櫃檯在個案有特殊約定時直接指定「個案要付多少」。
-function resolveFee({ plan_id, topic_id, counselor_id, fee_choice, fee_override }) {
+//
+// assign_type（指定／派案）決定抽成用哪一組數字；只給 client_id 時自動查出來，
+// 呼叫端不必每處都先撈一次個案。
+function resolveFee({ plan_id, topic_id, counselor_id, fee_choice, fee_override, assign_type, client_id }) {
   const plan = getPlan(plan_id);
   if (!plan) {
     const pay = Number(fee_override) || 0;
     return { plan: null, topic: null, rate: null, fee_options: [],
       total: pay, fee: pay, client_pay: pay, subsidy_amount: 0, self_pay: pay, venue_fee: 0,
-      share_base: pay, counselor_share: 0, share_mode: 'percent',
+      share_base: pay, counselor_share: 0, share_mode: 'percent', share_percent: 0,
+      assign_type: resolveAssignType({ assign_type, client_id }), share_from_assigned: false, share_source: 'none',
       session_minutes: Number(getSetting('session_minutes', '50')), subsidy_program: '' };
   }
   const topic = getTopic(topic_id);
   const rate = getRate(plan.id, counselor_id, topic_id);
+  const assignKind = resolveAssignType({ assign_type, client_id });
 
   // 可選金額方案（伴侶／家族）：以預約時挑選的金額為準，但只接受設定裡列出的選項，
   // 避免前端被改參數後送進任意金額。
@@ -91,10 +134,12 @@ function resolveFee({ plan_id, topic_id, counselor_id, fee_choice, fee_override 
   // 場地費全額歸所方，不進心理師的抽成基數
   const venue = Math.min(plan.venue_fee || 0, total);
   const shareBase = Math.max(0, total - venue);
-  const shareMode = (rate && rate.share_mode) || plan.share_mode || 'percent';
+  // 心理師費率優先於方案；同一層裡，派案有另訂就用派案的數字
+  const eff = shareOf(rate, assignKind) || shareOf(plan, assignKind) || { mode: 'percent', percent: 0, fixed: 0, assigned: false };
+  const shareMode = eff.mode;
   const share = shareMode === 'fixed'
-    ? Math.round((rate && rate.share_fixed) || plan.share_fixed || 0)
-    : Math.round(shareBase * ((rate && rate.share_mode ? rate.share_percent : plan.share_percent) || 0));
+    ? Math.round(eff.fixed)
+    : Math.round(shareBase * eff.percent);
 
   return {
     plan, topic, rate,
@@ -108,6 +153,12 @@ function resolveFee({ plan_id, topic_id, counselor_id, fee_choice, fee_override 
     share_base: shareBase,
     counselor_share: share,
     share_mode: shareMode,
+    share_percent: shareMode === 'percent' ? eff.percent : 0,
+    // 這次抽成是照哪一組數字算的：designated 指定案／assigned 派案。
+    // 帳單與月結算要能回答「為什麼這筆是 70% 那筆是 55%」。
+    assign_type: assignKind,
+    share_from_assigned: !!eff.assigned,
+    share_source: rate && shareOf(rate, assignKind) ? 'counselor' : 'plan',
     session_minutes: plan.session_minutes || Number(getSetting('session_minutes', '50')),
     subsidy_program: plan.subsidy_program || ''
   };
@@ -331,7 +382,7 @@ function pickRoom({ date, start_time, end_time, exclude_appointment_id }) {
 
 module.exports = {
   defaultSessionMinutes, sessionMinutes, endTime,
-  COUNTED_STATUSES, getPlan, getTopic, getRate, parseOptions, resolveFee,
+  COUNTED_STATUSES, getPlan, getTopic, getRate, parseOptions, resolveFee, resolveAssignType, shareOf,
   clientUsage, clientUsageAll, counselorLoad, nextWeekHint, weekRange, checkBooking, pickRoom, noShowCharge,
   earliestBookableDate, bookingCutoffReason
 };

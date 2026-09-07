@@ -1115,6 +1115,22 @@ ensureColumns('appointments', {
 ensureColumns('clients', {
   line_user_id: "TEXT NOT NULL DEFAULT ''"           // LINE 官方帳號綁定（提醒推播用）
 });
+
+// 指定案與所內派案的抽成常常不一樣：個案自己點名心理師（指定案），案源算心理師的，
+// 通常抽成較高；所方派給他的（派案），案源是所方，抽成較低。
+// 這裡不另開一張規則表，而是在既有的兩個層級各加一組「派案時的數字」：
+//   share_mode_assigned 空字串 / share_percent_assigned 與 share_fixed_assigned 為 0
+//   ＝沒有另訂，派案沿用指定案那組。既有資料因此不受影響。
+ensureColumns('service_plans', {
+  share_mode_assigned: "TEXT NOT NULL DEFAULT ''",
+  share_percent_assigned: 'REAL NOT NULL DEFAULT 0',
+  share_fixed_assigned: 'INTEGER NOT NULL DEFAULT 0'
+});
+ensureColumns('plan_counselors', {
+  share_mode_assigned: "TEXT NOT NULL DEFAULT ''",
+  share_percent_assigned: 'REAL NOT NULL DEFAULT 0',
+  share_fixed_assigned: 'INTEGER NOT NULL DEFAULT 0'
+});
 ensureColumns('users', {
   line_user_id: "TEXT NOT NULL DEFAULT ''"           // 心理師的 LINE 綁定（行程提醒推播）
 });

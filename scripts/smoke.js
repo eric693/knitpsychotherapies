@@ -283,6 +283,34 @@ function startServer() {
     await admin.ok('DELETE', `/api/appointments/${a.id}`);
     await admin.ok('DELETE', `/api/service-plans/${plan.id}`);
   });
+  await test('指定案與所內派案可以抽不同比例', async () => {
+    // 個案自己點名心理師（指定案）案源算心理師的，抽成通常較高；
+    // 所方派給他的（派案）案源是所方，抽成較低。兩者要能在同一個方案裡分開設。
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '抽成測試方案', kind: 'self', fee: 2000,
+      share_mode: 'percent', share_percent: 70,          // 指定案 70%
+      share_mode_assigned: 'percent', share_percent_assigned: 55   // 派案 55%
+    });
+    // 手機留空：這三筆只是用來驗抽成，重複的號碼會被個案專區的登入檢查擋下
+    const mk = async (name, assign) => (await admin.ok('POST', '/api/clients',
+      { name, assign_type: assign })).id;
+    const cD = await mk('抽成測試・指定', 'designated');
+    const cA = await mk('抽成測試・派案', 'assigned');
+    const cO = await mk('抽成測試・未註記', '');
+    const share = async id => (await admin.ok('GET',
+      `/api/plan-quote?plan_id=${plan.id}&counselor_id=2&client_id=${id}`)).counselor_share;
+    equal(await share(cD), 1400, '指定案 2000 × 70% = 1400');
+    equal(await share(cA), 1100, '派案 2000 × 55% = 1100');
+    equal(await share(cO), 1400, '沒註記案件來源的舊個案視同指定案，帳不會因為新欄位而變動');
+
+    // 派案那組留空＝沿用指定案，既有方案不受影響
+    await admin.ok('PUT', `/api/service-plans/${plan.id}`,
+      { share_mode_assigned: '', share_percent_assigned: 0 });
+    equal(await share(cA), 1400, '派案沒另訂比例時沿用指定案的 70%');
+
+    for (const id of [cD, cA, cO]) await admin.ok('DELETE', `/api/clients/${id}`);
+    await admin.ok('DELETE', `/api/service-plans/${plan.id}`);
+  });
   await test('明顯打錯的日期時間會被擋下', async () => {
     // 年份打錯（2062）、時間顛倒這類輸入，若讓它成立會變成永遠不會發生卻佔著額度的預約
     await lin.fails('POST', '/api/appointments',
