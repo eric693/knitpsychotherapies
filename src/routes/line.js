@@ -51,9 +51,21 @@ function bookingLinkFor(lineUserId) {
   return `${base}${base.includes('?') ? '&' : '?'}bk=${token}`;
 }
 
-function helpFlex(lineUserId) {
+// 個案在官方帳號隨手打字時要回什麼，由「LINE 串接」頁的「一般訊息的回覆方式」決定：
+//   card 完整卡片（預設）／ text 一行文字加連結 ／ none 不回覆
+// 圖文選單已經有「我要預約」按鈕的所方，多半不想每次打字都跳出一張大卡片，
+// 但「完全不回」在對方主動求助時會像已讀不回，所以中間留了純文字這個選項。
+function helpReply(lineUserId) {
+  const mode = getSetting('line_reply_mode', 'card');
+  if (mode === 'none') return null;
+  // 專屬連結帶 token，表單送出時才換得回這個人的 userId，提醒也才推得回來
   const url = lineUserId ? bookingLinkFor(lineUserId) : getSetting('booking_public_url', '');
   const phone = getSetting('center_phone', '');
+  if (mode === 'text') {
+    // 純文字底下沒有按鈕，所以用專屬的短句，不能沿用卡片那句「點下方開始預約」
+    const lines = [line.msgText('line_text_help_plain'), url].filter(Boolean);
+    return line.textMessage(lines.join('\n'));
+  }
   return line.card({
     title: getSetting('center_name'),
     subtitle: '線上預約與提醒',
@@ -94,7 +106,8 @@ async function handleEvent(ev) {
       await line.replyMessages(ev.replyToken, [line.textMessage('綁定碼不正確或已失效，請向諮商所索取新的綁定碼。')]);
       return;
     }
-    await line.replyMessages(ev.replyToken, [helpFlex(lineUserId)]);
+    const reply = helpReply(lineUserId);
+    if (reply) await line.replyMessages(ev.replyToken, [reply]);
     return;
   }
 
@@ -137,9 +150,12 @@ async function handleEvent(ev) {
     return;
   }
 
-  // 加好友當下就給預約入口，個案不必再問「要怎麼預約」
+  // 加好友當下就給預約入口，個案不必再問「要怎麼預約」。
+  // 這一則不受「一般訊息回覆方式」的 none 影響 —— 剛加好友卻完全沒有招呼，
+  // 對方會以為加錯帳號；真的不想要，把回覆方式設成純文字就好。
   if (ev.type === 'follow') {
-    await line.replyMessages(ev.replyToken, [helpFlex(lineUserId)]);
+    const reply = helpReply(lineUserId) || line.textMessage(line.msgText('line_text_help_intro'));
+    await line.replyMessages(ev.replyToken, [reply]);
   }
 }
 
@@ -151,6 +167,8 @@ async function handleEvent(ev) {
 
 const LINE_SETTING_KEYS = ['line_official_name', 'line_official_id', 'line_add_friend_url', 'line_reminder_hours',
   'line_counselor_daily_enabled', 'line_counselor_daily_time', 'line_flex_color', 'booking_public_url',
+  // 個案隨手打字時要回什麼：card 完整卡片／text 一行文字加連結／none 不回覆
+  'line_reply_mode',
   ...Object.keys(line.TEXT_DEFAULTS)];
 const MASK = '••••••••';
 

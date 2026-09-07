@@ -4,6 +4,7 @@
 const TEXT_FIELDS = [
   ['line_text_help_intro', '預約說明卡：開頭一句'],
   ['line_text_help_note', '預約說明卡：灰底注意事項', 3],
+  ['line_text_help_plain', '純文字回覆模式：整段文字（連結會接在後面）', 2],
   ['line_text_bound', '綁定完成卡：開頭一句（{name} 為對方姓名）'],
   ['line_text_bound_note', '綁定完成卡：灰底注意事項', 2],
   ['line_text_request_intro', '收到預約申請：開頭一句'],
@@ -389,7 +390,20 @@ const LINEPAGE = {
     [['1', '啟用'], ['0', '關閉']], { value: s.line_counselor_daily_enabled })}
           ${UI.input('line_counselor_daily_time', '每日推播時間', { type: 'time', value: s.line_counselor_daily_time })}
           ${UI.input('line_flex_color', 'Flex 卡片主色', { value: s.line_flex_color })}
-          ${UI.input('booking_public_url', '線上預約表單網址（放在 LINE 卡片按鈕）', { value: s.booking_public_url, full: true })}
+          ${UI.select('line_reply_mode', '個案隨手打字時要回什麼',
+    [['card', '完整卡片（含開始預約、打電話按鈕）'], ['text', '一行文字加連結'], ['none', '不回覆（圖文選單已有入口）']],
+    { value: s.line_reply_mode || 'card' })}
+          ${UI.input('booking_public_url', '線上預約表單網址', { value: s.booking_public_url, full: true })}
+        </div>
+        <div style="font-size:12.5px;color:var(--muted);line-height:1.9;margin-top:8px">
+          <strong>圖文選單要放的網址</strong>就是上面這個「線上預約表單網址」，
+          在 LINE 官方帳號後台的圖文選單，把「我要預約」那一格設成「連結」再貼上即可。<br>
+          選了「不回覆」之後，個案打字就不會再跳出預約卡片；但<strong>剛加好友時仍會回一則</strong>，
+          否則對方會以為加錯帳號。<br>
+          <strong>注意：</strong>卡片上的「開始預約」帶的是<u>每個人專屬的網址</u>，表單送出後系統就知道是誰，
+          預約結果與晤談提醒都推得回去；圖文選單對所有人是同一條網址，沒有這個資訊。
+          所以從選單預約時，系統改用<u>表單上填的手機</u>去對已綁定的個案 —— 手機對得上就照樣收得到通知，
+          新個案或手機填不同號碼的，就要等櫃檯確認後才有通知。
         </div>
         <div class="toolbar" style="margin-top:10px"><div class="spacer"></div>
           <button class="btn" id="save-opts">儲存</button></div>

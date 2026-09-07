@@ -29,6 +29,8 @@ function centerInfo() {
 const TEXT_DEFAULTS = {
   line_text_help_intro: '點下方「開始預約」填寫表單，送出後我們會在這裡通知您預約結果與晤談提醒。',
   line_text_help_note: '已是本所個案並收到 6 碼綁定碼，直接在此輸入即可接收提醒。\n電話預約：{phone}\n如遇立即危機請撥 1925 或 119，本帳號非緊急聯絡管道。',
+  // 純文字回覆模式用的短句：底下沒有按鈕，所以不能沿用卡片那句「點下方開始預約」
+  line_text_help_plain: '您好，線上預約請點下方連結。電話預約：{phone}\n如遇立即危機請撥 1925 或 119，本帳號非緊急聯絡管道。',
   line_text_bound: '{name} 您好，之後預約成立與晤談提醒都會透過這裡通知您。',
   line_text_bound_note: '本帳號僅提供預約與行政通知，不處理晤談內容；如遇立即危機請撥 1925 或 119。',
   line_text_request_intro: '我們將盡快與您確認，確認後會再以此通知您。',

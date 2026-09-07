@@ -183,6 +183,10 @@ router.post('/public/bookings', publicWrite, async (req, res) => {
       db.prepare('UPDATE booking_links SET used_at = ? WHERE id = ?').run(nowStamp(), link.id);
     }
   }
+  // 從圖文選單那種固定網址進來的沒有 token（選單對每個人都是同一條網址）。
+  // 這時若填的手機對得上已經綁定過的個案，就用他綁定的 userId ——
+  // 否則舊個案從選單預約，結果與提醒都推不回去，他只會覺得「系統壞了」。
+  if (!lineUserId && client && client.line_user_id) lineUserId = client.line_user_id;
 
   const info = db.prepare(`INSERT INTO booking_requests
     (name, phone, email, gender, birth_date, is_new, client_id, plan_id, topic_id, counselor_id,
