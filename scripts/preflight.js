@@ -122,6 +122,49 @@ info.push(`備份檔 ${backups.length} 份，最新：${backups[backups.length -
   }
 }
 
+// ---- 線上跑的是不是這份程式碼 ----
+// 這台機器上有兩個名字很像的部署（pm2 knitpsychotherapies 指向這裡、
+// pm2 goodmoodpsy 指向另一個站）。重啟錯的那支時，程式碼改了卻沒生效，
+// 而且畫面上看不出任何異狀 —— 只會覺得「明明改了卻沒用」。
+// 這裡比對「服務程序的啟動時間」與「原始碼的最後修改時間」，晚於啟動的就是還沒載入。
+{
+  const fs = require('fs'), path = require('path'), cp = require('child_process');
+  const root = path.join(__dirname, '..');
+  let pid = 0;
+  try {
+    // 找出正在聽這個 port、而且執行的是本目錄 server.js 的程序
+    const out = cp.execSync(`ss -lptnH 'sport = :${process.env.PORT || 3440}' 2>/dev/null`, { encoding: 'utf8' });
+    pid = Number((out.match(/pid=(\d+)/) || [])[1]) || 0;
+  } catch { /* 沒有 ss 或查不到就跳過這項 */ }
+  if (!pid) {
+    warns.push('查不到正在提供服務的程序，無法確認線上跑的是不是這份程式碼');
+  } else {
+    let cmd = '';
+    try { cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' '); } catch { /* 略過 */ }
+    const started = Number(cp.execSync(`ps -o lstart= -p ${pid} | xargs -0 date +%s -d`, { encoding: 'utf8' }).trim());
+    if (!cmd.includes(root)) {
+      problems.push(`正在服務的程序不是這個目錄啟動的（${cmd.trim()}）——你改的可能不是線上那一份`);
+    } else {
+      const stale = [];
+      const walk = d => {
+        for (const f of fs.readdirSync(d, { withFileTypes: true })) {
+          if (f.name === 'node_modules' || f.name.startsWith('.')) continue;
+          const full = path.join(d, f.name);
+          if (f.isDirectory()) walk(full);
+          else if (/\.(js|sql)$/.test(f.name) && fs.statSync(full).mtimeMs / 1000 > started) {
+            stale.push(path.relative(root, full));
+          }
+        }
+      };
+      walk(path.join(root, 'src'));
+      check(!stale.length,
+        `這些檔案改於服務啟動之後，線上還在跑舊的：${stale.slice(0, 8).join('、')}`
+        + `${stale.length > 8 ? ` 等 ${stale.length} 個` : ''}。請執行 npm run deploy`);
+      info.push(`服務程序 pid ${pid}，啟動於 ${new Date(started * 1000).toLocaleString('zh-TW')}`);
+    }
+  }
+}
+
 // ---- 操作說明 ----
 // 每個頁面都要有「怎麼用」的說明（App.page 的 help）。少了它，交接時只能口耳相傳，
 // 而且最先漏掉的一定是最複雜的那幾頁。這裡直接掃前端原始碼，漏一頁就報一次。
