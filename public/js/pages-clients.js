@@ -511,6 +511,7 @@ App.page('client', {
     '上方按鈕是這位個案的常用動作：編輯資料、新增預約、撰寫晤談紀錄、登錄危機事件。',
     '下方分頁依序是晤談紀錄、處遇計畫、量表、附件、危機事件與同意書。',
     '晤談紀錄僅主責心理師、督導與管理者可讀；實習生的紀錄要送督導覆核才定稿。',
+    '「晤談歷程」的「異動／備註」欄會標出個案自己按的改期與取消申請。逾期取消時狀態仍是「已預約」，要看這一欄才知道有待處理的取消申請。',
   ],
   module: 'clients',
   async render(el, id) {
@@ -601,11 +602,24 @@ App.page('client', {
       }
 
       if (key === 'appointments') {
-        body.innerHTML = `<div class="card">${UI.table(['日期', '時間', '類型', '心理師', '狀態', '費用', '紀錄'],
+        // 個案自己改期或申請取消，狀態欄仍是「已預約」，只看狀態會以為什麼都沒發生。
+        // 這些異動要在同一列講清楚，櫃檯翻歷程時才不會漏掉待處理的取消申請。
+        const change = a => [
+          a.cancel_requested_at
+            ? `${UI.tag('個案申請取消', 'warn')} ${UI.esc(a.cancel_requested_at)}`
+              + `${a.cancel_request_reason ? '<br>事由：' + UI.esc(a.cancel_request_reason) : ''}`
+            : '',
+          a.rescheduled_from
+            ? `${UI.tag('已改期', 'ok')} 原 ${UI.esc(a.rescheduled_from)}`
+              + `${a.reschedule_count > 1 ? `（共改 ${a.reschedule_count} 次）` : ''}`
+            : '',
+          a.cancel_reason ? UI.esc(a.cancel_reason) : ''
+        ].filter(Boolean).join('<br>');
+        body.innerHTML = `<div class="card">${UI.table(['日期', '時間', '類型', '心理師', '狀態', '費用', '異動／備註'],
           c.appointments.map(a => `<tr><td>${a.date}</td><td>${a.start_time}</td>
             <td>${UI.esc(TW.appt_type[a.type] || a.type)}</td><td>${UI.esc(a.counselor_name || '')}</td>
             <td>${stateTag('appt_status', a.status)}</td><td>${UI.fmtMoney(a.fee)}</td>
-            <td>${a.cancel_reason ? UI.esc(a.cancel_reason) : ''}</td></tr>`), '尚無晤談紀錄')}</div>`;
+            <td style="font-size:12.5px">${change(a)}</td></tr>`), '尚無晤談紀錄')}</div>`;
       }
 
       if (key === 'notes') {
