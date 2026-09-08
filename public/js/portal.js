@@ -180,14 +180,26 @@ const Portal = {
     },
 
     async book(el) {
-      const appts = await GET(PAPI('/appointments'));
+      const [appts, pending] = await Promise.all([
+        GET(PAPI('/appointments')), GET(PAPI('/booking-requests')).catch(() => [])
+      ]);
       const upcoming = appts.filter(a => ['booked', 'arrived'].includes(a.status) && a.date >= UI.today());
       const past = appts.filter(a => !upcoming.includes(a)).slice(0, 15);
+      // 家人的約用姓名標出來，一整頁時間混在一起會分不出是誰的
+      const whose = a => (a.for_name ? `<span class="tag">${UI.esc(a.for_name)}</span> ` : '');
       el.innerHTML = `
         ${Portal.me.booking_enabled ? '<button class="btn" id="new" style="width:100%;margin-bottom:14px">預約新時段</button>' : ''}
+        ${pending.length ? `<div class="card"><h3>待櫃檯確認的申請</h3>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">
+            這些方案需由櫃檯確認後才算完成預約，時段尚未保留給您。</div>
+          ${pending.map(r => `<div style="border-bottom:1px dashed var(--border);padding:8px 0">
+            <div style="font-size:15px;font-weight:600">${r.for_name ? `<span class="tag">${UI.esc(r.for_name)}</span> ` : ''}${r.date}（${UI.weekdayName(r.date)}）${r.start_time}</div>
+            <div style="font-size:13px;color:var(--muted)">${UI.esc(r.plan_name || '')}　${UI.esc(r.counselor_name || '')}</div>
+            <button class="btn tiny secondary" style="margin-top:6px" data-wd="${r.id}">撤回申請</button>
+          </div>`).join('')}</div>` : ''}
         <div class="card"><h3>即將到來</h3>
           ${upcoming.length ? upcoming.map(a => `<div style="border-bottom:1px dashed var(--border);padding:8px 0">
-            <div style="font-size:15px;font-weight:600">${a.date}（${UI.weekdayName(a.date)}）${a.start_time}-${a.end_time}</div>
+            <div style="font-size:15px;font-weight:600">${whose(a)}${a.date}（${UI.weekdayName(a.date)}）${a.start_time}-${a.end_time}</div>
             <div style="font-size:13px;color:var(--muted)">${UI.esc(a.counselor_name || '')}　${UI.esc(TW.appt_type[a.type] || '')}　${stateTag('appt_status', a.status)}</div>
             ${a.mode === 'online' && a.meeting_url ? `<a class="btn tiny" style="margin-top:6px;margin-right:6px"
               href="${UI.esc(a.meeting_url)}" target="_blank" rel="noopener noreferrer">進入視訊</a>` : ''}
@@ -203,10 +215,21 @@ const Portal = {
           </div>`).join('') : '<div style="color:var(--muted);font-size:14px">目前沒有預約</div>'}
         </div>
         <div class="card"><h3>歷史紀錄</h3>
-          ${UI.table(['日期', '時間', '狀態'], past.map(a => `<tr><td>${a.date}</td>
-            <td>${a.start_time}</td><td>${stateTag('appt_status', a.status)}</td></tr>`), '尚無紀錄')}</div>`;
+          ${UI.table(['日期', '時間', '對象', '狀態'], past.map(a => `<tr><td>${a.date}</td>
+            <td>${a.start_time}</td><td>${UI.esc(a.for_name || '本人')}</td>
+            <td>${stateTag('appt_status', a.status)}</td></tr>`), '尚無紀錄')}</div>`;
       const nb = el.querySelector('#new');
       if (nb) nb.onclick = () => Portal.bookDialog();
+      el.querySelectorAll('[data-wd]').forEach(b => {
+        b.onclick = async () => {
+          if (!await UI.confirm('撤回這筆預約申請？')) return;
+          try {
+            await POST(PAPI(`/booking-requests/${b.dataset.wd}/cancel`), {});
+            UI.toast('已撤回申請');
+            Portal.go('book');
+          } catch (e) { UI.err(e); }
+        };
+      });
       el.querySelectorAll('[data-cancel]').forEach(b => {
         b.onclick = () => {
           const a = upcoming.find(x => x.id === Number(b.dataset.cancel));
@@ -357,7 +380,7 @@ const Portal = {
       title: '改期',
       hideFooter: true,
       body: `<div style="font-size:14px;margin-bottom:10px">
-          原時間：${a.date}（${UI.weekdayName(a.date)}）${a.start_time}-${a.end_time}　${UI.esc(a.counselor_name || '')}</div>
+          ${a.for_name ? `${UI.esc(a.for_name)}的晤談<br>` : ''}原時間：${a.date}（${UI.weekdayName(a.date)}）${a.start_time}-${a.end_time}　${UI.esc(a.counselor_name || '')}</div>
         <div class="form-grid">${UI.input('date', '改到哪一天', { type: 'date', value: UI.addDays(UI.today(), 1), full: true })}</div>
         <div id="slots" style="margin-top:12px"></div>`
     });
@@ -366,7 +389,9 @@ const Portal = {
       const date = m.body.querySelector('[name=date]').value;
       box.innerHTML = '查詢中...';
       try {
-        const d = await GET(PAPI('/slots?date=' + date));
+        // 家人的約要以「那位家人」查時段，否則會拿到自己的主責心理師而找不到原心理師
+        const d = await GET(PAPI(`/slots?date=${date}${a.plan_id ? '&plan_id=' + a.plan_id : ''}`
+          + `${a.for_name ? '&for_client_id=' + a.client_id : ''}`));
         const inp = m.body.querySelector('[name=date]');
         inp.min = d.min_date; inp.max = d.max_date;
         // 改期不換心理師，只列原心理師的時段
@@ -393,44 +418,101 @@ const Portal = {
     draw();
   },
 
+  // 預約：先選服務方案再選時段。舊個案臨時要約伴侶諮商或親職諮詢時，
+  // 時段長度與費用都要照該方案算，不能一律套用預設的個別晤談。
   async bookDialog() {
     const today = UI.today();
-    let date = UI.addDays(today, 1);
+    const list = Portal.me.plans || [];
+    const family = Portal.me.family || [];
+    const money = n => (Number(n) > 0 ? `NT$ ${Number(n).toLocaleString()}` : '費用另計');
     const m = UI.modal({
       title: '預約時段',
-      body: `<div class="form-grid">${UI.input('date', '日期', { type: 'date', value: date, full: true })}</div>
+      body: `<div class="form-grid">
+          ${family.length ? UI.select('for_client_id', '預約對象',
+    [['', '我自己']].concat(family.map(f => [f.id, `${f.name}${f.relationship ? `（${f.relationship}）` : ''}`])),
+    { full: true, search: false }) : ''}
+          ${list.length ? UI.select('plan_id', '服務方案',
+    [['', '一般晤談（沿用原本的安排）']].concat(list.map(p => [p.id, `${p.name}　${p.session_minutes} 分鐘`])),
+    { full: true, search: false }) : ''}
+          ${UI.input('date', '日期', { type: 'date', value: UI.addDays(today, 1), full: true })}
+        </div>
+        <div id="plan-note" style="font-size:13px;color:var(--muted);margin-top:-4px"></div>
+        <div id="fee-pick" style="margin-top:8px"></div>
         <div id="slots" style="margin-top:12px"></div>`,
       hideFooter: true
     });
+    const planSel = m.body.querySelector('[name=plan_id]');
+    const forSel = m.body.querySelector('[name=for_client_id]');
+    const dateInp = m.body.querySelector('[name=date]');
+    const curPlan = () => list.find(p => String(p.id) === String(planSel && planSel.value)) || null;
+    // 換人就要重查：每個人的主責心理師、方案資格與已用次數都不一樣
+    const forId = () => (forSel && forSel.value) || '';
+
+    // 選了方案就先把時長、費用與說明講清楚，個案不必等送出才知道這一次要多久、多少錢
+    const drawPlan = () => {
+      const p = curPlan();
+      m.body.querySelector('#plan-note').innerHTML = p
+        ? `${p.session_minutes} 分鐘・${money(p.client_pay)}${p.default_mode === 'online' ? '・線上視訊' : ''}
+           ${p.venue_fee ? `（另含場地費 NT$ ${p.venue_fee}）` : ''}
+           ${p.intro ? `<br>${UI.esc(p.intro)}` : ''}` : '';
+      // 可選金額的方案（如伴侶／家族）讓個案自己挑，後端只接受設定裡列出的金額
+      const box = m.body.querySelector('#fee-pick');
+      box.innerHTML = p && p.fee_mode === 'choice' && p.fee_options.length
+        ? `<div class="form-grid">${UI.select('fee_choice', '費用方案',
+    p.fee_options.map(v => [v, `NT$ ${Number(v).toLocaleString()}`]), { full: true, search: false })}</div>`
+        : '';
+    };
+
     const draw = async () => {
       const box = m.body.querySelector('#slots');
+      const p = curPlan();
+      const date = dateInp.value;
       box.innerHTML = '查詢中...';
-      const d = await GET(PAPI('/slots?date=' + m.body.querySelector('[name=date]').value));
-      const inp = m.body.querySelector('[name=date]');
-      inp.min = d.min_date; inp.max = d.max_date;
-      const any = d.counselors.some(c => c.slots.length);
-      box.innerHTML = any ? d.counselors.map(c => `
-        <div style="margin-bottom:10px"><div style="font-size:13.5px;font-weight:600">${UI.esc(c.name)}</div>
-        ${c.slots.length ? c.slots.map(s => `<button class="btn small secondary slot-btn" type="button"
-          data-c="${c.id}" data-s="${s.start_time}">${s.start_time}</button>`).join('') : '<span style="color:var(--muted);font-size:13px">無開放時段</span>'}
-        </div>`).join('') : `<div style="color:var(--muted);font-size:14px">此日無可預約時段，請換一天或來電洽詢。
-          <br>可預約範圍：${d.min_date} ~ ${d.max_date}</div>`;
-      box.querySelectorAll('[data-s]').forEach(b => {
-        b.onclick = async () => {
-          if (!await UI.confirm(`預約 ${m.body.querySelector('[name=date]').value} ${b.dataset.s}？`)) return;
-          try {
-            await POST(PAPI('/appointments'), {
-              date: m.body.querySelector('[name=date]').value,
-              start_time: b.dataset.s, counselor_id: Number(b.dataset.c)
-            });
-            UI.toast('已送出預約');
-            m.close();
-            Portal.go('book');
-          } catch (e) { UI.err(e); }
-        };
-      });
+      try {
+        const d = await GET(PAPI(`/slots?date=${date}${p ? '&plan_id=' + p.id : ''}${forId() ? '&for_client_id=' + forId() : ''}`));
+        dateInp.min = d.min_date; dateInp.max = d.max_date;
+        if (d.plan_error) {
+          box.innerHTML = `<div style="color:var(--danger);font-size:14px">${UI.esc(d.plan_error)}
+            <br>如需協助請來電洽詢。</div>`;
+          return;
+        }
+        if (d.plan_no_counselor) {
+          box.innerHTML = '<div style="color:var(--muted);font-size:14px">此方案需由本所指定的心理師進行，請來電洽詢安排。</div>';
+          return;
+        }
+        const any = d.counselors.some(c => c.slots.length);
+        box.innerHTML = any ? d.counselors.map(c => `
+          <div style="margin-bottom:10px"><div style="font-size:13.5px;font-weight:600">${UI.esc(c.name)}</div>
+          ${c.slots.length ? c.slots.map(s => `<button class="btn small secondary slot-btn" type="button"
+            data-c="${c.id}" data-s="${s.start_time}">${s.start_time}</button>`).join('')
+    : `<span style="color:var(--muted);font-size:13px">${UI.esc(c.full || '無開放時段')}</span>`}
+          </div>`).join('') : `<div style="color:var(--muted);font-size:14px">此日無可預約時段，請換一天或來電洽詢。
+            <br>可預約範圍：${d.min_date} ~ ${d.max_date}</div>`;
+        box.querySelectorAll('[data-s]').forEach(b => {
+          b.onclick = async () => {
+            const feeSel = m.body.querySelector('[name=fee_choice]');
+            const detail = p ? `${p.name}（${p.session_minutes} 分鐘）` : '晤談';
+            const target = family.find(f => String(f.id) === String(forId()));
+            if (!await UI.confirm(`${target ? `替${target.name}預約` : '預約'} ${dateInp.value} ${b.dataset.s} 的${detail}？`)) return;
+            try {
+              const r = await POST(PAPI('/appointments'), {
+                date: dateInp.value, start_time: b.dataset.s, counselor_id: Number(b.dataset.c),
+                plan_id: p ? p.id : '', fee_choice: feeSel ? feeSel.value : '',
+                for_client_id: forId()
+              });
+              // 需櫃檯確認的方案送出的是申請，不能講成「已預約」，否則個案會以為時段保留住了
+              UI.toast(r.pending ? '已送出預約申請，待櫃檯確認' : '已送出預約');
+              m.close();
+              Portal.go('book');
+            } catch (e) { UI.err(e); }
+          };
+        });
+      } catch (e) { box.innerHTML = `<div style="color:var(--danger);font-size:14px">${UI.esc(e.message)}</div>`; }
     };
-    m.body.querySelector('[name=date]').onchange = draw;
+    if (planSel) planSel.onchange = () => { drawPlan(); draw(); };
+    if (forSel) forSel.onchange = draw;
+    dateInp.onchange = draw;
+    drawPlan();
     draw();
   },
 

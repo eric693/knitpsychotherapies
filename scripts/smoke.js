@@ -135,6 +135,11 @@ const PDF = Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Roo
 
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const addDays = (dateStr, n) => { const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + n); return ymd(d); };
+const plusMinutes = (t, n) => {
+  const [h, m] = t.split(':').map(Number);
+  const v = h * 60 + m + n;
+  return `${String(Math.floor(v / 60)).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`;
+};
 // 取未來第一個指定星期的日期（seed 的 lin 排班在週一／三／五）
 function nextWeekday(wd, minDaysAhead = 2) {
   let d = addDays(ymd(new Date()), minDaysAhead);
@@ -529,6 +534,106 @@ function startServer() {
     portalAppt = r.id;
     // 個案端排的約也要由系統指派諮商室，否則週檢視會一直掛在「未指定空間」
     assert(r.room_id, '個案端預約應自動指派諮商室');
+  });
+  // 舊個案臨時要約伴侶或親職時段：專區要能選方案，時長、費用與類型都跟著方案走
+  await test('個案端可依方案預約，時長與費用照方案算', async () => {
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '專區方案測試（90 分鐘）', kind: 'self', appt_type: 'couple',
+      fee: 3300, session_minutes: 90, portal_visible: 1, require_review: 0
+    });
+    try {
+      const me = await portal.ok('GET', '/api/portal/me');
+      assert((me.plans || []).some(x => x.id === plan.id), '專區應列出開放線上顯示的方案');
+      const target = addDays(monday, 30);   // 週三，避開其他測試佔用與請假的日子
+      const d = await portal.ok('GET', `/api/portal/slots?date=${target}&plan_id=${plan.id}`);
+      equal(d.session_minutes, 90, '時段長度應照方案');
+      const c = d.counselors.find(x => x.slots.length);
+      assert(c, `帶方案時應仍有時段，實際：${JSON.stringify(d)}`);
+      equal(c.slots[0].end_time, plusMinutes(c.slots[0].start_time, 90), '時段結束時間應為開始 +90 分鐘');
+      const r = await portal.ok('POST', '/api/portal/appointments',
+        { date: target, start_time: c.slots[0].start_time, counselor_id: c.id, plan_id: plan.id });
+      const row = (await admin.ok('GET', `/api/appointments?date=${target}`)).find(a => a.id === r.id);
+      equal(row.plan_id, plan.id, '預約應掛上方案');
+      equal(row.type, 'couple', '晤談類型應照方案');
+      equal(row.fee, 3300, '費用應照方案');
+      equal(row.end_time, plusMinutes(row.start_time, 90), '結束時間應為 90 分鐘後');
+      await admin.ok('DELETE', `/api/appointments/${r.id}`);
+    } finally {
+      await admin.ok('DELETE', `/api/service-plans/${plan.id}`);
+    }
+  });
+  // 需櫃檯確認的方案：專區送出的是申請，時段不能被線上直接佔走
+  await test('需櫃檯確認的方案，專區送出的是申請而非預約', async () => {
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '專區方案測試（需審核）', kind: 'self', fee: 2000, portal_visible: 1, require_review: 1
+    });
+    try {
+      const target = addDays(monday, 30);
+      const d = await portal.ok('GET', `/api/portal/slots?date=${target}&plan_id=${plan.id}`);
+      const c = d.counselors.find(x => x.slots.length);
+      assert(c, '應有可選時段');
+      const t = c.slots[0].start_time;
+      const r = await portal.ok('POST', '/api/portal/appointments',
+        { date: target, start_time: t, counselor_id: c.id, plan_id: plan.id });
+      assert(r.pending, '應回覆為待確認的申請');
+      const after = await admin.ok('GET', `/api/appointments?date=${target}`);
+      assert(!after.some(a => a.start_time === t && a.plan_id === plan.id), '不應直接成立預約');
+      const mine = await portal.ok('GET', '/api/portal/booking-requests');
+      assert(mine.some(x => x.id === r.request_id), '專區應列出待確認的申請');
+      // 還沒處理的申請，個案可以自己撤回
+      await portal.ok('POST', `/api/portal/booking-requests/${r.request_id}/cancel`, {});
+      const left = await portal.ok('GET', '/api/portal/booking-requests');
+      assert(!left.some(x => x.id === r.request_id), '撤回後不應再列出');
+    } finally {
+      await admin.ok('DELETE', `/api/service-plans/${plan.id}`);
+    }
+  });
+  // 家人代訂：授權只能由櫃檯建立，沒授權就約不到別人
+  await test('家人代訂：授權後可替家人預約，未授權則擋下', async () => {
+    const others = await admin.ok('GET', '/api/clients');
+    const child = others.find(x => x.id !== clientId);
+    const target = addDays(monday, 30);
+    // 尚未授權
+    await portal.fails('GET', `/api/portal/slots?date=${target}&for_client_id=${child.id}`, undefined, '未授權');
+    await portal.fails('POST', '/api/portal/appointments',
+      { date: target, start_time: '14:00', counselor_id: 2, for_client_id: child.id }, '未授權');
+    const f = await admin.ok('POST', `/api/clients/${clientId}/family`,
+      { member_id: child.id, relationship: '子女' });
+    try {
+      const me = await portal.ok('GET', '/api/portal/me');
+      assert((me.family || []).some(x => x.id === child.id), '專區應列出可代訂的家人');
+      const d = await portal.ok('GET', `/api/portal/slots?date=${target}&for_client_id=${child.id}`);
+      const c = d.counselors.find(x => x.slots.length);
+      assert(c, '應查得到家人的可預約時段');
+      const r = await portal.ok('POST', '/api/portal/appointments',
+        { date: target, start_time: c.slots[0].start_time, counselor_id: c.id, for_client_id: child.id });
+      const row = (await admin.ok('GET', `/api/appointments?date=${target}`)).find(a => a.id === r.id);
+      equal(row.client_id, child.id, '預約應掛在家人名下');
+      // 代訂的約要出現在代訂者的專區清單，並且改得動
+      const mine = await portal.ok('GET', '/api/portal/appointments');
+      const seen = mine.find(a => a.id === r.id);
+      assert(seen && seen.for_name, '代訂的約應列出並標示對象');
+      await portal.ok('POST', `/api/portal/appointments/${r.id}/cancel`, { reason: '測試取消' });
+      const after = (await admin.ok('GET', `/api/appointments?date=${target}`)).find(a => a.id === r.id);
+      equal(after.status, 'cancelled', '代訂者應可取消家人的約');
+    } finally {
+      await admin.ok('DELETE', `/api/clients/${clientId}/family/${f.id}`);
+    }
+    // 取消授權後就約不到了
+    await portal.fails('GET', `/api/portal/slots?date=${target}&for_client_id=${child.id}`, undefined, '未授權');
+  });
+  await test('專區不接受未開放線上顯示的方案', async () => {
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '專區方案測試（不開放）', kind: 'self', fee: 2000, portal_visible: 0
+    });
+    try {
+      const target = addDays(monday, 30);
+      await portal.fails('GET', `/api/portal/slots?date=${target}&plan_id=${plan.id}`, undefined, '未開放');
+      await portal.fails('POST', '/api/portal/appointments',
+        { date: target, start_time: '14:00', counselor_id: 2, plan_id: plan.id }, '未開放');
+    } finally {
+      await admin.ok('DELETE', `/api/service-plans/${plan.id}`);
+    }
   });
   await test('改期後不會與他人共用同一諮商室', async () => {
     // 先讓櫃檯把同一時段的諮商室 1 排給別的心理師，再讓個案改期過去

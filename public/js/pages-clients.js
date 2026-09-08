@@ -512,6 +512,7 @@ App.page('client', {
     '下方分頁依序是晤談紀錄、處遇計畫、量表、附件、危機事件與同意書。',
     '晤談紀錄僅主責心理師、督導與管理者可讀；實習生的紀錄要送督導覆核才定稿。',
     '「晤談歷程」的「異動／備註」欄會標出個案自己按的改期與取消申請。逾期取消時狀態仍是「已預約」，要看這一欄才知道有待處理的取消申請。',
+    '基本資料頁的「可在專區代訂的家人」：家長要替孩子、或一方要替伴侶在個案專區排時間時在這裡授權。家人各自是獨立的個案，授權只開放替他排時間、改期與取消，看不到對方的紀錄、量表與費用。',
   ],
   module: 'clients',
   async render(el, id) {
@@ -593,7 +594,57 @@ App.page('client', {
             ${c.is_minor ? g('法定代理人', `${c.guardian_name}（${c.guardian_relationship}）${c.guardian_phone}`) : ''}
             ${g('緊急聯絡人', `${c.emergency_name}（${c.emergency_relationship}）${c.emergency_phone}`)}
           </div>
-          <div style="margin-top:12px"><button class="btn small secondary" id="rst">重設個案端密碼</button></div></div>`;
+          <div style="margin-top:12px"><button class="btn small secondary" id="rst">重設個案端密碼</button></div></div>
+          <div class="card"><h3>可在專區代訂的家人</h3>
+            <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
+              家長要替孩子、或一方要替伴侶在個案專區排時間時，在這裡授權。
+              每位家人仍是各自獨立的個案（自己的紀錄與收費），這裡只開放「替他排時間、改期、取消」，
+              看不到對方的晤談紀錄、量表或費用。授權只能由所方建立。</div>
+            <div id="fam"></div></div>`;
+        const drawFam = list => {
+          const box = body.querySelector('#fam');
+          box.innerHTML = `${UI.table(['家人', '關係', '狀態', ''], list.map(f => `<tr>
+              <td><a href="#/client/${f.member_id}">${UI.esc(f.member_name)}</a>
+                <span style="color:var(--muted);font-size:12px">${UI.esc(f.member_code)}</span></td>
+              <td>${UI.esc(f.relationship || '')}</td>
+              <td>${f.can_book && f.member_active ? UI.tag('可代訂', 'ok') : UI.tag('已停用', 'warn')}</td>
+              <td><button class="btn tiny danger" data-fx="${f.id}">取消授權</button></td></tr>`),
+    '尚未授權任何人')}
+            <div style="margin-top:10px"><button class="btn small secondary" id="fam-add">授權家人代訂</button></div>
+            ${(c.family_of || []).length ? `<div class="notice" style="margin-top:12px;font-size:13px">
+              ${c.family_of.map(x => `${UI.esc(x.name)}（${UI.esc(x.code)}）`).join('、')}
+              可在專區替這位個案預約。</div>` : ''}`;
+          box.querySelectorAll('[data-fx]').forEach(b => {
+            b.onclick = async () => {
+              if (!await UI.confirm('取消這筆代訂授權？之後對方就無法在專區替他排時間。')) return;
+              try {
+                const r = await DEL(`/clients/${c.id}/family/${b.dataset.fx}`);
+                UI.toast('已取消授權');
+                drawFam(r.family);
+              } catch (e) { UI.err(e); }
+            };
+          });
+          box.querySelector('#fam-add').onclick = async () => {
+            const opts = await GET('/clients/options');
+            UI.modal({
+              title: '授權家人代訂',
+              body: `<div class="form-grid">
+                  ${UI.picker('member_id', '要被代訂的家人（需已建檔）',
+    opts.filter(o => o.id !== c.id).map(o => [o.id, `${o.name}（${o.code}）`]), { full: true })}
+                  ${UI.input('relationship', '關係', { placeholder: '子女／配偶／父母', full: true })}
+                  ${UI.input('note', '備註', { full: true })}
+                </div>
+                <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+                  授權後，${UI.esc(c.name)}在個案專區就能替這位家人選方案、排時段與改期取消。</div>`,
+              onSubmit: async form => {
+                const r = await POST(`/clients/${c.id}/family`, UI.formData(form));
+                UI.toast('已授權');
+                drawFam(r.family);
+              }
+            });
+          };
+        };
+        drawFam(c.family || []);
         body.querySelector('#rst').onclick = async () => {
           if (!await UI.confirm('將個案端密碼重設為手機末 6 碼？')) return;
           try { const r = await POST(`/clients/${c.id}/reset-password`, {}); UI.toast('已重設為 ' + r.password); }

@@ -159,6 +159,10 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
       LEFT JOIN users u ON u.id = a.counselor_id
       LEFT JOIN service_plans sp ON sp.id = a.plan_id
       WHERE a.client_id = ? ORDER BY a.date DESC, a.start_time DESC LIMIT 30`).all(c.id),
+    // 可代訂的家人，以及「誰可以替這位個案訂」——兩個方向櫃檯都要看得到
+    family: familyOf(c.id),
+    family_of: db.prepare(`SELECT f.id, f.relationship, f.can_book, c.id AS client_id, c.name, c.code
+      FROM client_family f JOIN clients c ON c.id = f.client_id WHERE f.member_id = ?`).all(c.id),
     // 這位個案用到的方案若須在補助單位系統另行註冊／簽到（如國軍方案），把網址一併帶出來
     plan_links: db.prepare(`SELECT DISTINCT sp.id, sp.name, sp.register_url, sp.signin_url
       FROM appointments a JOIN service_plans sp ON sp.id = a.plan_id
@@ -322,6 +326,55 @@ router.put('/clients/:id/consent-assignments', requireStaff('clients'), (req, re
   tx();
   audit('staff', req.user.id, req.user.name, keys.length ? '指派同意書' : '清除同意書指派', c.code, { keys });
   res.json({ ok: true, keys });
+});
+
+// ---- 家人代訂授權 ----
+// 家長要在專區替孩子排時間、或一方要替伴侶排，都是「替另一筆個案預約」。
+// 每個人仍是獨立的個案（各自的病歷、紀錄與收費），這裡只授權「誰能替誰排時間」，
+// 而且只有櫃檯能建立——不讓任何人自行宣稱是誰的家屬。
+router.get('/clients/:id/family', requireStaff('clients'), (req, res) => {
+  res.json(familyOf(req.params.id));
+});
+function familyOf(clientId) {
+  return db.prepare(`SELECT f.id, f.member_id, f.relationship, f.can_book, f.note,
+      c.name AS member_name, c.code AS member_code, c.active AS member_active
+    FROM client_family f JOIN clients c ON c.id = f.member_id
+    WHERE f.client_id = ? ORDER BY c.name`).all(Number(clientId) || 0);
+}
+router.post('/clients/:id/family', requireStaff('clients'), (req, res) => {
+  const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!c) return res.status(404).json({ error: '找不到此個案' });
+  const memberId = Number(req.body?.member_id) || 0;
+  const member = db.prepare('SELECT * FROM clients WHERE id = ? AND active = 1').get(memberId);
+  if (!member) return res.status(400).json({ error: '請選擇要授權代訂的家人（需為在案的個案）' });
+  if (member.id === c.id) return res.status(400).json({ error: '不需授權替自己預約' });
+  const dup = db.prepare('SELECT 1 FROM client_family WHERE client_id = ? AND member_id = ?').get(c.id, member.id);
+  if (dup) return res.status(400).json({ error: `已授權可替${member.name}預約` });
+  const info = db.prepare(`INSERT INTO client_family (client_id, member_id, relationship, can_book, note)
+    VALUES (?,?,?,?,?)`).run(c.id, member.id, String(req.body?.relationship || '').slice(0, 20),
+    req.body?.can_book === 0 || req.body?.can_book === false ? 0 : 1, String(req.body?.note || '').slice(0, 200));
+  audit('staff', req.user.id, req.user.name, '授權家人代訂', c.code,
+    { member: member.code, relationship: req.body?.relationship || '' });
+  res.json({ id: info.lastInsertRowid, family: familyOf(c.id) });
+});
+router.put('/clients/:id/family/:fid', requireStaff('clients'), (req, res) => {
+  const row = db.prepare('SELECT * FROM client_family WHERE id = ? AND client_id = ?')
+    .get(req.params.fid, req.params.id);
+  if (!row) return res.status(404).json({ error: '找不到此授權' });
+  db.prepare('UPDATE client_family SET relationship = ?, can_book = ?, note = ? WHERE id = ?').run(
+    req.body?.relationship === undefined ? row.relationship : String(req.body.relationship).slice(0, 20),
+    req.body?.can_book === undefined ? row.can_book : (req.body.can_book ? 1 : 0),
+    req.body?.note === undefined ? row.note : String(req.body.note).slice(0, 200), row.id);
+  res.json({ ok: true, family: familyOf(row.client_id) });
+});
+router.delete('/clients/:id/family/:fid', requireStaff('clients'), (req, res) => {
+  const row = db.prepare(`SELECT f.*, c.code, m.code AS member_code FROM client_family f
+      JOIN clients c ON c.id = f.client_id JOIN clients m ON m.id = f.member_id
+    WHERE f.id = ? AND f.client_id = ?`).get(req.params.fid, req.params.id);
+  if (!row) return res.status(404).json({ error: '找不到此授權' });
+  db.prepare('DELETE FROM client_family WHERE id = ?').run(row.id);
+  audit('staff', req.user.id, req.user.name, '取消家人代訂授權', row.code, { member: row.member_code });
+  res.json({ ok: true, family: familyOf(row.client_id) });
 });
 
 // 用不到的同意書範本：沒人簽過就刪掉，簽過的保留（簽署紀錄要對得回範本）

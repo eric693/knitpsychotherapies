@@ -31,6 +31,60 @@ async function notifyCounselor(counselorId, title, text) {
   } catch (e) { console.error('通知心理師失敗：', e.message); }
 }
 
+// 專區可選的方案：與對外預約表單同一份名單（啟用中＋開放線上顯示）。
+// 舊個案臨時要約伴侶諮商或親職諮詢時，時長與費用都要跟著方案走，
+// 不能一律套用系統預設的 50 分鐘與預設收費。
+function portalPlanRows() {
+  return db.prepare('SELECT * FROM service_plans WHERE active = 1 AND portal_visible = 1 ORDER BY sort, id').all();
+}
+function portalPlanPublic(p) {
+  return {
+    id: p.id, name: p.name, appt_type: p.appt_type, intro: p.intro || '',
+    session_minutes: plans.sessionMinutes(p),
+    default_mode: p.default_mode || 'onsite',
+    fee_mode: p.fee_mode,
+    fee_options: plans.parseOptions(p.fee_options),
+    // client_pay 才是個案自己要付的錢（補助方案已扣掉給付）
+    client_pay: Math.max(0, p.fee - p.subsidy_amount),
+    subsidy_amount: p.subsidy_amount, venue_fee: p.venue_fee || 0
+  };
+}
+// 方案若訂了專屬費率名單，就只有名單內且開放預約的心理師能接；沒訂就是全所都能接。
+// 規則與對外表單的 planPublic 相同，兩邊不能各判一套。
+function planAllowsCounselor(planId, counselorId) {
+  const rates = db.prepare(`SELECT counselor_id, bookable FROM plan_counselors
+    WHERE plan_id = ? AND active = 1 AND (topic_id IS NULL OR topic_id = 0)`).all(Number(planId) || 0);
+  if (!rates.length) return true;
+  return rates.some(r => r.counselor_id === Number(counselorId) && r.bookable);
+}
+// 專區帶進來的方案：必須是「開放線上顯示」的，才不會讓個案繞過表單約到停用的方案
+function portalPlan(planId) {
+  if (!planId) return null;
+  const p = plans.getPlan(planId);
+  return p && p.active && p.portal_visible ? p : null;
+}
+
+// 家人代訂：授權由櫃檯建立（client_family），專區只讀。
+// 沒有授權就約不到別人的時段，也看不到對方的任何資料；
+// 代訂看得到的僅止於「時間、心理師、狀態」這些排程資訊，紀錄與量表一律不開放。
+function bookableMembers(clientId) {
+  return db.prepare(`SELECT c.id, c.name, c.code, f.relationship
+    FROM client_family f JOIN clients c ON c.id = f.member_id
+    WHERE f.client_id = ? AND f.can_book = 1 AND c.active = 1 ORDER BY c.name`).all(Number(clientId) || 0);
+}
+// 這次要替誰預約：沒帶就是自己；帶了就必須在授權名單內
+function targetClient(req, forId) {
+  if (!forId || Number(forId) === req.client.id) return req.client;
+  const ok = bookableMembers(req.client.id).some(m => m.id === Number(forId));
+  return ok ? db.prepare('SELECT * FROM clients WHERE id = ? AND active = 1').get(Number(forId)) : null;
+}
+// 本人與被授權家人的預約：改期／取消時用來判斷這筆能不能動
+function ownedAppointment(req, apptId) {
+  const ids = [req.client.id, ...bookableMembers(req.client.id).map(m => m.id)];
+  return db.prepare(`SELECT * FROM appointments WHERE id = ? AND client_id IN (${ids.map(() => '?').join(',')})`)
+    .get(apptId, ...ids) || null;
+}
+
 // 個案端只提供行政功能（預約、量表、費用、同意書），不提供任何晤談紀錄內容
 router.post('/login', loginRateLimit, (req, res) => {
   const { phone = '', password = '' } = req.body || {};
@@ -76,6 +130,8 @@ router.get('/me', requireClient, (req, res) => {
     portal_note: getSetting('ui_portal_note'),
     crisis_note: getSetting('ui_crisis_note'),
     booking_enabled: getSetting('portal_booking_enabled', '1') === '1',
+    plans: portalPlanRows().map(portalPlanPublic),
+    family: bookableMembers(c.id),
     messages_write: getSetting('portal_messages_write', '0') === '1',
     reschedule_enabled: getSetting('portal_reschedule_enabled', '1') === '1',
     cancel_hours: Number(getSetting('cancel_hours', '24')),
@@ -93,17 +149,23 @@ router.get('/me', requireClient, (req, res) => {
 // ---- 我的預約 ----
 router.get('/appointments', requireClient, (req, res) => {
   const hours = Number(getSetting('cancel_hours', '24'));
+  // 自己的，加上被授權代訂的家人的——家長要在同一頁看到孩子的時間，否則等於沒法管
+  const ids = [req.client.id, ...bookableMembers(req.client.id).map(m => m.id)];
   const rows = db.prepare(`SELECT a.id, a.date, a.start_time, a.end_time, a.type, a.mode, a.status, a.fee, a.note,
-      a.meeting_url, a.counselor_id, a.reschedule_count, a.cancel_requested_at,
-      u.name AS counselor_name, p.name AS plan_name
+      a.meeting_url, a.counselor_id, a.plan_id, a.client_id, a.reschedule_count, a.cancel_requested_at,
+      u.name AS counselor_name, p.name AS plan_name, c.name AS client_name
     FROM appointments a LEFT JOIN users u ON u.id = a.counselor_id
     LEFT JOIN service_plans p ON p.id = a.plan_id
-    WHERE a.client_id = ? ORDER BY a.date DESC, a.start_time DESC LIMIT 60`).all(req.client.id);
+    JOIN clients c ON c.id = a.client_id
+    WHERE a.client_id IN (${ids.map(() => '?').join(',')})
+    ORDER BY a.date DESC, a.start_time DESC LIMIT 120`).all(...ids);
   // 由後端算出「還能不能自行改期／取消」，前端只負責顯示，規則不會兩邊各算一套
   res.json(rows.map(a => {
     const msLeft = new Date(`${a.date}T${a.start_time}:00`).getTime() - Date.now();
     return {
       ...a,
+      // 家人的約標上是誰的，避免整頁時間混在一起分不出來
+      for_name: a.client_id === req.client.id ? '' : a.client_name,
       can_self_serve: a.status === 'booked' && msLeft >= hours * 3600 * 1000 && !a.cancel_requested_at,
       // 已過的時間不再顯示「申請取消」，那是櫃檯要結案的狀態
       late: a.status === 'booked' && msLeft > 0 && msLeft < hours * 3600 * 1000
@@ -111,9 +173,17 @@ router.get('/appointments', requireClient, (req, res) => {
   }));
 });
 
-// 可預約時段：僅開放主責心理師（未指定則全所心理師）
+// 可預約時段：僅開放主責心理師（未指定則全所心理師）。
+// 帶 plan_id 時整段以方案為準：時長、可接的心理師、方案人次上限與資格都跟著換，
+// 否則個案在專區約伴侶諮商，會拿到 50 分鐘的格子而實際要 90 分鐘。
 router.get('/slots', requireClient, (req, res) => {
   const date = req.query.date || today();
+  const plan = portalPlan(req.query.plan_id);
+  if (req.query.plan_id && !plan) return res.status(400).json({ error: '此方案目前未開放線上預約，請來電洽詢' });
+  // 替家人預約時，心理師與方案資格都要以「那位家人」為準，不是登入的這個人
+  const forClient = targetClient(req, req.query.for_client_id);
+  if (!forClient) return res.status(403).json({ error: '未授權替這位家人預約，請來電洽詢' });
+  const minutes = plans.sessionMinutes(plan);
   // 與對外表單同一套：最快幾天後 + 前一天幾點截止
   const minDate = (() => {
     const byLead = addDays(today(), Number(getSetting('portal_book_lead_days', '1')));
@@ -121,13 +191,35 @@ router.get('/slots', requireClient, (req, res) => {
     return byLead > byCutoff ? byLead : byCutoff;
   })();
   const maxDate = addDays(today(), Number(getSetting('portal_book_max_days', '60')));
-  if (date < minDate || date > maxDate) return res.json({ min_date: minDate, max_date: maxDate, counselors: [] });
-  const counselors = req.client.counselor_id
-    ? db.prepare('SELECT id, name FROM users WHERE id = ? AND active = 1').all(req.client.counselor_id)
-    : db.prepare("SELECT id, name FROM users WHERE active = 1 AND role IN ('counselor','supervisor') ORDER BY id").all();
+  const base = { min_date: minDate, max_date: maxDate, session_minutes: minutes,
+    for_client_id: forClient.id, for_name: forClient.id === req.client.id ? '' : forClient.name };
+  if (date < minDate || date > maxDate) return res.json({ ...base, counselors: [] });
+  const counselors = (forClient.counselor_id
+    ? db.prepare('SELECT id, name FROM users WHERE id = ? AND active = 1').all(forClient.counselor_id)
+    : db.prepare("SELECT id, name FROM users WHERE active = 1 AND role IN ('counselor','supervisor') ORDER BY id").all())
+    .filter(u => !plan || planAllowsCounselor(plan.id, u.id));
+  // 年齡與年度次數不合格就整天不出時段，並把原因講清楚，
+  // 不要讓個案挑完時段送出才被退。
+  const check = plan ? plans.checkBooking({ plan_id: plan.id, client: forClient, date }) : null;
+  const enforce = getSetting('plan_quota_enforce', '1') === '1';
+  const planError = check && check.errors.length && enforce ? check.errors[0] : '';
   res.json({
-    min_date: minDate, max_date: maxDate,
-    counselors: counselors.map(u => ({ ...u, slots: freeSlots(u.id, date) }))
+    ...base,
+    plan_error: planError,
+    // 方案有指定心理師名單時，主責心理師可能不在名單裡，畫面要說明而不是只顯示空白
+    plan_no_counselor: !!plan && !counselors.length,
+    counselors: counselors.map(u => {
+      // 心理師該方案的每週／每月人次滿了就不出時段，與對外表單同一套
+      const load = plan ? plans.counselorLoad(u.id, plan.id, date) : null;
+      const full = load && load.week_full
+        ? `本週此方案已排滿 ${load.week_used}/${load.week_limit} 人次`
+        : (load && load.month_full ? `本月此方案已排滿 ${load.month_used}/${load.month_limit} 人次` : '');
+      return {
+        id: u.id, name: u.name, full,
+        slots: planError || full ? []
+          : freeSlots(u.id, date, minutes).filter(sl => !plans.bookingCutoffReason(date, sl.start_time))
+      };
+    })
   });
 });
 
@@ -143,39 +235,131 @@ router.post('/appointments', requireClient, async (req, res) => {
   })();
   const maxDate = addDays(today(), Number(getSetting('portal_book_max_days', '60')));
   if (!date || date < minDate || date > maxDate) return res.status(400).json({ error: `可預約範圍為 ${minDate} 至 ${maxDate}` });
-  const cid = Number(counselor_id) || req.client.counselor_id;
+  // 替家人預約時，以下每一項（主責心理師、方案資格、費用、初談與否）都以那位家人為準
+  const forClient = targetClient(req, req.body.for_client_id);
+  if (!forClient) return res.status(403).json({ error: '未授權替這位家人預約，請來電洽詢' });
+  const proxy = forClient.id !== req.client.id;
+  const cid = Number(counselor_id) || forClient.counselor_id;
   if (!cid) return res.status(400).json({ error: '請選擇心理師' });
-  if (req.client.counselor_id && cid !== req.client.counselor_id) {
+  if (forClient.counselor_id && cid !== forClient.counselor_id) {
     return res.status(400).json({ error: '如需更換心理師請來電洽詢' });
+  }
+  // 方案決定晤談長度、類型（伴侶／親職…）、形式與收費；沒帶方案就維持原本的預設收費
+  const plan = portalPlan(req.body.plan_id);
+  if (req.body.plan_id && !plan) return res.status(400).json({ error: '此方案目前未開放線上預約，請來電洽詢' });
+  if (plan && !planAllowsCounselor(plan.id, cid)) {
+    return res.status(400).json({ error: `「${plan.name}」需由本所指定的心理師進行，請來電洽詢` });
   }
   const cutoffReason = plans.bookingCutoffReason(date, start_time);
   if (cutoffReason) return res.status(400).json({ error: `${cutoffReason}，請改約其他時間或來電洽詢。` });
-  const slot = freeSlots(cid, date).find(s => s.start_time === start_time);
+  const slot = freeSlots(cid, date, plans.sessionMinutes(plan)).find(s => s.start_time === start_time);
   if (!slot) return res.status(400).json({ error: '此時段已被預約或非開放時段，請重新選擇' });
-  const type = db.prepare("SELECT 1 FROM appointments WHERE client_id = ? AND status = 'done'").get(req.client.id) ? 'individual' : 'intake';
-  const fee = Number(getSetting(type === 'intake' ? 'intake_fee' : 'default_fee', '2000'));
-  // 諮商室由系統指派（個案端不顯示空間配置）；排滿時留空由櫃檯安排，
-  // 週檢視的「未指定空間」清單會列出來。原本個案端排的約一律沒有諮商室。
-  const roomId = plans.pickRoom({ date, start_time, end_time: slot.end_time });
-  const info = db.prepare(`INSERT INTO appointments
-    (client_id, counselor_id, room_id, date, start_time, end_time, type, status, fee, source, note)
-    VALUES (?,?,?,?,?,?,?, 'booked', ?, 'portal', ?)`).run(
-    req.client.id, cid, roomId, date, start_time, slot.end_time, type, fee, note);
-  audit('client', req.client.id, req.client.name, '個案端預約', req.client.code, { date, start_time });
-  // 心理師端通知：個案自己在專區排進來的，跟線上申請成立時一樣要讓心理師知道
+  // 方案資格：年齡、年度次數與該心理師的人次上限，與對外表單同一套規則
+  if (plan) {
+    const check = plans.checkBooking({ plan_id: plan.id, client: forClient, counselor_id: cid, date });
+    if (check.errors.length && getSetting('plan_quota_enforce', '1') === '1') {
+      return res.status(400).json({ error: `${check.errors[0]}，請改約其他時間或來電洽詢。` });
+    }
+  }
   const counselor = db.prepare('SELECT name, line_user_id FROM users WHERE id = ?').get(cid);
+  const counselorRow = db.prepare('SELECT online_only, meeting_room_url FROM users WHERE id = ?').get(cid) || {};
+  // 只接視訊的心理師一律線上；否則照方案的預設形式
+  const mode = counselorRow.online_only ? 'online' : ((plan && plan.default_mode) || 'onsite');
+  const meetingUrl = mode === 'online' ? (counselorRow.meeting_room_url || '') : '';
+  const type = plan ? plan.appt_type
+    : (db.prepare("SELECT 1 FROM appointments WHERE client_id = ? AND status = 'done'").get(forClient.id) ? 'individual' : 'intake');
+  // fee 存「個案要付的錢」，方案給付的部分另存 subsidy_amount；抽成一併算好，
+  // 免得櫃檯之後還要為個案端排的約補一次帳。
+  const quote = plan
+    ? plans.resolveFee({ plan_id: plan.id, counselor_id: cid, fee_choice: req.body.fee_choice, client_id: forClient.id })
+    : null;
+  const fee = quote ? quote.fee : Number(getSetting(type === 'intake' ? 'intake_fee' : 'default_fee', '2000'));
+  // 方案設「線上預約需櫃檯確認才成立」時，專區送出的是預約申請而非直接佔位，
+  // 與對外表單同一套流程（櫃檯在「預約申請」頁確認後才成立），
+  // 補助方案的名額才不會被線上直接搶走。
+  if (plan && plan.require_review) {
+    const reqInfo = db.prepare(`INSERT INTO booking_requests
+      (name, phone, email, gender, birth_date, is_new, client_id, plan_id, counselor_id,
+       date, start_time, mode, fee_choice, main_issue, source, line_user_id, consent, status)
+      VALUES (?,?,?,?,?, 0, ?,?,?,?,?,?,?,?, 'portal', ?, 1, 'new')`).run(
+      forClient.name, forClient.phone || req.client.phone, forClient.email || '', forClient.gender || '',
+      forClient.birth_date || '', forClient.id, plan.id, cid, date, start_time, mode,
+      quote ? quote.fee : 0,
+      (proxy ? `由${req.client.name}於個案專區代訂。` : '') + String(note || ''),
+      forClient.line_user_id || '');
+    audit('client', req.client.id, req.client.name, '個案端預約申請', req.client.code,
+      { date, start_time, plan: plan.name, for: proxy ? forClient.code : '' });
+    if (counselor && counselor.line_user_id) {
+      try {
+        await line.pushFlex({
+          to: counselor.line_user_id, kind: 'booking_staff',
+          flex: line.counselorBookingFlex({
+            counselor_name: counselor.name,
+            b: { name: `${forClient.name}（${forClient.code}）`, date, start_time,
+              plan_name: plan.name, main_issue: note }
+          })
+        });
+      } catch (e) { console.error('個案端預約申請通知心理師失敗：', e.message); }
+    }
+    return res.json({ pending: true, request_id: reqInfo.lastInsertRowid, plan_name: plan.name,
+      message: '已收到您的預約申請，我們確認後會盡快與您聯繫。' });
+  }
+  // 諮商室由系統指派（個案端不顯示空間配置）；排滿時留空由櫃檯安排，
+  // 週檢視的「未指定空間」清單會列出來。視訊晤談不佔空間。
+  const roomId = mode === 'online' ? null : plans.pickRoom({ date, start_time, end_time: slot.end_time });
+  const info = db.prepare(`INSERT INTO appointments
+    (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, subsidy_amount,
+     plan_id, counselor_share, meeting_url, source, note)
+    VALUES (?,?,?,?,?,?,?,?, 'booked', ?,?,?,?,?, 'portal', ?)`).run(
+    forClient.id, cid, roomId, date, start_time, slot.end_time, type, mode,
+    fee, quote ? quote.subsidy_amount : 0, plan ? plan.id : null, quote ? quote.counselor_share : 0,
+    meetingUrl, (proxy ? `由${req.client.name}於個案專區代訂。` : '') + String(note || ''));
+  audit('client', req.client.id, req.client.name, proxy ? '個案端代訂家人預約' : '個案端預約',
+    req.client.code, { date, start_time, plan: plan ? plan.name : '', for: proxy ? forClient.code : '' });
+  // 心理師端通知：個案自己在專區排進來的，跟線上申請成立時一樣要讓心理師知道
   if (counselor && counselor.line_user_id) {
     try {
       await line.pushFlex({
         to: counselor.line_user_id, kind: 'booking_staff',
         flex: line.counselorBookingFlex({
           counselor_name: counselor.name, kind: '新排入的晤談',
-          b: { name: `${req.client.name}（${req.client.code}）`, date, start_time, main_issue: note }
+          b: { name: `${forClient.name}（${forClient.code}）`, date, start_time,
+            plan_name: plan ? plan.name : '', main_issue: note }
         })
       });
     } catch (e) { console.error('個案端預約通知心理師失敗：', e.message); }
   }
-  res.json({ id: info.lastInsertRowid, room_id: roomId });
+  res.json({ id: info.lastInsertRowid, room_id: roomId, end_time: slot.end_time, mode, fee,
+    plan_name: plan ? plan.name : '', for_name: proxy ? forClient.name : '' });
+});
+
+// ---- 待櫃檯確認的預約申請 ----
+// 方案設了「需櫃檯確認」時，專區送出的是申請而不是預約。若不一併列出來，
+// 個案會以為送出後石沉大海，隔天又送一次。
+router.get('/booking-requests', requireClient, (req, res) => {
+  const ids = [req.client.id, ...bookableMembers(req.client.id).map(m => m.id)];
+  const rows = db.prepare(`SELECT b.id, b.date, b.start_time, b.status, b.created_at, b.client_id,
+      u.name AS counselor_name, p.name AS plan_name, c.name AS client_name
+    FROM booking_requests b
+    LEFT JOIN users u ON u.id = b.counselor_id
+    LEFT JOIN service_plans p ON p.id = b.plan_id
+    JOIN clients c ON c.id = b.client_id
+    WHERE b.client_id IN (${ids.map(() => '?').join(',')}) AND b.status = 'new'
+    ORDER BY b.date, b.start_time`).all(...ids);
+  res.json(rows.map(r => ({ ...r, for_name: r.client_id === req.client.id ? '' : r.client_name })));
+});
+// 還沒被櫃檯處理的申請，個案可以自己撤回（已成立的走預約取消那條路）
+router.post('/booking-requests/:id/cancel', requireClient, (req, res) => {
+  const ids = [req.client.id, ...bookableMembers(req.client.id).map(m => m.id)];
+  const b = db.prepare(`SELECT * FROM booking_requests WHERE id = ?
+    AND client_id IN (${ids.map(() => '?').join(',')})`).get(req.params.id, ...ids);
+  if (!b) return res.status(404).json({ error: '找不到此預約申請' });
+  if (b.status !== 'new') return res.status(400).json({ error: '此申請已由櫃檯處理，請來電洽詢' });
+  db.prepare("UPDATE booking_requests SET status = 'cancelled', reply_note = ? WHERE id = ?")
+    .run('個案於專區自行撤回', b.id);
+  audit('client', req.client.id, req.client.name, '個案端撤回預約申請', req.client.code,
+    { date: b.date, start_time: b.start_time });
+  res.json({ ok: true });
 });
 
 // 改期：與線上預約走同一套規則（開放時段、提前天數、不換心理師），
@@ -184,7 +368,8 @@ router.post('/appointments/:id/reschedule', requireClient, async (req, res) => {
   if (getSetting('portal_reschedule_enabled', '1') !== '1') {
     return res.status(403).json({ error: '目前未開放線上改期，請來電洽詢' });
   }
-  const a = db.prepare('SELECT * FROM appointments WHERE id = ? AND client_id = ?').get(req.params.id, req.client.id);
+  // 自己的約，或被授權代訂的家人的約，都可以改期／取消
+  const a = ownedAppointment(req, req.params.id);
   if (!a) return res.status(404).json({ error: '找不到此預約' });
   if (a.status !== 'booked') return res.status(400).json({ error: '此預約無法自行改期，請來電洽詢' });
   const hours = Number(getSetting('cancel_hours', '24'));
@@ -200,7 +385,9 @@ router.post('/appointments/:id/reschedule', requireClient, async (req, res) => {
   })();
   const maxDate = addDays(today(), Number(getSetting('portal_book_max_days', '60')));
   if (!date || date < minDate || date > maxDate) return res.status(400).json({ error: `可改期範圍為 ${minDate} 至 ${maxDate}` });
-  const slot = freeSlots(a.counselor_id, date).find(s => s.start_time === start_time);
+  // 改期沿用原本那筆的方案時長，90 分鐘的伴侶諮商不會被改成 50 分鐘的格子
+  const slot = freeSlots(a.counselor_id, date, plans.sessionMinutes(a.plan_id))
+    .find(s => s.start_time === start_time);
   if (!slot) return res.status(400).json({ error: '此時段已被預約或非開放時段，請重新選擇' });
   const original = `${a.date} ${a.start_time}`;
   // 可預約時段只看心理師，不看諮商室；若原本的諮商室在新時段已被別人用了，
@@ -219,19 +406,24 @@ router.post('/appointments/:id/reschedule', requireClient, async (req, res) => {
       note = ? WHERE id = ?`).run(
     date, start_time, slot.end_time, roomId, original,
     (a.note ? a.note + '；' : '') + `個案自行改期（原 ${original}）` + roomNote, a.id);
-  audit('client', req.client.id, req.client.name, '個案端改期', req.client.code, { from: original, to: `${date} ${start_time}` });
+  const who = db.prepare('SELECT id, name, code FROM clients WHERE id = ?').get(a.client_id) || req.client;
+  audit('client', req.client.id, req.client.name, '個案端改期', req.client.code,
+    { from: original, to: `${date} ${start_time}`, for: who.id === req.client.id ? '' : who.code });
   await notifyCounselor(a.counselor_id, '個案自行改期',
-    `${req.client.name}（${req.client.code}）已將晤談由 ${original} 改為 ${date} ${start_time}。`);
+    `${who.name}（${who.code}）已將晤談由 ${original} 改為 ${date} ${start_time}。`);
   res.json({ ok: true, date, start_time, end_time: slot.end_time });
 });
 
 // 取消：期限內直接取消；不足時數者留下取消申請與事由，並同步發一則訊息給櫃檯，
 // 由櫃檯決定是否依未到比例計費（不讓個案端自行決定收費結果）
 router.post('/appointments/:id/cancel', requireClient, async (req, res) => {
-  const a = db.prepare('SELECT * FROM appointments WHERE id = ? AND client_id = ?').get(req.params.id, req.client.id);
+  // 自己的約，或被授權代訂的家人的約，都可以改期／取消
+  const a = ownedAppointment(req, req.params.id);
   if (!a) return res.status(404).json({ error: '找不到此預約' });
   if (a.status !== 'booked') return res.status(400).json({ error: '此預約無法自行取消，請來電洽詢' });
   const reason = String((req.body && req.body.reason) || '').trim();
+  // 家人代訂的約，通知與紀錄要寫「是誰的晤談」，不是操作的那個人
+  const who = db.prepare('SELECT id, name, code FROM clients WHERE id = ?').get(a.client_id) || req.client;
   const hours = Number(getSetting('cancel_hours', '24'));
   const start = new Date(`${a.date}T${a.start_time}:00`);
   if (start.getTime() < Date.now()) return res.status(400).json({ error: '此晤談時間已過，請來電與我們聯繫' });
@@ -240,10 +432,12 @@ router.post('/appointments/:id/cancel', requireClient, async (req, res) => {
     const charge = plans.noShowCharge(a.fee);
     db.prepare('UPDATE appointments SET cancel_requested_at = ?, cancel_request_reason = ? WHERE id = ?')
       .run(nowStamp(), reason || '個案申請取消', a.id);
+    // 訊息掛在「送出申請的人」名下（櫃檯要回覆的是他），但要寫清楚是誰的晤談
     db.prepare("INSERT INTO messages (client_id, sender, content) VALUES (?, 'client', ?)").run(
       req.client.id,
-      `【取消申請】${a.date} ${a.start_time} 的晤談，事由：${reason || '未填寫'}（距晤談不足 ${hours} 小時）`);
-    audit('client', req.client.id, req.client.name, '個案端申請取消', req.client.code, { date: a.date });
+      `【取消申請】${who.name}${a.date} ${a.start_time} 的晤談，事由：${reason || '未填寫'}（距晤談不足 ${hours} 小時）`);
+    audit('client', req.client.id, req.client.name, '個案端申請取消', req.client.code,
+      { date: a.date, for: who.id === req.client.id ? '' : who.code });
     return res.json({
       ok: true, pending: true,
       message: `距晤談時間已不足 ${hours} 小時，已為您送出取消申請並通知櫃檯；`
@@ -252,9 +446,10 @@ router.post('/appointments/:id/cancel', requireClient, async (req, res) => {
   }
   db.prepare("UPDATE appointments SET status = 'cancelled', cancel_reason = ? WHERE id = ?")
     .run(reason || '個案自行取消', a.id);
-  audit('client', req.client.id, req.client.name, '個案端取消預約', req.client.code, { date: a.date });
+  audit('client', req.client.id, req.client.name, '個案端取消預約', req.client.code,
+    { date: a.date, for: who.id === req.client.id ? '' : who.code });
   await notifyCounselor(a.counselor_id, '個案取消晤談',
-    `${req.client.name}（${req.client.code}）已取消 ${a.date} ${a.start_time} 的晤談`
+    `${who.name}（${who.code}）已取消 ${a.date} ${a.start_time} 的晤談`
     + `${reason ? `，事由：${reason}` : ''}。此時段已釋出，可於「候補遞補」頁安排。`);
   res.json({ ok: true, pending: false, message: '已取消預約' });
 });

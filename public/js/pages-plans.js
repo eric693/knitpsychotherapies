@@ -37,8 +37,12 @@ function planDialog(p, onDone) {
       ${UI.input('share_fixed_assigned', '派案固定鐘點費（0 = 同指定案）', { type: 'number', value: d.share_fixed_assigned || 0 })}
       ${UI.textarea('intro', '線上預約表單上的說明', { value: d.intro || '' })}
       ${UI.textarea('note', '內部備註', { value: d.note || '' })}
-      ${UI.checkbox('portal_visible', '開放線上預約表單顯示此方案', d.portal_visible)}
+      ${UI.checkbox('portal_visible', '開放線上預約表單與個案專區顯示此方案', d.portal_visible)}
       ${UI.checkbox('require_review', '線上預約需櫃檯確認才成立', d.require_review)}
+      <div class="form-row full" style="font-size:12.5px;color:var(--muted);margin-top:-6px">
+        上面兩個勾同時管「對外預約表單」與「個案專區」。勾了「需櫃檯確認」，
+        舊個案在專區送出的也只是<strong>預約申請</strong>（時段不會先保留），要到「預約申請」頁確認才成立；
+        取消勾選則專區送出即直接成立預約。</div>
       ${UI.input('register_url', '方案註冊網址（如國軍方案的個案註冊）',
     { value: d.register_url || '', full: true, placeholder: 'https://…（留空則不顯示按鈕）' })}
       ${UI.input('signin_url', '方案簽到網址（每次晤談上系統簽到）',
@@ -122,7 +126,9 @@ App.page('plans', {
     '一個「方案」＝一組收費規則：晤談時長、價格、資格限制、次數上限、心理師報酬怎麼算。排約選了方案，結束時間與費用就照它算。',
     '方案底下可再加「主題」（不同主題不同價）與「心理師費率」（同方案不同心理師抽成不同）。',
     '指定案與所內派案可以設不同抽成：方案與費率各有兩組欄位，派案那組留空就沿用指定案的數字。判斷依據是個案資料裡的「案件來源」。',
-    '已經有預約在用的方案不要直接刪，改用「停用」，舊資料才不會對不上。',
+    '「開放線上預約表單與個案專區顯示」與「需櫃檯確認才成立」這兩個勾，對外表單與個案專區共用一套：勾了需確認，舊個案在專區送出的也只是申請，要到「預約申請」頁確認才成立。',
+    '方案的晤談時長會決定個案端看到的時段長度（例如 90 分鐘的伴侶諮商，專區就只出得起 90 分鐘的空檔），年齡、年度次數與心理師人次上限也會在個案送出前先擋下來。',
+    '已經有預約在用的方案不要直接刪，改用「停用」，舊資料才不會對不上。停用或取消顯示後，對外表單與個案專區都選不到它。',
   ],
   module: 'settings',
   async render(el) {

@@ -1047,6 +1047,20 @@ CREATE TABLE IF NOT EXISTS plan_counselor_usage_adj (
   UNIQUE (plan_id, counselor_id, period_type, period_key)
 );
 
+-- 家人代訂：個案在專區替家人（孩子、伴侶）預約時，能約的對象只有這張表列出來的人。
+-- 每個家人都是自己的一筆個案（有自己的病歷、紀錄與收費），這裡只授權「誰能替誰排時間」，
+-- 由櫃檯建立；沒有這筆授權就約不到別人的時段，個案也看不到對方的任何資料。
+CREATE TABLE IF NOT EXISTS client_family (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,   -- 代訂的人（在專區登入的那位）
+  member_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,   -- 被代訂的家人
+  relationship TEXT NOT NULL DEFAULT '',       -- 關係（子女／配偶／…），只作顯示用
+  can_book INTEGER NOT NULL DEFAULT 1,         -- 是否仍可代訂（要停用又想留紀錄時設 0）
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  UNIQUE (client_id, member_id)
+);
+
 -- LINE 綁定驗證碼：個案在官方帳號輸入驗證碼即完成綁定，不必由櫃檯查 userId
 CREATE TABLE IF NOT EXISTS line_bindings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
