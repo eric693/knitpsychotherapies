@@ -15,7 +15,7 @@ const UI = {
   err(e) { UI.toast(e && e.message ? e.message : String(e), true); },
 
   // 開啟 Modal；onSubmit 回傳 false 可阻止關閉
-  modal({ title, body, wide, submitText = '儲存', onSubmit, onOpen, hideFooter }) {
+  modal({ title, body, wide, submitText = '儲存', onSubmit, onOpen, onClose, hideFooter }) {
     const mask = document.createElement('div');
     mask.className = 'modal-mask';
     mask.innerHTML = `
@@ -29,20 +29,43 @@ const UI = {
       </div>`;
     const bodyEl = mask.querySelector('.modal-body');
     if (typeof body === 'string') bodyEl.innerHTML = body; else bodyEl.appendChild(body);
-    const onEsc = e => { if (e.key === 'Escape') close(); };
-    const close = () => { document.removeEventListener('keydown', onEsc); mask.remove(); };
-    mask.querySelector('.close').onclick = close;
-    mask.addEventListener('mousedown', e => { if (e.target === mask) close(); });
+    // 填了半天沒按儲存就把視窗關掉，改的東西會整個不見（最常見的是設定頁改完直接點 ×，
+    // 事後才發現根本沒生效）。有儲存鈕的視窗一律先問過再關。
+    // 只認使用者真的動過的欄位（isTrusted），程式自動帶入的預設值不算，才不會每次都跳。
+    let dirty = false, asking = false;
+    if (!hideFooter) {
+      const mark = e => { if (e.isTrusted) dirty = true; };
+      bodyEl.addEventListener('input', mark);
+      bodyEl.addEventListener('change', mark);
+    }
+    const onEsc = e => { if (e.key === 'Escape') tryClose(); };
+    const close = () => {
+      document.removeEventListener('keydown', onEsc);
+      mask.remove();
+      if (onClose) onClose();
+    };
+    // 詢問期間再按一次 Esc／再點一次遮罩，不要疊出第二個確認視窗
+    const tryClose = async () => {
+      if (!dirty) return close();
+      if (asking) return;
+      asking = true;
+      try {
+        if (await UI.confirm('這個視窗還有沒儲存的變更，確定要關閉並放棄嗎？')) close();
+      } finally { asking = false; }
+    };
+    mask.querySelector('.close').onclick = tryClose;
+    mask.addEventListener('mousedown', e => { if (e.target === mask) tryClose(); });
     // 鍵盤 Esc 也能關掉（與點右上角 ×、點視窗外同一個行為）
     document.addEventListener('keydown', onEsc);
     if (!hideFooter) {
-      mask.querySelector('[data-act="cancel"]').onclick = close;
+      mask.querySelector('[data-act="cancel"]').onclick = tryClose;
       mask.querySelector('[data-act="ok"]').onclick = async () => {
         const btn = mask.querySelector('[data-act="ok"]');
         btn.disabled = true;
         try {
           const r = onSubmit ? await onSubmit(bodyEl, close) : true;
-          if (r !== false) close();
+          // 存過了就不是未儲存狀態，關閉時不必再問
+          if (r !== false) { dirty = false; close(); }
         } catch (e) { UI.err(e); }
         btn.disabled = false;
       };
@@ -54,16 +77,19 @@ const UI = {
 
   confirm(msg) {
     return new Promise(resolve => {
+      // 用 Esc 或點視窗外關掉，等同按「取消」；沒有這一段，等這個 Promise 的流程會永遠停住
+      let done = false;
+      const finish = v => { if (!done) { done = true; resolve(v); } };
       const m = UI.modal({
-        title: '確認操作', hideFooter: true,
+        title: '確認操作', hideFooter: true, onClose: () => finish(false),
         body: `<p style="font-size:15px">${UI.esc(msg)}</p>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
             <button class="btn secondary" data-c="no" type="button">取消</button>
             <button class="btn" data-c="yes" type="button">確定</button>
           </div>`
       });
-      m.body.querySelector('[data-c=no]').onclick = () => { m.close(); resolve(false); };
-      m.body.querySelector('[data-c=yes]').onclick = () => { m.close(); resolve(true); };
+      m.body.querySelector('[data-c=no]').onclick = () => { finish(false); m.close(); };
+      m.body.querySelector('[data-c=yes]').onclick = () => { finish(true); m.close(); };
     });
   },
 
