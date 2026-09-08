@@ -138,8 +138,7 @@ if (!has('SELECT 1 FROM clients')) {
 
   db.prepare(`INSERT INTO announcements (title, content, audience, pinned, created_by) VALUES (?,?,?,?,?)`)
     .run('春節休所公告', '本所於 2/9-2/14 休所，期間如有緊急狀況請撥打 1925 安心專線。', 'all', 1, adminId);
-  db.prepare('INSERT INTO messages (client_id, sender, content) VALUES (?, ?, ?)').run(c1, 'client', '請問下週三可以改成下午四點嗎？');
-}
+  }
 
 setSetting('center_name', 'MindCare 心理諮商所');
 console.log('展示資料已建立：admin / mindcare123，心理師 lin / 123456，個案端 0912345678 / 345678');

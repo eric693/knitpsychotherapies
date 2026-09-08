@@ -773,64 +773,6 @@ App.page('packages', {
   }
 });
 
-// ---- 個案訊息 ----
-App.page('messages', {
-  title: '個案訊息',
-  sub: '行政聯繫用（改期、繳費等）；晤談內容請勿於此討論',
-  help: [
-    '與個案的行政聯繫（改期、繳費、提醒），點「開啟」進對話後送出訊息。',
-    '<strong>晤談內容請勿在此討論</strong>，訊息內容會留在系統紀錄裡。',
-  ],
-  module: 'messages',
-  async render(el) {
-    const list = await GET('/messages');
-    el.innerHTML = `<div class="toolbar"><div class="spacer"></div>
-        <button class="btn" id="newchat">新增對話</button></div>
-      <div class="card"><h3>對話</h3>
-      ${UI.table(['個案', '最後訊息', '時間', ''], list.map(m => `<tr>
-        <td>${UI.esc(m.client_name)}（${m.client_code}）${m.unread ? UI.tag(m.unread + ' 未讀', 'danger') : ''}</td>
-        <td>${UI.esc((m.last_content || '').slice(0, 30))}</td><td>${UI.esc(m.last_at || '')}</td>
-        <td><button class="btn tiny" data-m="${m.client_id}">開啟</button></td></tr>`), '尚無訊息')}</div>`;
-    // 還沒有對話紀錄的個案，也能從這裡主動起一則行政聯繫
-    el.querySelector('#newchat').onclick = async () => {
-      const clients = await App.clientOptions(true);
-      UI.modal({
-        title: '新增對話',
-        body: `<div class="form-grid">${UI.select('client_id', '個案', clients, { full: true })}
-          ${UI.textarea('content', '訊息內容', { rows: 4, full: true })}</div>
-          <div class="notice">行政聯繫用（改期、繳費、提醒）；晤談內容請勿於此討論。</div>`,
-        onSubmit: async e2 => {
-          const d2 = UI.formData(e2);
-          if (!d2.client_id) throw new Error('請選擇個案');
-          if (!d2.content) throw new Error('請填寫訊息內容');
-          await POST('/messages', { client_id: Number(d2.client_id), content: d2.content });
-          UI.toast('已送出'); App.go('messages');
-        }
-      });
-    };
-    el.querySelectorAll('[data-m]').forEach(b => {
-      b.onclick = async () => {
-        const cid = Number(b.dataset.m);
-        const msgs = await GET('/messages?client_id=' + cid);
-        const m = UI.modal({
-          title: '訊息', wide: true, hideFooter: true,
-          body: `<div class="chat-list" id="cl">${msgs.map(x => `
-              <div class="chat-msg ${x.sender === 'staff' ? 'me' : 'them'}">${UI.nl2br(x.content)}</div>
-              <div class="chat-meta ${x.sender === 'staff' ? 'me' : 'them'}">${UI.esc(x.staff_name || '個案')}　${UI.esc(x.created_at)}</div>`).join('')}</div>
-            <div class="chat-bar"><textarea id="msg" placeholder="輸入訊息"></textarea>
-              <button class="btn" id="send" type="button">送出</button></div>`
-        });
-        m.body.querySelector('#send').onclick = async () => {
-          const content = m.body.querySelector('#msg').value.trim();
-          if (!content) return;
-          try { await POST('/messages', { client_id: cid, content }); m.close(); App.go('messages'); }
-          catch (e) { UI.err(e); }
-        };
-      };
-    });
-  }
-});
-
 // ---- 公告 ----
 App.page('announcements', {
   title: '公告',
@@ -1187,7 +1129,6 @@ App.page('settings', {
         ['no_show_fee_rate', '未到收費比例（0-1，僅在固定收費為 0 時採用）'],
         ['case_code_prefix', '個案編號前綴'], ['receipt_prefix', '收據號前綴'], ['note_lock_days', '紀錄應完成天數']]],
       ['個案端', [['portal_public_url', '個案專區網址（留空自動由預約表單網址推得）'],
-        ['portal_messages_write', '開放個案在專區留言（1/0；0＝只讀，聯繫走 LINE）'],
         ['portal_booking_enabled', '開放線上預約（1/0）'], ['portal_reschedule_enabled', '開放線上改期（1/0）'],
         ['portal_book_lead_days', '最早可約幾天後'], ['portal_book_max_days', '最晚可約幾天內']]],
       ['專業管理', [['supervision_required_hours', '年度督導時數目標'], ['audit_retention_days', '稽核軌跡保留天數'],

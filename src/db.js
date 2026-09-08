@@ -1415,7 +1415,6 @@ if (getSetting('military_urls_seeded', '') !== '1') {
     booking_cutoff_hours: '0',
     // 個案端「傳訊息給諮商所」：所內以 LINE 為主要對話管道，專區預設只讀，
     // 避免櫃檯要盯兩個地方而漏看。要開放個案在專區留言時把這裡改成 1。
-    portal_messages_write: '0',
     booking_max_days: '45',             // 最遠可約幾天後
     booking_slot_step: '30',            // 表單上時段間隔（分鐘）
     booking_require_birth: '1',         // 是否必填生日（補助方案需驗年齡）

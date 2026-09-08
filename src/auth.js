@@ -22,7 +22,6 @@ const MODULES = [
   { key: 'partners', label: '合作單位與請款' },
   { key: 'hr', label: '請假與繼續教育' },
   { key: 'payouts', label: '報酬與扣繳' },
-  { key: 'messages', label: '個案訊息' },
   { key: 'announcements', label: '公告' },
   { key: 'reports', label: '統計報表' },
   { key: 'users', label: '帳號權限' },
@@ -32,9 +31,9 @@ const MODULE_KEYS = MODULES.map(m => m.key);
 
 // 行政人員預設不含晤談紀錄與危機事件（保密考量），建立帳號時可再調整
 const ROLE_DEFAULT_MODULES = {
-  counselor: ['schedule', 'bookings', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports'],
-  supervisor: ['schedule', 'bookings', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'messages', 'announcements', 'reports'],
-  staff: ['schedule', 'bookings', 'intake', 'clients', 'groups', 'assessments', 'consents', 'billing', 'partners', 'messages', 'announcements']
+  counselor: ['schedule', 'bookings', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'announcements', 'reports'],
+  supervisor: ['schedule', 'bookings', 'intake', 'clients', 'groups', 'notes', 'plans', 'assessments', 'risk', 'supervision', 'consents', 'hr', 'announcements', 'reports'],
+  staff: ['schedule', 'bookings', 'intake', 'clients', 'groups', 'assessments', 'consents', 'billing', 'partners', 'announcements']
 };
 
 // 登入暴力嘗試防護：同一帳號連續失敗 5 次鎖定 15 分鐘

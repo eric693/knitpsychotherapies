@@ -138,7 +138,7 @@ function loadPlaywright() {
     // 與員工端一致：示範帳號已停用或刪除時略過，不視為程式問題
     console.log(`  – 個案端（${PORTAL.phone}）：無法登入，略過`);
   } else {
-    for (const tab of ['home', 'book', 'scales', 'billing', 'messages', 'me']) {
+    for (const tab of ['home', 'book', 'scales', 'billing', 'me']) {
       await page.evaluate(k => Portal.go(k), tab);
       await page.waitForTimeout(900);
       checked++;
@@ -147,7 +147,7 @@ function loadPlaywright() {
     }
   }
   perrs.forEach(e => problems.push(`個案端：${e}`));
-  console.log(`  ${perrs.length ? '·' : '✓'} 個案端：6 個分頁`);
+  console.log(`  ${perrs.length ? '·' : '✓'} 個案端：5 個分頁`);
   await page.close();
   await browser.close();
 

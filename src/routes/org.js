@@ -102,8 +102,6 @@ router.get('/my-dashboard', requireStaff(), (req, res) => {
       WHERE a.counselor_id = ? AND a.date BETWEEN date('now','localtime') AND date('now','localtime','+6 days')
         AND a.status IN ('booked','arrived') ORDER BY a.date, a.start_time LIMIT 40`).all(uid),
     // 我負責個案的未讀訊息與待填量表，行政聯繫不漏接
-    unread_messages: one(`SELECT COUNT(*) n FROM messages m JOIN clients c ON c.id = m.client_id
-      WHERE c.counselor_id = ? AND m.sender = 'client' AND m.read_at = ''`, uid).n,
     pending_tasks: db.prepare(`SELECT t.id, t.scale, t.due_date, c.id AS client_id, c.name AS client_name
       FROM assessment_tasks t JOIN clients c ON c.id = t.client_id
       WHERE t.done_id IS NULL AND (t.assigned_by = ? OR c.counselor_id = ?)
@@ -165,7 +163,6 @@ router.get('/dashboard', requireStaff(), (req, res) => {
     no_show_month: one(`SELECT COUNT(*) n FROM appointments WHERE status = 'no_show'
       AND substr(date,1,7) = substr(date('now','localtime'),1,7) ${my ? 'AND counselor_id = ' + my : ''}`).n,
     unpaid: one("SELECT COUNT(*) c, COALESCE(SUM(amount),0) amt FROM invoices WHERE status = 'unpaid'"),
-    unread_messages: one("SELECT COUNT(*) n FROM messages WHERE sender = 'client' AND read_at = ''").n,
     pending_tasks: one('SELECT COUNT(*) n FROM assessment_tasks WHERE done_id IS NULL').n,
     pending_intakes: one("SELECT COUNT(*) n FROM intakes WHERE status IN ('new','waiting')").n,
     tomorrow_count: one(`SELECT COUNT(*) n FROM appointments WHERE date = date('now','localtime','+1 day')
@@ -248,8 +245,7 @@ router.get('/dashboard', requireStaff(), (req, res) => {
 // 導覽列的待辦紅點：目前只有需要櫃檯即時處理的項目，數量小、查詢輕，前端每分鐘更新一次
 router.get('/nav-badges', requireStaff(), (req, res) => {
   res.json({
-    bookings: db.prepare("SELECT COUNT(*) n FROM booking_requests WHERE status = 'new'").get().n,
-    messages: db.prepare("SELECT COUNT(*) n FROM messages WHERE sender = 'client' AND read_at = ''").get().n
+    bookings: db.prepare("SELECT COUNT(*) n FROM booking_requests WHERE status = 'new'").get().n
   });
 });
 
@@ -546,30 +542,6 @@ router.delete('/announcements/:id', requireStaff('announcements'), (req, res) =>
 });
 
 // ---- 個案訊息（行政聯繫用，非晤談內容）----
-router.get('/messages', requireStaff('messages'), (req, res) => {
-  const { client_id = '' } = req.query;
-  if (client_id) {
-    const rows = db.prepare(`SELECT m.*, u.name AS staff_name FROM messages m
-      LEFT JOIN users u ON u.id = m.user_id WHERE m.client_id = ? ORDER BY m.id`).all(Number(client_id));
-    db.prepare("UPDATE messages SET read_at = datetime('now','localtime') WHERE client_id = ? AND sender = 'client' AND read_at = ''")
-      .run(Number(client_id));
-    return res.json(rows);
-  }
-  res.json(db.prepare(`SELECT c.id AS client_id, c.name AS client_name, c.code AS client_code,
-      (SELECT content FROM messages m WHERE m.client_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_content,
-      (SELECT created_at FROM messages m WHERE m.client_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_at,
-      (SELECT COUNT(*) FROM messages m WHERE m.client_id = c.id AND m.sender = 'client' AND m.read_at = '') AS unread
-    FROM clients c WHERE EXISTS (SELECT 1 FROM messages m WHERE m.client_id = c.id)
-    ORDER BY unread DESC, last_at DESC`).all());
-});
-router.post('/messages', requireStaff('messages'), (req, res) => {
-  const { client_id, content = '' } = req.body || {};
-  if (!content.trim()) return res.status(400).json({ error: '請輸入內容' });
-  const info = db.prepare("INSERT INTO messages (client_id, sender, user_id, content) VALUES (?, 'staff', ?, ?)")
-    .run(Number(client_id), req.user.id, content.trim());
-  res.json({ id: info.lastInsertRowid });
-});
-
 // ---- 統計報表 ----
 // 月報：預設即時計算；已定版（快照）的月份可用 snapshot=1 取回當時報出去的數字
 function reportsHandler(req, res) {

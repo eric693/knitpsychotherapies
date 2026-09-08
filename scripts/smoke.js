@@ -698,12 +698,12 @@ function startServer() {
     assert(soon.every(x => !x.slots.length), '三天內的時段應被 72 小時門檻濾掉');
     await admin.ok('PUT', '/api/settings', { booking_cutoff_hours: '0', booking_cutoff_time: '21:00' });
   });
-  await test('個案專區訊息預設只讀，聯繫走 LINE', async () => {
-    await portal.fails('POST', '/api/portal/messages', { content: '測試留言' }, 'LINE');
-    await admin.ok('PUT', '/api/settings', { portal_messages_write: '1' });
-    const r = await portal.ok('POST', '/api/portal/messages', { content: '開放後可留言' });
-    assert(r.id, '開放後應可留言');
-    await admin.ok('PUT', '/api/settings', { portal_messages_write: '0' });
+  // 站內訊息功能已移除，聯繫一律走 LINE 官方帳號或電話；殘留的端點不該又活過來
+  await test('個案專區已無站內訊息', async () => {
+    const r = await portal.get('/api/portal/messages');
+    equal(r.status, 404, '專區訊息端點應已移除');
+    const w = await portal.post('/api/portal/messages', { content: '測試留言' });
+    equal(w.status, 404, '專區留言端點應已移除');
   });
   await test('個案端可自助取得 LINE 綁定碼', async () => {
     // 加好友只能由本人在 LINE 點下去，系統能做的是把綁定碼給個案、讓他傳進官方帳號；
@@ -2167,10 +2167,12 @@ function startServer() {
     await admin.ok('DELETE', `/api/safety-plans/${p2.id}`);
     await admin.ok('DELETE', `/api/safety-plans/${p1.id}`);
   });
-  await test('個案訊息可由所方主動發起', async () => {
-    await admin.ok('POST', '/api/messages', { client_id: clientId, content: '提醒您本週的晤談時間' });
-    const list = await admin.ok('GET', '/api/messages');
-    assert(list.some(m => m.client_id === clientId), '對話清單應出現這位個案');
+  await test('後台個案訊息頁已移除', async () => {
+    equal((await admin.get('/api/messages')).status, 404, '訊息清單端點應已移除');
+    equal((await admin.post('/api/messages', { client_id: clientId, content: 'x' })).status, 404,
+      '訊息送出端點應已移除');
+    const meta = await admin.ok('GET', '/api/meta');
+    assert(!meta.modules.some(m => m.key === 'messages'), '權限模組不應再有 messages');
   });
 
   section('設定與範本的還原');

@@ -1,4 +1,5 @@
-// 個案專區（手機版）：預約、量表填寫、同意書簽署、費用查詢、訊息
+// 個案專區（手機版）：預約、量表填寫、同意書簽署、費用查詢
+// 行政聯繫一律走 LINE 官方帳號或電話，刻意不做站內訊息（見「我的資料」的綁定說明）。
 // 刻意不提供任何晤談紀錄內容，避免個案端裝置外洩高敏感紀錄
 const PAPI = p => '/portal' + p;
 
@@ -110,7 +111,6 @@ const Portal = {
     { key: 'book', label: '預約' },
     { key: 'scales', label: '量表' },
     { key: 'billing', label: '費用' },
-    { key: 'messages', label: '訊息' },
     { key: 'me', label: '我的' }
   ],
 
@@ -125,7 +125,6 @@ const Portal = {
         </div>
         <div class="fam-body" id="body"></div>
         <div class="fam-nav">${Portal.navItems.map(n => `<button data-t="${n.key}">${n.label}
-          ${n.key === 'messages' && m.unread ? `<span class="nav-badge">${m.unread}</span>` : ''}
           ${n.key === 'scales' && m.pending_tasks.length ? `<span class="nav-badge">${m.pending_tasks.length}</span>` : ''}
         </button>`).join('')}</div>
       </div>`;
@@ -295,29 +294,6 @@ const Portal = {
           ${UI.table(['日期', '項目', '金額', '狀態'], d.invoices.map(i => `<tr><td>${i.date}</td>
             <td>${UI.esc(i.item)}</td><td>${UI.fmtMoney(i.amount)}</td>
             <td>${stateTag('inv_status', i.status)}</td></tr>`), '尚無費用紀錄')}</div>`;
-    },
-
-    async messages(el) {
-      const msgs = await GET(PAPI('/messages'));
-      Portal.me.unread = 0;
-      el.innerHTML = `<div class="card"><h3>${Portal.me.messages_write ? '與諮商所聯繫' : '諮商所的通知'}</h3>
-        <div class="chat-list">${msgs.length ? msgs.map(m => `
-          <div class="chat-msg ${m.sender === 'client' ? 'me' : 'them'}">${UI.nl2br(m.content)}</div>
-          <div class="chat-meta ${m.sender === 'client' ? 'me' : 'them'}">${UI.esc(m.staff_name || '我')}　${UI.esc(m.created_at)}</div>`).join('')
-      : '<div class="empty">尚無訊息</div>'}</div>
-        ${Portal.me.messages_write ? `<div class="chat-bar"><textarea id="msg" placeholder="改期、繳費等行政事項"></textarea>
-          <button class="btn" id="send" type="button">送出</button></div>
-        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
-          此處為行政聯繫管道，非即時回覆；緊急狀況請撥 1925 或 119。</div>`
-    : `<div style="font-size:13.5px;color:var(--muted);line-height:1.9;margin-top:10px">
-          這裡只顯示諮商所傳給您的訊息。<strong>要聯絡我們請用 LINE 官方帳號</strong>（在「我的資料」可完成綁定），
-          或直接來電；緊急狀況請撥 1925 或 119。</div>`}</div>`;
-      const send = el.querySelector('#send');
-      if (send) send.onclick = async () => {
-        const content = el.querySelector('#msg').value.trim();
-        if (!content) return;
-        try { await POST(PAPI('/messages'), { content }); Portal.go('messages'); } catch (e) { UI.err(e); }
-      };
     },
 
     async me(el) {

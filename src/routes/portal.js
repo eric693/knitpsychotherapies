@@ -132,7 +132,6 @@ router.get('/me', requireClient, (req, res) => {
     booking_enabled: getSetting('portal_booking_enabled', '1') === '1',
     plans: portalPlanRows().map(portalPlanPublic),
     family: bookableMembers(c.id),
-    messages_write: getSetting('portal_messages_write', '0') === '1',
     reschedule_enabled: getSetting('portal_reschedule_enabled', '1') === '1',
     cancel_hours: Number(getSetting('cancel_hours', '24')),
     no_show_fee_rate: Number(getSetting('no_show_fee_rate', '0.5')),
@@ -141,8 +140,7 @@ router.get('/me', requireClient, (req, res) => {
     pending_consents: templates
       .filter(t => !signed.some(s => s.key === t.key && s.version === t.version))
       .map(t => ({ key: t.key, title: t.title })),
-    pending_tasks: db.prepare('SELECT id, scale, due_date FROM assessment_tasks WHERE client_id = ? AND done_id IS NULL').all(c.id),
-    unread: db.prepare("SELECT COUNT(*) n FROM messages WHERE client_id = ? AND sender = 'staff' AND read_at = ''").get(c.id).n
+    pending_tasks: db.prepare('SELECT id, scale, due_date FROM assessment_tasks WHERE client_id = ? AND done_id IS NULL').all(c.id)
   });
 });
 
@@ -414,8 +412,9 @@ router.post('/appointments/:id/reschedule', requireClient, async (req, res) => {
   res.json({ ok: true, date, start_time, end_time: slot.end_time });
 });
 
-// 取消：期限內直接取消；不足時數者留下取消申請與事由，並同步發一則訊息給櫃檯，
-// 由櫃檯決定是否依未到比例計費（不讓個案端自行決定收費結果）
+// 取消：期限內直接取消；不足時數者只留下取消申請與事由（預約仍然有效），
+// 由櫃檯決定是否依未到比例計費（不讓個案端自行決定收費結果）。
+// 櫃檯是從排程頁與首頁待辦的「個案申請取消」看到這件事。
 router.post('/appointments/:id/cancel', requireClient, async (req, res) => {
   // 自己的約，或被授權代訂的家人的約，都可以改期／取消
   const a = ownedAppointment(req, req.params.id);
@@ -432,10 +431,8 @@ router.post('/appointments/:id/cancel', requireClient, async (req, res) => {
     const charge = plans.noShowCharge(a.fee);
     db.prepare('UPDATE appointments SET cancel_requested_at = ?, cancel_request_reason = ? WHERE id = ?')
       .run(nowStamp(), reason || '個案申請取消', a.id);
-    // 訊息掛在「送出申請的人」名下（櫃檯要回覆的是他），但要寫清楚是誰的晤談
-    db.prepare("INSERT INTO messages (client_id, sender, content) VALUES (?, 'client', ?)").run(
-      req.client.id,
-      `【取消申請】${who.name}${a.date} ${a.start_time} 的晤談，事由：${reason || '未填寫'}（距晤談不足 ${hours} 小時）`);
+    // 櫃檯是從排程頁與首頁待辦的「個案申請取消」看到這件事（cancel_requested_at），
+    // 個案檔案的晤談歷程也會列出申請時間與事由。
     audit('client', req.client.id, req.client.name, '個案端申請取消', req.client.code,
       { date: a.date, for: who.id === req.client.id ? '' : who.code });
     return res.json({
@@ -529,25 +526,7 @@ router.get('/billing', requireClient, (req, res) => {
   });
 });
 
-// ---- 訊息與公告 ----
-router.get('/messages', requireClient, (req, res) => {
-  const rows = db.prepare(`SELECT m.id, m.sender, m.content, m.created_at, u.name AS staff_name
-    FROM messages m LEFT JOIN users u ON u.id = m.user_id WHERE m.client_id = ? ORDER BY m.id`).all(req.client.id);
-  db.prepare("UPDATE messages SET read_at = datetime('now','localtime') WHERE client_id = ? AND sender = 'staff' AND read_at = ''")
-    .run(req.client.id);
-  res.json(rows);
-});
-router.post('/messages', requireClient, (req, res) => {
-  if (getSetting('portal_messages_write', '0') !== '1') {
-    return res.status(403).json({ error: '本所以 LINE 官方帳號聯繫，請由 LINE 與我們聯絡；緊急事項請直接來電。' });
-  }
-  const content = String((req.body && req.body.content) || '').trim();
-  if (!content) return res.status(400).json({ error: '請輸入內容' });
-  if (content.length > 1000) return res.status(400).json({ error: '訊息過長' });
-  const info = db.prepare("INSERT INTO messages (client_id, sender, content) VALUES (?, 'client', ?)").run(req.client.id, content);
-  res.json({ id: info.lastInsertRowid });
-});
-
+// ---- 公告 ----
 router.get('/announcements', requireClient, (req, res) => {
   res.json(db.prepare(`SELECT id, title, content, publish_date FROM announcements
     WHERE audience IN ('all','client') AND publish_date <= date('now','localtime')

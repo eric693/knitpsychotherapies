@@ -107,7 +107,7 @@ const App = {
   },
 
   navGroups: [
-    { label: '每日作業', keys: ['dashboard', 'my', 'calendar', 'schedule', 'room-board', 'bookings', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review', 'messages'] },
+    { label: '每日作業', keys: ['dashboard', 'my', 'calendar', 'schedule', 'room-board', 'bookings', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review'] },
     { label: '個案服務', keys: ['intake', 'intake-forms', 'clients', 'groups', 'assessments', 'risk', 'safety', 'follow-ups', 'consents'] },
     { label: '專業與營運', keys: ['supervision', 'hr', 'payouts', 'billing', 'receipts', 'certificates', 'overdue', 'packages', 'partners', 'plan-board', 'income', 'annual', 'announcements', 'reports'] },
     { label: '系統', keys: ['users', 'plans', 'line', 'gform', 'settings', 'imports', 'retention', 'audit'] }
@@ -158,7 +158,7 @@ const App = {
     App._badgeTimer = setInterval(App.refreshBadges, 60000);
   },
 
-  // 導覽列紅點：有待處理的線上預約申請或未讀個案訊息時亮起。
+  // 導覽列紅點：有待處理的線上預約申請時亮起。
   // 數字直接來自資料庫的待處理筆數，所以只有真的處理完（或被取消）才會消失，
   // 點過、看過都不會讓紅點消掉。
   async refreshBadges() {
@@ -272,7 +272,6 @@ App.page('dashboard', {
         <div class="stat"><div class="num">${d.month_sessions}</div><div class="label">本月完成晤談</div></div>
         <div class="stat"><div class="num ${d.no_show_month ? 'warn' : ''}">${d.no_show_month}</div><div class="label">本月未到</div></div>
         <div class="stat clickable" onclick="location.hash='billing'"><div class="num ${d.unpaid.c ? 'warn' : ''}">${d.unpaid.c}</div><div class="label">未收款（${UI.fmtMoney(d.unpaid.amt)}）</div></div>
-        <div class="stat clickable" onclick="location.hash='messages'"><div class="num ${d.unread_messages ? 'warn' : ''}">${d.unread_messages}</div><div class="label">未讀個案訊息</div></div>
         <div class="stat clickable" onclick="location.hash='assessments'"><div class="num">${d.pending_tasks}</div><div class="label">待填量表</div></div>
         <div class="stat clickable" onclick="location.hash='intake'"><div class="num ${d.pending_intakes ? 'warn' : ''}">${d.pending_intakes}</div><div class="label">待處理來電</div></div>
         <div class="stat clickable" onclick="location.hash='reminders'"><div class="num ${d.tomorrow_unreminded ? 'warn' : ''}">${d.tomorrow_unreminded}/${d.tomorrow_count}</div><div class="label">明日待提醒</div></div>
@@ -384,7 +383,6 @@ App.page('my', {
         <div class="stat clickable" onclick="location.hash='notes-pending'"><div class="num ${overdueNotes ? 'danger' : d.pending_notes.length ? 'warn' : ''}">${d.pending_notes.length}</div>
           <div class="label">待補紀錄${overdueNotes ? `（逾期 ${overdueNotes}）` : ''}</div></div>
         <div class="stat clickable" onclick="location.hash='notes-pending'"><div class="num ${d.pending_reports ? 'warn' : ''}">${d.pending_reports}</div><div class="label">待完成衡鑑報告</div></div>
-        <div class="stat clickable" onclick="location.hash='messages'"><div class="num ${d.unread_messages ? 'warn' : ''}">${d.unread_messages}</div><div class="label">我的個案未讀訊息</div></div>
         <div class="stat"><div class="num">${UI.fmtMoney(d.month_revenue)}</div><div class="label">本月開立費用（我的個案）</div></div>
       </div>
 
