@@ -960,6 +960,7 @@ App.page('users', {
   help: [
     '按「新增帳號」建立員工帳號，勾選這個人能看到哪些模組；未勾的模組連選單都不會出現。',
     '行政人員預設不含晤談紀錄與危機事件（保密考量），可視需要調整。',
+    '心理師只看得到自己主責的個案，證明書也不經手（選單不會出現）；督導與管理者不受此限。',
     '離職請用「停用」而不是刪除，才留得住稽核軌跡。',
   ],
   module: 'users',
@@ -982,12 +983,6 @@ App.page('users', {
   })}
         ${UI.input('phone', '電話', { value: u ? u.phone : '' })}
         ${UI.input('email', 'Email', { value: u ? u.email : '' })}
-        <div class="form-row full" style="margin-top:4px"><label>人事資料（在職／離職證明書用）</label></div>
-        ${UI.select('gender', '性別', [['', '未填'], ['male', '男'], ['female', '女']], { value: u ? (u.gender || '') : '' })}
-        ${UI.input('birth_date', '出生日期', { type: 'date', value: u ? (u.birth_date || '') : '' })}
-        ${UI.input('hire_date', '到職日期', { type: 'date', value: u ? (u.hire_date || '') : '' })}
-        ${UI.input('resign_date', '離職日期', { type: 'date', value: u ? (u.resign_date || '') : '' })}
-        ${UI.input('work_place', '服務地點（留空用機構地址）', { value: u ? (u.work_place || '') : '', full: true })}
         <div class="form-row full" style="margin-top:4px"><label>領款人資料（列印勞務報酬單、申報扣繳憑單用）</label></div>
         ${UI.input('id_no', '身分證字號', { value: u ? (u.id_no || '') : '' })}
         ${UI.input('passport_no', '居留證／護照號碼', { value: u ? (u.passport_no || '') : '' })}
@@ -1146,7 +1141,7 @@ App.page('settings', {
       ['證明書', [['cert_prefix', '證明書編號前綴'], ['center_director_license', '負責心理師證書字號（如 心理字1923號）'],
         ['cert_employment_title', '在職證明書 標題'], ['cert_employment_statement', '在職證明書 聲明文字'],
         ['cert_resignation_title', '離職證明書 標題'], ['cert_resignation_statement', '離職證明書 聲明文字'],
-        ['cert_treatment_title', '治療證明 標題'], ['cert_profile_title', '基本資料表 標題'],
+        ['cert_treatment_title', '諮商/治療證明 標題'], ['cert_profile_title', '基本資料表 標題'],
         ['cert_profile_statement', '基本資料表 說明文字'],
         ['cert_plan_detail_title', '方案服務明細 標題'], ['cert_referral_title', '方案轉介單 標題'],
         ['center_org_code', '方案合作機構代碼'],
@@ -1166,7 +1161,7 @@ App.page('settings', {
         ['cert_disadv_official_title', '弱勢療育記錄卡 標題'],
         ['disadv_official_authority', '弱勢療育記錄卡 主管機關'],
         ['disadv_form_note', '弱勢療育記錄卡 注意事項'],
-        ['cert_treatment_statement', '治療證明 聲明文字（{purpose} 會代入用途）']]],
+        ['cert_treatment_statement', '諮商/治療證明 聲明文字（{purpose} 會代入用途）']]],
       ['提醒發送通道', [
         ['notify_channel', '通道：auto 已綁 LINE 走官方帳號其餘走簡訊／line 只用官方帳號／webhook 只用簡訊／manual 一律人工'],
         ['notify_webhook_url', '簡訊商 Webhook 網址（留空則沒綁 LINE 的人只能人工發送）'],

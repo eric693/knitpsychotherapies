@@ -655,32 +655,6 @@ router.post('/availability/bulk', requireStaff('schedule'), (req, res) => {
   res.json({ ok: true, count: merged.length });
 });
 
-// 行事曆：任意日期區間的預約、團體場次、請假與可預約時段，前端排成月曆／日檢視
-router.get('/schedule/calendar', requireStaff('schedule'), (req, res) => {
-  const from = req.query.from || today();
-  const to = req.query.to || addDays(from, 30);
-  const cid = Number(req.query.counselor_id) || 0;
-  const only = (sql, extra) => (cid ? `${sql} AND ${extra}` : sql);
-  res.json({
-    from, to, counselor_id: cid || '',
-    counselors: db.prepare("SELECT id, name FROM users WHERE active = 1 AND role IN ('counselor','supervisor','admin') ORDER BY id").all(),
-    // 帶上 week_start，前端依「該週有專用班就用專用班」自行解析
-    availability: cid
-      ? db.prepare(`SELECT * FROM availability WHERE counselor_id = ? AND start_time < end_time
-          ORDER BY weekday, start_time`).all(cid)
-      : db.prepare('SELECT * FROM availability WHERE start_time < end_time ORDER BY weekday, start_time').all(),
-    time_off: db.prepare(only(`SELECT t.*, u.name AS counselor_name FROM time_off t JOIN users u ON u.id = t.counselor_id
-      WHERE t.end_date >= ? AND t.start_date <= ?`, 't.counselor_id = ' + cid)).all(from, to),
-    group_sessions: db.prepare(only(`SELECT s.*, g.name AS group_name, g.counselor_id, u.name AS counselor_name, r.name AS room_name
-      FROM group_sessions s JOIN groups g ON g.id = s.group_id
-      LEFT JOIN users u ON u.id = g.counselor_id LEFT JOIN rooms r ON r.id = s.room_id
-      WHERE s.date BETWEEN ? AND ? AND s.status != 'cancelled'`, '(g.counselor_id = ' + cid + ' OR g.co_counselor_id = ' + cid + ')'))
-      .all(from, to),
-    appointments: db.prepare(only(`${LIST_SQL} WHERE a.date BETWEEN ? AND ?`, 'a.counselor_id = ' + cid) + ' ORDER BY a.date, a.start_time')
-      .all(from, to)
-  });
-});
-
 // 指定心理師某日的可預約時段（扣掉已被預約的），個案端與櫃檯共用
 // minutesOverride：方案有自己的時長（如 40 分鐘的大學生方案、80 分鐘的伴侶諮商）時帶入，
 // 未帶則沿用系統預設的晤談長度。

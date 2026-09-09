@@ -1,11 +1,21 @@
 const express = require('express');
-const { db, audit, today, nowStamp, getSetting } = require('../db');
+const { db, audit, today, nowStamp, getSetting, ageYears } = require('../db');
 const { requireStaff, requireNoteAccess, canViewNote, isSupervisorOf } = require('../auth');
 
 const router = express.Router();
 
 const NOTE_FIELDS = ['date', 'session_no', 'duration_min', 'subjective', 'objective', 'assessment',
-  'plan', 'intervention', 'homework', 'risk_flag', 'risk_note'];
+  'plan', 'intervention', 'homework', 'risk_flag', 'risk_note', 'guardian_sign'];
+
+// 兒童青少年個案的紀錄用「療育服務紀錄表」的欄位（早療補助與督考都看這一份），
+// 成人維持 S/O/A/P。依個案年齡自動決定，撰寫者不必每次選 ——
+// 選錯格式事後才發現，整份紀錄的欄位對不上，補起來很痛苦。
+function formatForClient(client) {
+  if (!client) return 'soap';
+  if (client.is_minor) return 'therapy';
+  const age = ageYears(client.birth_date);
+  return age !== null && age < Number(getSetting('adult_age', '18')) ? 'therapy' : 'soap';
+}
 
 // 某個案的晤談紀錄；requireNoteAccess 已擋掉非主責／非督導
 router.get('/clients/:clientId/notes', requireStaff('notes'), requireNoteAccess, (req, res) => {
@@ -21,6 +31,7 @@ router.get('/notes/pending', requireStaff('notes'), (req, res) => {
   const mine = req.user.role === 'counselor' ? 'AND a.counselor_id = ' + req.user.id : '';
   const rows = db.prepare(`SELECT a.id, a.date, a.start_time, a.type, a.counselor_id,
       c.id AS client_id, c.name AS client_name, c.code AS client_code, u.name AS counselor_name,
+      c.is_minor, c.birth_date,
       CAST(julianday('now','localtime') - julianday(a.date) AS INTEGER) AS days_ago
     FROM appointments a
     JOIN clients c ON c.id = a.client_id
@@ -28,7 +39,9 @@ router.get('/notes/pending', requireStaff('notes'), (req, res) => {
     WHERE a.status = 'done' ${mine}
       AND NOT EXISTS (SELECT 1 FROM session_notes n WHERE n.appointment_id = a.id)
     ORDER BY a.date`).all();
-  res.json({ lock_days: Number(getSetting('note_lock_days', '7')), rows });
+  // 要用哪一份表由後端判定（新增紀錄時也是同一個函式），前端不再自己算一次年齡
+  res.json({ lock_days: Number(getSetting('note_lock_days', '7')),
+    rows: rows.map(r => ({ ...r, note_format: formatForClient(r) })) });
 });
 
 // 待覆核清單：督導看自己督導的實習生，管理者／督導看全部
@@ -75,14 +88,15 @@ router.post('/notes', requireStaff('notes'), requireNoteAccess, (req, res) => {
   const last = db.prepare('SELECT MAX(session_no) n FROM session_notes WHERE client_id = ?').get(req.client.id).n || 0;
   const info = db.prepare(`INSERT INTO session_notes
     (client_id, appointment_id, counselor_id, date, session_no, duration_min, subjective, objective,
-     assessment, plan, intervention, homework, risk_flag, risk_note)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     assessment, plan, intervention, homework, risk_flag, risk_note, note_format, guardian_sign)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     req.client.id, appt ? appt.id : null, req.user.id,
     b.date || (appt ? appt.date : today()),
     Number(b.session_no) || last + 1,
     Number(b.duration_min) || require('../plans').defaultSessionMinutes(),
     b.subjective || '', b.objective || '', b.assessment || '', b.plan || '',
-    b.intervention || '', b.homework || '', b.risk_flag || 'none', b.risk_note || '');
+    b.intervention || '', b.homework || '', b.risk_flag || 'none', b.risk_note || '',
+    formatForClient(req.client), b.guardian_sign || '');
   // 紀錄中標註風險即同步拉高個案風險等級，讓總覽與個案清單看得到
   if (b.risk_flag && b.risk_flag !== 'none') {
     db.prepare("UPDATE clients SET risk_level = ? WHERE id = ?")
@@ -420,6 +434,111 @@ router.get('/supervisions/hours', requireStaff('supervision'), (req, res) => {
       WHERE u.active = 1 AND u.role IN ('counselor','supervisor')
       GROUP BY u.id ORDER BY u.id`).all(year)
   });
+});
+
+
+// ---- 列印（督考用）----
+// 督考、早療補助與家長索取時都要紙本。可印單一筆，也可用 ?client_id= 一次印出
+// 該個案全部已定稿的紀錄（每筆一頁），承辦不必一筆一筆開、一筆一筆印。
+// 只印已簽核定稿的：草稿還會改，印出去的東西必須跟系統裡的一致。
+const NOTE_FORM_LABELS = {
+  soap: {
+    label: '晤談紀錄（SOAP）',
+    rows: [['subjective', 'S 主觀陳述'], ['objective', 'O 客觀觀察'], ['assessment', 'A 評估與概念化'],
+      ['plan', 'P 後續計畫'], ['intervention', '使用技術／取向'], ['homework', '家庭作業']]
+  },
+  therapy: {
+    label: '療育服務紀錄表',
+    rows: [['subjective', '前次療育後家長回饋之居家互動情形與問題'], ['assessment', '本次療育目標'],
+      ['intervention', '療育活動內容'], ['objective', '兒童表現'],
+      ['homework', '本次居家療育建議'], ['plan', '下次療育預定討論事項與目標']]
+  }
+};
+function noteHtml(rows) {
+  const esc = v => String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const nl = v => esc(v).replace(/\n/g, '<br>');
+  const center = getSetting('center_name', '');
+  const page = n => {
+    const form = NOTE_FORM_LABELS[n.note_format] || NOTE_FORM_LABELS.soap;
+    const therapy = n.note_format === 'therapy';
+    return `<section>
+      <div class="sub">${esc(center)}</div>
+      <h1>${esc(form.label)}</h1>
+      <table>
+        <tr><th>${therapy ? '兒童姓名' : '個案姓名'}</th><td>${esc(n.client_name)}（${esc(n.client_code)}）</td>
+          <th>${therapy ? '療育日期' : '晤談日期'}</th><td>${esc(n.date)}</td></tr>
+        ${therapy ? `<tr><th>家長姓名</th><td>${esc(n.guardian_name || '')}</td>
+          <th>兒童生日</th><td>${esc(n.birth_date || '')}</td></tr>
+        <tr><th>療育單位</th><td>${esc(center)}</td>
+          <th>療育類別</th><td>心理治療</td></tr>` : ''}
+        <tr><th>${therapy ? '療育人員' : '心理師'}</th><td>${esc(n.counselor_name || '')}</td>
+          <th>次數／時間</th><td>第 ${esc(n.session_no)} 次　${esc(n.duration_min)} 分鐘</td></tr>
+      </table>
+      <table>
+        ${form.rows.map(([k, label]) => `<tr><th class="wide">${esc(label)}</th><td>${nl(n[k]) || '—'}</td></tr>`).join('')}
+        ${n.risk_flag && n.risk_flag !== 'none'
+    ? `<tr><th class="wide">風險標記與說明</th><td>${esc(n.risk_flag)}　${nl(n.risk_note)}</td></tr>` : ''}
+      </table>
+      <div class="sign">
+        ${therapy ? `家長簽名：${esc(n.guardian_sign) || '＿＿＿＿＿＿＿＿＿＿'}　　　` : ''}
+        ${therapy ? '療育人員' : '心理師'}簽名：${esc(n.counselor_name || '')}
+        ${n.signed_at ? `（系統簽核 ${esc(n.signed_at)}）` : ''}
+        ${n.review_status === 'approved' ? `<br>督導覆核：${esc(n.reviewer_name || '')}　${esc(n.reviewed_at)}` : ''}
+      </div>
+    </section>`;
+  };
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<title>${esc(rows[0].client_name)}－${esc(NOTE_FORM_LABELS[rows[0].note_format] ? NOTE_FORM_LABELS[rows[0].note_format].label : '晤談紀錄')}</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    color: #1c2b2b; font-size: 13.5px; line-height: 1.85; }
+  section { page-break-after: always; }
+  section:last-child { page-break-after: auto; }
+  .sub { text-align: center; font-size: 14px; }
+  h1 { font-size: 21px; text-align: center; letter-spacing: 6px; margin: 2px 0 12px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+  th, td { border: 1px solid #444; padding: 7px 9px; vertical-align: top; }
+  th { background: #f2f5f5; width: 96px; text-align: left; font-weight: 600; }
+  th.wide { width: 200px; }
+  .sign { margin-top: 22px; line-height: 2.6; }
+  @media print { .noprint { display: none; } }
+</style></head><body>
+<div class="noprint" style="text-align:right;margin-bottom:8px">
+  <button onclick="window.print()">列印</button></div>
+${rows.map(page).join('')}
+</body></html>`;
+}
+
+router.get('/clients/:clientId/notes/print', requireStaff('notes'), requireNoteAccess, (req, res) => {
+  const rows = db.prepare(`SELECT n.*, u.name AS counselor_name, r.name AS reviewer_name,
+      c.name AS client_name, c.code AS client_code, c.birth_date, c.guardian_name
+    FROM session_notes n
+    LEFT JOIN users u ON u.id = n.counselor_id
+    LEFT JOIN users r ON r.id = n.reviewer_id
+    JOIN clients c ON c.id = n.client_id
+    WHERE n.client_id = ? AND n.locked = 1
+    ORDER BY n.date, n.session_no`).all(req.client.id);
+  if (!rows.length) return res.status(404).type('text/plain; charset=utf-8').send('這位個案還沒有已簽核定稿的紀錄');
+  audit('staff', req.user.id, req.user.name, '列印晤談紀錄（全部）', req.client.code, { count: rows.length });
+  res.type('html').send(noteHtml(rows));
+});
+
+router.get('/notes/:id/print', requireStaff('notes'), (req, res) => {
+  const n = db.prepare(`SELECT n.*, u.name AS counselor_name, r.name AS reviewer_name,
+      c.name AS client_name, c.code AS client_code, c.birth_date, c.guardian_name, c.counselor_id AS owner_id
+    FROM session_notes n
+    LEFT JOIN users u ON u.id = n.counselor_id
+    LEFT JOIN users r ON r.id = n.reviewer_id
+    JOIN clients c ON c.id = n.client_id WHERE n.id = ?`).get(req.params.id);
+  if (!n) return res.status(404).type('text/plain; charset=utf-8').send('找不到此紀錄');
+  if (!canViewNote(req.user, n)) {
+    return res.status(403).type('text/plain; charset=utf-8').send('晤談紀錄僅限主責心理師、督導與管理者存取');
+  }
+  if (!n.locked) return res.status(400).type('text/plain; charset=utf-8').send('草稿尚未簽核定稿，不提供列印');
+  audit('staff', req.user.id, req.user.name, '列印晤談紀錄', n.client_code, { note_id: n.id });
+  res.type('html').send(noteHtml([n]));
 });
 
 module.exports = router;

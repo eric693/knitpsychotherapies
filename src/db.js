@@ -88,6 +88,18 @@ ensureColumns('consent_templates', {
   plan_ids: "TEXT NOT NULL DEFAULT ''"
 });
 ensureColumns('session_notes', {
+  // 紀錄格式：soap 一般晤談（S/O/A/P）／therapy 療育服務紀錄表（兒童青少年）。
+  // 兩種格式共用同一組文字欄位，只是欄位名稱不同 —— 六個欄位剛好一一對應，
+  // 不必另開一張表，舊紀錄也不受影響（既有資料一律是 soap）。
+  //   subjective   前次療育後家長回饋之居家互動情形與問題
+  //   assessment   本次療育目標
+  //   intervention 療育活動內容
+  //   objective    兒童表現
+  //   homework     本次居家療育建議
+  //   plan         下次療育預定討論事項與目標
+  note_format: "TEXT NOT NULL DEFAULT 'soap'",
+  // 家長簽名：療育服務紀錄表要家長逐次簽名，督考會查
+  guardian_sign: "TEXT NOT NULL DEFAULT ''",
   // 覆核狀態：none 不需覆核（正式心理師）／pending 待督導覆核／approved 已覆核／returned 退回補正
   review_status: "TEXT NOT NULL DEFAULT 'none'",
   reviewer_id: 'INTEGER REFERENCES users(id)',
@@ -334,7 +346,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     payout_slip_title: '勞務報酬單',
     payout_slip_note: '本單依所得稅法及全民健康保險補充保險費規定辦理；單次給付未達起扣門檻者免予扣繳，'
       + '年度所得仍以扣繳憑單全年累計金額為準。',
-    // ---- 證明書（在職、離職、治療證明）----
+    // ---- 證明書（在職、離職、諮商/治療證明）----
     // 標題與聲明文字都可改；開立時仍可逐張再改，這裡只是預設值。
     cert_prefix: 'KC',                  // 證明書流水編號前綴
     center_director_license: '',        // 負責心理師證書字號（如 心理字1923號）
@@ -342,7 +354,7 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
     cert_employment_statement: '上列各項確實。特此證明。',
     cert_resignation_title: '離職證明書',
     cert_resignation_statement: '以上各項確實，特此證明。',
-    cert_treatment_title: '治療證明',
+    cert_treatment_title: '諮商/治療證明',
     cert_profile_title: '基本資料表',
     cert_profile_statement: '',
     // 公部門補助方案的表單：服務明細（附表 2）與轉介單
@@ -467,6 +479,10 @@ const UI_TEXT_KEYS = Object.keys(UI_TEXT_DEFAULTS);
   const has = db.prepare('SELECT 1 FROM settings WHERE key = ?');
   const ins = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(SETTING_DEFAULTS)) if (!has.get(k)) ins.run(k, v);
+  // 「治療證明」更名為「諮商/治療證明」。設定值早就存進資料庫了，改預設值不會動到既有的那一列，
+  // 所以這裡把「還維持舊預設、代表所方沒有自己改過」的那一筆一併換掉；改過的一律不動。
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'cert_treatment_title' AND value = '治療證明'")
+    .run(SETTING_DEFAULTS.cert_treatment_title);
 }
 
 // 同意書範本（後台可改內容並遞增版本；已簽署者保存全文快照，不受改版影響）
@@ -993,18 +1009,18 @@ ensureColumns('receipts', {
   image_name: "TEXT NOT NULL DEFAULT ''"
 });
 
-// ---- 證明書（在職、離職、治療證明）----
+// ---- 證明書（在職、離職、諮商/治療證明）----
 // 版面與文字都存在 data（JSON）裡：標題、每一列的欄位名與內容、聲明段落、
 // 機構抬頭與核章欄位皆可逐張改寫，套版只提供預設值，不限制所方怎麼寫。
 db.exec(`CREATE TABLE IF NOT EXISTS certificates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   cert_no TEXT NOT NULL UNIQUE,                -- 流水編號，如 KC2026090001
-  kind TEXT NOT NULL DEFAULT 'employment',     -- employment 在職 / resignation 離職 / treatment 治療證明
+  kind TEXT NOT NULL DEFAULT 'employment',     -- employment 在職 / resignation 離職 / treatment 諮商/治療證明
   user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,     -- 在職／離職證明的當事人
-  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL, -- 治療證明的個案
+  client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL, -- 諮商/治療證明的個案
   subject_name TEXT NOT NULL DEFAULT '',       -- 當事人姓名（快照，帳號或個案改名不影響已開立的證明）
   issue_date TEXT NOT NULL,
-  purpose TEXT NOT NULL DEFAULT '',            -- 用途（治療證明的「提供＿＿使用」）
+  purpose TEXT NOT NULL DEFAULT '',            -- 用途（諮商/治療證明的「提供＿＿使用」）
   data TEXT NOT NULL DEFAULT '{}',             -- 版面與文字（JSON）
   status TEXT NOT NULL DEFAULT 'valid',        -- valid 有效 / void 已作廢
   void_reason TEXT NOT NULL DEFAULT '',

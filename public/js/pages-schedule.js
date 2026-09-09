@@ -456,7 +456,8 @@ App.page('notes-pending', {
         <td><a href="#client/${r.client_id}">${UI.esc(r.client_name)}（${r.client_code}）</a></td>
         <td>${UI.esc(r.counselor_name || '')}</td>
         <td>${UI.esc(TW.appt_type[r.type] || r.type)}</td>
-        <td><button class="btn tiny" data-note="${r.id}" data-client="${r.client_id}" data-date="${r.date}">撰寫紀錄</button></td>
+        <td><button class="btn tiny" data-note="${r.id}" data-client="${r.client_id}" data-date="${r.date}"
+          data-fmt="${UI.esc(r.note_format || 'soap')}">撰寫紀錄</button></td>
       </tr>`), '沒有待補的晤談紀錄')}</div>
       ${rp && (rp.missing.length || rp.drafts.length) ? `<div class="card"><h3>待完成的心理衡鑑報告</h3>
         <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
@@ -479,7 +480,9 @@ App.page('notes-pending', {
   ])}</div>` : ''}`;
     el.querySelectorAll('[data-note]').forEach(b => {
       b.onclick = () => noteDialog({
-        client_id: Number(b.dataset.client), appointment_id: Number(b.dataset.note), date: b.dataset.date
+        client_id: Number(b.dataset.client), appointment_id: Number(b.dataset.note), date: b.dataset.date,
+        // 未成年個案要用療育服務紀錄表；格式由後端判定後帶過來，畫出來的欄位才會對
+        note_format: b.dataset.fmt
       }, () => App.go('notes-pending'));
     });
     el.querySelectorAll('[data-nr]').forEach(b => {

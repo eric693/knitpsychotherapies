@@ -61,9 +61,16 @@ function idNoWarning(idNo) {
 const CLIENT_LIST_COLUMNS = `c.id, c.code, c.name, c.gender, c.birth_date, c.phone,
   c.counselor_id, c.status, c.risk_level, c.is_minor, c.portal_enabled, c.created_at`;
 
-function clientListWhere(query) {
+// 心理師只看得到自己主責的個案。督導與管理者不受限 ——
+// 督導要覆核實習生的紀錄，管理者要處理合併、轉介與帳務，看不到全所就做不了事。
+// 這一層在後端擋，不是只把前端的清單濾掉：直接打 API 或改網址一樣拿不到別人的個案。
+function ownClientsOnly(user) {
+  return user && user.role === 'counselor';
+}
+function clientListWhere(query, user) {
   const { status = '', q = '', counselor_id = '', risk = '' } = query;
   const where = ['c.active = 1'], args = [];
+  if (ownClientsOnly(user)) { where.push('c.counselor_id = ?'); args.push(user.id); }
   if (status) { where.push('c.status = ?'); args.push(status); }
   if (risk) { where.push('c.risk_level = ?'); args.push(risk); }
   if (counselor_id) { where.push('c.counselor_id = ?'); args.push(Number(counselor_id)); }
@@ -72,7 +79,7 @@ function clientListWhere(query) {
 }
 
 router.get('/clients', requireStaff('clients'), (req, res) => {
-  const { sql, args } = clientListWhere(req.query);
+  const { sql, args } = clientListWhere(req.query, req.user);
   // 分頁：預設一頁 100 筆。舊呼叫端沒帶 page 時行為不變（拿到第一頁與總筆數）
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
   const page = Math.max(Number(req.query.page) || 1, 1);
@@ -93,7 +100,7 @@ router.get('/clients', requireStaff('clients'), (req, res) => {
 
 // 下拉選單專用：只回 id／編號／姓名，2900 筆約 100 KB，不必為了選個人載整包個案資料
 router.get('/clients/options', requireStaff('clients'), (req, res) => {
-  const { sql, args } = clientListWhere(req.query);
+  const { sql, args } = clientListWhere(req.query, req.user);
   res.json(db.prepare(`SELECT c.id, c.code, c.name FROM clients c
     WHERE ${sql} ORDER BY c.status = 'closed', c.name`).all(...args));
 });
@@ -139,6 +146,9 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
     LEFT JOIN users u ON u.id = c.counselor_id
     LEFT JOIN partners p ON p.id = c.partner_id WHERE c.id = ?`).get(req.params.id);
   if (!c) return res.status(404).json({ error: '找不到此個案' });
+  if (ownClientsOnly(req.user) && c.counselor_id !== req.user.id) {
+    return res.status(403).json({ error: '僅能查看自己主責的個案' });
+  }
   delete c.password_hash;
   const consents = db.prepare('SELECT id, key, title, agreed, signer_name, signer_role, version, signed_at FROM consents WHERE client_id = ? ORDER BY signed_at DESC').all(c.id);
   const templates = db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all()
@@ -147,6 +157,9 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
     ...c,
     age: ageYears(c.birth_date),
     can_view_notes: canViewClientNotes(req.user, c),
+    // 這位個案的晤談紀錄要用哪一份表（未成年＝療育服務紀錄表），與 notes 那邊同一套判斷
+    note_format: c.is_minor || (ageYears(c.birth_date) !== null
+      && ageYears(c.birth_date) < Number(getSetting('adult_age', '18'))) ? 'therapy' : 'soap',
     consents,
     age_group: ageGroupOf(c.birth_date),
     plan_ids: clientPlanIds(c.id),
@@ -212,6 +225,10 @@ router.post('/clients', requireStaff('clients'), (req, res) => {
 });
 
 router.put('/clients/:id', requireStaff('clients'), (req, res) => {
+  const own = db.prepare('SELECT counselor_id FROM clients WHERE id = ?').get(req.params.id);
+  if (own && ownClientsOnly(req.user) && own.counselor_id !== req.user.id) {
+    return res.status(403).json({ error: '僅能修改自己主責的個案' });
+  }
   const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: '找不到此個案' });
   const data = pick(req.body);

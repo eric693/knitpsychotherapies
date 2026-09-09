@@ -177,6 +177,7 @@ App.page('clients', {
   sub: '個案基本資料與服務狀態；晤談紀錄僅主責心理師、督導與管理者可讀',
   help: [
     '個案清單，可搜尋姓名／編號／電話，並依狀態、主責心理師篩選。點「編輯」改基本資料。',
+    '心理師只看得到自己主責的個案（清單、搜尋與排約選單都是）；督導與管理者看得到全所。',
     '點個案姓名進「個案總覽」，晤談紀錄、處遇計畫、量表、附件、同意書都在那裡。',
     '不再服務的個案請用「停用」保留紀錄；「永久刪除」僅管理者可用，且無法復原。',
   ],
@@ -275,6 +276,35 @@ App.page('clients', {
 });
 
 // ---- 晤談紀錄表單 ----
+// 兒童青少年個案的紀錄用「療育服務紀錄表」的欄位（早療補助與督考看的就是這一份），
+// 成人維持 S/O/A/P。兩者共用同一組資料欄位，只是名稱與提示不同 ——
+// 六個欄位一一對應，所以同一筆紀錄換個名稱就是另一種表，資料不會搬來搬去。
+const NOTE_FORMS = {
+  soap: {
+    label: '一般晤談紀錄（SOAP）',
+    subjective: ['S 主觀陳述（個案怎麼說）', '個案自述的困擾、事件與感受'],
+    objective: ['O 客觀觀察（外觀、情緒、行為）', '出席狀況、情緒表現、非語言訊息'],
+    assessment: ['A 評估與個案概念化', '症狀變化、動力理解、風險評估結論'],
+    intervention: ['使用技術／取向', '例：認知重建、空椅法、暴露練習'],
+    plan: ['P 後續計畫', '下次方向、需追蹤事項、轉介考量'],
+    homework: ['家庭作業', '']
+  },
+  therapy: {
+    label: '療育服務紀錄表（兒童青少年）',
+    subjective: ['前次療育後家長回饋之居家互動情形與問題', '家長回報的居家互動、睡眠情緒、學校狀況與遇到的問題'],
+    assessment: ['本次療育目標', '這一次要達成的具體目標'],
+    intervention: ['療育活動內容', '本次進行的活動、教材與方式'],
+    objective: ['兒童表現', '參與度、情緒行為、目標達成情形'],
+    homework: ['本次居家療育建議', '請家長在家配合練習的內容'],
+    plan: ['下次療育預定討論事項與目標', '下次要討論的事項與預定目標']
+  }
+};
+// 療育服務紀錄表的欄位順序與紙本一致，不照 SOAP 的順序
+const NOTE_ORDER = {
+  soap: ['subjective', 'objective', 'assessment', 'plan', 'intervention', 'homework'],
+  therapy: ['subjective', 'assessment', 'intervention', 'objective', 'homework', 'plan']
+};
+
 async function noteDialog(seed, onDone) {
   const note = seed.id ? await GET(`/notes/${seed.id}`) : null;
   const n = note || { date: seed.date || UI.today(), risk_flag: 'none', duration_min: App.meta.session_minutes || 50 };
@@ -284,12 +314,15 @@ async function noteDialog(seed, onDone) {
   const returned = note && note.review_status === 'returned';
   const canReview = note && pending && note.counselor_id !== App.me.id
     && (App.me.role === 'admin' || App.me.role === 'supervisor' || App.me.is_supervisor);
+  // 新紀錄依個案年齡決定格式（後端會再判一次，這裡只是先把正確的欄位畫出來）
+  const fmt = (note && note.note_format) || seed.note_format || 'soap';
+  const form = NOTE_FORMS[fmt] || NOTE_FORMS.soap;
   const field = (name, label, value, ph) => readonly
     ? `<div class="form-row full"><label>${label}</label><div style="white-space:pre-wrap;font-size:14px;padding:8px;background:#f7f9fa;border-radius:8px;min-height:32px">${UI.esc(value || '—')}</div></div>`
     : UI.textarea(name, label, { value: value || '', placeholder: ph });
   UI.modal({
-    title: readonly ? '晤談紀錄（已簽核，不可修改）'
-      : pending ? '晤談紀錄（待督導覆核）' : (note ? '編輯晤談紀錄' : '撰寫晤談紀錄'),
+    title: `${readonly ? '晤談紀錄（已簽核，不可修改）'
+      : pending ? '晤談紀錄（待督導覆核）' : (note ? '編輯晤談紀錄' : '撰寫晤談紀錄')}　·　${form.label}`,
     wide: true,
     hideFooter: readonly || pending,
     submitText: '儲存草稿',
@@ -298,12 +331,8 @@ async function noteDialog(seed, onDone) {
       ${UI.input('session_no', '第幾次晤談', { type: 'number', value: n.session_no || '' })}
       ${UI.input('duration_min', '晤談時間（分鐘）', { type: 'number', value: n.duration_min })}
       ${UI.select('risk_flag', '風險標記', App.enumOptions('risk_flag'), { value: n.risk_flag })}
-      ${field('subjective', 'S 主觀陳述（個案怎麼說）', n.subjective, '個案自述的困擾、事件與感受')}
-      ${field('objective', 'O 客觀觀察（外觀、情緒、行為）', n.objective, '出席狀況、情緒表現、非語言訊息')}
-      ${field('assessment', 'A 評估與個案概念化', n.assessment, '症狀變化、動力理解、風險評估結論')}
-      ${field('plan', 'P 後續計畫', n.plan, '下次方向、需追蹤事項、轉介考量')}
-      ${field('intervention', '使用技術／取向', n.intervention, '例：認知重建、空椅法、暴露練習')}
-      ${field('homework', '家庭作業', n.homework, '')}
+      ${NOTE_ORDER[fmt].map(k => field(k, form[k][0], n[k], form[k][1])).join('')}
+      ${fmt === 'therapy' ? field('guardian_sign', '家長簽名（現場請家長簽，或註記已口頭確認）', n.guardian_sign, '家長姓名或「已於現場簽名」') : ''}
       ${field('risk_note', '風險評估說明（標記非「無」時必填）', n.risk_note, '意念頻率、有無計畫與方法、保護因子、安全計畫')}
     </div>
     ${returned ? `<div class="notice warn" style="margin-top:12px">
@@ -511,6 +540,8 @@ App.page('client', {
     '上方按鈕是這位個案的常用動作：編輯資料、新增預約、撰寫晤談紀錄、登錄危機事件。',
     '下方分頁依序是晤談紀錄、處遇計畫、量表、附件、危機事件與同意書。',
     '晤談紀錄僅主責心理師、督導與管理者可讀；實習生的紀錄要送督導覆核才定稿。',
+    '未成年個案的紀錄自動採用「療育服務紀錄表」的欄位（家長回饋、本次療育目標、療育活動內容、兒童表現、居家療育建議、下次預定討論事項與家長簽名），成人維持 S/O/A/P；依個案年齡自動判斷，不必自己選。',
+    '督考要紙本時，在「晤談紀錄」分頁按單筆的「列印」或右上角「列印全部」（A4、一筆一頁）。只印已簽核定稿的 —— 草稿還會改，印出去會跟系統裡不一致。',
     '「晤談歷程」的「異動／備註」欄會標出個案自己按的改期與取消申請。逾期取消時狀態仍是「已預約」，要看這一欄才知道有待處理的取消申請。',
     '基本資料頁的「可在專區代訂的家人」：家長要替孩子、或一方要替伴侶在個案專區排時間時在這裡授權。家人各自是獨立的個案，授權只開放替他排時間、改期與取消，看不到對方的紀錄、量表與費用。',
   ],
@@ -545,7 +576,7 @@ App.page('client', {
     el.appendChild(head);
     head.querySelector('#edit').onclick = () => clientDialog(c, () => App.go('client/' + id));
     head.querySelector('#book').onclick = () => apptDialog({ client_id: c.id, counselor_id: c.counselor_id || App.me.id, date: UI.today(), start_time: '14:00', type: c.status === 'intake' ? 'intake' : 'individual', mode: 'onsite' }, () => App.go('client/' + id));
-    if (head.querySelector('#newnote')) head.querySelector('#newnote').onclick = () => noteDialog({ client_id: c.id }, () => App.go('client/' + id));
+    if (head.querySelector('#newnote')) head.querySelector('#newnote').onclick = () => noteDialog({ client_id: c.id, note_format: c.note_format }, () => App.go('client/' + id));
     if (head.querySelector('#risk')) head.querySelector('#risk').onclick = () => riskDialog({ client_id: c.id }, () => App.go('client/' + id));
     head.querySelector('#deact').onclick = async () => {
       // 心理紀錄不做實體刪除：停用後轉為結案並自清單隱藏，歷史資料仍保留供查閱與稽核
@@ -675,19 +706,31 @@ App.page('client', {
 
       if (key === 'notes') {
         const notes = await GET(`/clients/${c.id}/notes`);
+        const signed = notes.filter(n => n.locked).length;
         body.innerHTML = `<div class="card">
-          <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
-            每次調閱皆記入稽核軌跡。紀錄簽核後不可修改。</div>
+          <div class="toolbar" style="margin-top:0">
+            <div style="font-size:12.5px;color:var(--muted)">
+              每次調閱皆記入稽核軌跡。紀錄簽核後不可修改。督考要紙本時用右邊的列印。</div>
+            <div class="spacer"></div>
+            <button class="btn small secondary" id="print-all"${signed ? '' : ' disabled'}>列印全部（${signed} 筆已定稿）</button>
+          </div>
           ${UI.table(['次數', '日期', '心理師', '風險', '狀態', ''], notes.map(n => `<tr>
             <td>第 ${n.session_no} 次</td><td>${n.date}</td><td>${UI.esc(n.counselor_name || '')}</td>
             <td>${stateTag('risk_flag', n.risk_flag)}</td>
             <td>${n.locked ? UI.tag(n.review_status === 'approved' ? '已覆核定稿' : '已簽核', 'ok')
     : n.review_status === 'pending' ? UI.tag('待督導覆核', 'warn')
       : n.review_status === 'returned' ? UI.tag('退回補正', 'danger') : UI.tag('草稿', 'warn')}</td>
-            <td><button class="btn tiny secondary" data-n="${n.id}">${n.locked ? '檢視' : n.review_status === 'pending' ? '覆核／檢視' : '編輯'}</button></td></tr>`), '尚無晤談紀錄')}</div>`;
+            <td style="white-space:nowrap"><button class="btn tiny secondary" data-n="${n.id}">${n.locked ? '檢視' : n.review_status === 'pending' ? '覆核／檢視' : '編輯'}</button>
+              ${n.locked ? `<button class="btn tiny secondary" data-np="${n.id}">列印</button>` : ''}</td></tr>`), '尚無晤談紀錄')}</div>`;
         body.querySelectorAll('[data-n]').forEach(b => {
           b.onclick = () => noteDialog({ id: Number(b.dataset.n), client_id: c.id }, () => tabsRefresh('notes'));
         });
+        // 列印開新分頁：伺服器直接吐出可列印的 A4 版面（一筆一頁），督考要幾份就印幾份
+        body.querySelectorAll('[data-np]').forEach(b => {
+          b.onclick = () => window.open(`/api/notes/${b.dataset.np}/print`, '_blank', 'noopener');
+        });
+        body.querySelector('#print-all').onclick = () =>
+          window.open(`/api/clients/${c.id}/notes/print`, '_blank', 'noopener');
       }
 
       if (key === 'safety') {

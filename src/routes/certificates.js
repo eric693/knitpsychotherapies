@@ -1,4 +1,4 @@
-// 證明書：在職證明書、離職證明書、治療證明。
+// 證明書：在職證明書、離職證明書、諮商/治療證明。
 //
 // 三種都是「一張紙、幾個欄位、一段聲明」，所方常要臨時改字（改用途、加備註、
 // 換稱謂），因此版面與文字整份存在 data（JSON）裡：標題、每一列的欄位名與內容、
@@ -14,7 +14,7 @@ const router = express.Router();
 const KINDS = {
   employment: { label: '在職證明書', module: 'hr', subject: 'user' },
   resignation: { label: '離職證明書', module: 'hr', subject: 'user' },
-  treatment: { label: '治療證明', module: 'clients', subject: 'client' },
+  treatment: { label: '諮商/治療證明', module: 'clients', subject: 'client' },
   profile: { label: '基本資料表', module: 'clients', subject: 'client' },
   // 公部門補助方案（青壯、國軍等）要交出去的兩張表
   plan_detail: { label: '方案服務明細', module: 'clients', subject: 'client' },
@@ -377,7 +377,7 @@ function latestBsrs(clientId) {
     WHERE client_id = ? AND scale = 'BSRS5' ORDER BY date DESC, id DESC LIMIT 1`).get(clientId) || null;
 }
 
-// 治療證明要填的來談期間、次數與心理師，從已完成的晤談算出來
+// 諮商/治療證明要填的來談期間、次數與心理師，從已完成的晤談算出來
 function treatmentFacts(clientId) {
   const r = db.prepare(`SELECT MIN(date) AS first_date, MAX(date) AS last_date, COUNT(*) AS sessions
     FROM appointments WHERE client_id = ? AND status = 'done'`).get(clientId) || {};
@@ -466,7 +466,7 @@ function buildTemplate(kind, subjectId, purpose = '', month = '') {
   };
 }
 
-// 這張證明書要哪個模組權限：在職／離職看人事，治療證明看個案
+// 這張證明書要哪個模組權限：在職／離職看人事，諮商/治療證明看個案
 function checkAccess(req, res, kind) {
   const mod = (KINDS[kind] || KINDS.employment).module;
   if (req.user.role === 'admin' || (req.userModules || []).includes(mod)) return true;
@@ -474,18 +474,27 @@ function checkAccess(req, res, kind) {
   return false;
 }
 
-router.get('/certificates/kinds', requireStaff(), (req, res) => {
+// 證明書是行政作業（在職／離職證明、諮商/治療證明、各項補助表單），由櫃檯與管理者開立。
+// 心理師不經手，選單上也看不到這一頁 —— 前端藏起來還不夠，直接打 API 一樣要擋。
+function requireCertStaff(req, res, next) {
+  if (req.user.role === 'counselor') {
+    return res.status(403).json({ error: '證明書由所方行政開立，如有需要請洽櫃檯' });
+  }
+  next();
+}
+
+router.get('/certificates/kinds', requireStaff(), requireCertStaff, (req, res) => {
   res.json(Object.entries(KINDS).map(([key, v]) => ({ key, label: v.label, subject: v.subject, module: v.module })));
 });
 
 // 開立在職／離職證明時挑人用：只回姓名與職稱，不需要「帳號權限」模組
-router.get('/certificates/staff-options', requireStaff('hr'), (req, res) => {
+router.get('/certificates/staff-options', requireStaff('hr'), requireCertStaff, (req, res) => {
   res.json(db.prepare(`SELECT id, name, title, license_type FROM users
     WHERE active = 1 ORDER BY name`).all());
 });
 
 // 套版預覽：選好類別與當事人後，先把預設內容帶出來
-router.get('/certificates/template', requireStaff(), (req, res) => {
+router.get('/certificates/template', requireStaff(), requireCertStaff, (req, res) => {
   const kind = KINDS[req.query.kind] ? req.query.kind : 'employment';
   if (!checkAccess(req, res, kind)) return;
   const tpl = buildTemplate(kind, Number(req.query.subject_id) || 0, String(req.query.purpose || ''),
@@ -497,7 +506,7 @@ router.get('/certificates/template', requireStaff(), (req, res) => {
 
 // 存成預設：把這份版面（標題、欄位名稱與固定文字、聲明、表格欄位）記起來，
 // 之後同類表單都以它開始；個案姓名等會變動的欄位仍即時帶入。
-router.post('/certificates/template/:kind', requireStaff('settings'), (req, res) => {
+router.post('/certificates/template/:kind', requireStaff('settings'), requireCertStaff, (req, res) => {
   const kind = req.params.kind;
   if (!KINDS[kind]) return res.status(404).json({ error: '找不到此類別' });
   const data = cleanData((req.body || {}).data);
@@ -516,7 +525,7 @@ router.post('/certificates/template/:kind', requireStaff('settings'), (req, res)
 });
 
 // 回復系統預設（清掉所方存的版面）
-router.delete('/certificates/template/:kind', requireStaff('settings'), (req, res) => {
+router.delete('/certificates/template/:kind', requireStaff('settings'), requireCertStaff, (req, res) => {
   const kind = req.params.kind;
   if (!KINDS[kind]) return res.status(404).json({ error: '找不到此類別' });
   setSetting(`cert_tpl_${kind}`, '');
@@ -524,10 +533,10 @@ router.delete('/certificates/template/:kind', requireStaff('settings'), (req, re
   res.json({ ok: true });
 });
 
-router.get('/certificates', requireStaff(), (req, res) => {
+router.get('/certificates', requireStaff(), requireCertStaff, (req, res) => {
   const { kind = '', q = '', from = '', to = '', status = '' } = req.query;
   const where = [], args = [];
-  // 沒有人事權限的看不到在職／離職證明，沒有個案權限的看不到治療證明
+  // 沒有人事權限的看不到在職／離職證明，沒有個案權限的看不到諮商/治療證明
   const allowed = Object.keys(KINDS).filter(k =>
     req.user.role === 'admin' || (req.userModules || []).includes(KINDS[k].module));
   if (!allowed.length) return res.json({ rows: [] });
@@ -553,7 +562,7 @@ function getCert(req, res) {
   return c;
 }
 
-router.get('/certificates/:id', requireStaff(), (req, res) => {
+router.get('/certificates/:id', requireStaff(), requireCertStaff, (req, res) => {
   const c = getCert(req, res);
   if (!c) return;
   res.json({ ...c, data: JSON.parse(c.data || '{}'), kind_label: KINDS[c.kind].label });
@@ -593,7 +602,7 @@ function cleanData(d = {}) {
   };
 }
 
-router.post('/certificates', requireStaff(), (req, res) => {
+router.post('/certificates', requireStaff(), requireCertStaff, (req, res) => {
   const b = req.body || {};
   const kind = KINDS[b.kind] ? b.kind : 'employment';
   if (!checkAccess(req, res, kind)) return;
@@ -619,7 +628,7 @@ router.post('/certificates', requireStaff(), (req, res) => {
   res.json({ id: info.lastInsertRowid, cert_no: no });
 });
 
-router.put('/certificates/:id', requireStaff(), (req, res) => {
+router.put('/certificates/:id', requireStaff(), requireCertStaff, (req, res) => {
   const c = getCert(req, res);
   if (!c) return;
   if (c.status === 'void') return res.status(400).json({ error: '已作廢的證明書不可修改，請重新開立' });
@@ -634,7 +643,7 @@ router.put('/certificates/:id', requireStaff(), (req, res) => {
 });
 
 // 作廢：已交出去的證明書不刪除，留紀錄才查得到誰在何時開過
-router.post('/certificates/:id/void', requireStaff(), (req, res) => {
+router.post('/certificates/:id/void', requireStaff(), requireCertStaff, (req, res) => {
   const c = getCert(req, res);
   if (!c) return;
   const reason = String((req.body || {}).reason || '').trim();
@@ -644,7 +653,7 @@ router.post('/certificates/:id/void', requireStaff(), (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/certificates/:id', requireStaff(), (req, res) => {
+router.delete('/certificates/:id', requireStaff(), requireCertStaff, (req, res) => {
   const c = getCert(req, res);
   if (!c) return;
   if (c.status !== 'void') return res.status(400).json({ error: '請先作廢再刪除' });
@@ -826,7 +835,7 @@ ${forWord ? '' : '<script>if (location.hash !== \'#noprint\') setTimeout(() => w
 </body></html>`;
 }
 
-router.get('/certificates/:id/print', requireStaff(), (req, res) => {
+router.get('/certificates/:id/print', requireStaff(), requireCertStaff, (req, res) => {
   const c = db.prepare('SELECT * FROM certificates WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).send('找不到此證明書');
   const mod = KINDS[c.kind].module;

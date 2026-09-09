@@ -1,11 +1,11 @@
-// 證明書：在職證明書、離職證明書、治療證明。
+// 證明書：在職證明書、離職證明書、諮商/治療證明。
 // 開立時先套版帶出當事人資料，接著每一列的欄位名稱與內容都能直接改字、增列或刪列，
 // 聲明段落、機構抬頭與核章欄位也一樣可改；存檔後可列印、匯出 PDF 或 Word 再修。
 
 const CERT_KINDS = [
   ['employment', '在職證明書'],
   ['resignation', '離職證明書'],
-  ['treatment', '治療證明'],
+  ['treatment', '諮商/治療證明'],
   ['profile', '基本資料表'],
   ['plan_detail', '方案服務明細（附表）'],
   ['referral', '方案轉介單'],
@@ -46,7 +46,7 @@ function certDialog(seed, onDone) {
     body: `<div class="form-grid">
         ${UI.input('subject_name', '當事人姓名', { value: seed.subject_name || '', required: true })}
         ${UI.input('issue_date', '開立日期', { type: 'date', value: seed.issue_date || UI.today() })}
-        ${UI.input('purpose', '用途（治療證明會代入聲明文字）', { value: seed.purpose || '', full: true })}
+        ${UI.input('purpose', '用途（諮商/治療證明會代入聲明文字）', { value: seed.purpose || '', full: true })}
         ${UI.input('title', '標題', { value: d.title || '' })}
         ${UI.input('subtitle', '標題上方單位名（可留空）', { value: d.subtitle || '' })}
       </div>
@@ -143,7 +143,7 @@ function certDialog(seed, onDone) {
 
 App.page('certificates', {
   title: '證明書',
-  sub: '在職證明、離職證明、治療證明與基本資料表：套版帶出資料後，每一句話都能自行改寫，再列印或匯出 Word／PDF',
+  sub: '在職證明、離職證明、諮商/治療證明與基本資料表：套版帶出資料後，每一句話都能自行改寫，再列印或匯出 Word／PDF',
   help: [
     '選類別與當事人後按「開立」，系統先帶出預設內容；欄位名稱、內容、聲明文字、機構抬頭都可以直接改，也能自行增減列。',
     '「方案服務明細（附表）」會把該個案在補助方案下已完成的晤談逐次列出（次數、日期、服務人員、面對面或通訊），民眾簽名與同意書檔名留白現場填。',
@@ -154,11 +154,12 @@ App.page('certificates', {
     '學齡前走「早療補助官方表單」（社會局表一申請表＋表二交通補助蓋章卡＋表三療育補助收據浮貼卡，一次印三頁），學齡走「弱勢療育補助記錄卡」（表件二）；兩者都會把該月療程與收據號碼帶進去，注意事項文字在系統設定改。',
     '「早療補助療育紀錄」會列出該童指定月份已完成的療程（日期、療育項目、單位、人員、自費金額與收據號碼），供家長辦理早療補助時併附收據送件。',
     '「基本資料表」會帶入個案已建檔的資料，沒填的欄位印成待填的圈選或底線，背面另附可自訂欄位與列數的空白簽到表。',
-    '在職／離職證明的資料取自帳號（性別、生日、到職與離職日在「帳號權限」編輯帳號時填）；治療證明的來談日期與次數由已完成的晤談自動算出。',
+    '在職／離職證明的資料取自帳號（性別、生日、到職與離職日在「帳號權限」編輯帳號時填）；諮商/治療證明的來談日期與次數由已完成的晤談自動算出。',
     '開立後可「列印／PDF」或「匯出 Word」，Word 檔可再自行排版。',
     '已交出去的證明書請用「作廢」保留紀錄，不要直接刪除。',
   ],
-  visible: () => App.can('hr') || App.can('clients'),
+  // 證明書是行政作業，心理師不經手，選單上不出現（後端另有同一道檢查）
+  visible: () => App.me.role !== 'counselor' && (App.can('hr') || App.can('clients')),
   async render(el) {
     const draw = async () => {
       const kind = el.querySelector('#k').value;
@@ -224,7 +225,7 @@ App.page('certificates', {
       body: `<div class="form-grid">
           ${UI.select('kind', '類別', CERT_KINDS, { value: 'employment' })}
           <div class="form-row full" id="pick"></div>
-          ${UI.input('purpose', '用途（治療證明的「提供＿＿使用」）', { value: '', full: true })}
+          ${UI.input('purpose', '用途（諮商/治療證明的「提供＿＿使用」）', { value: '', full: true })}
           ${UI.input('month', '月份（早療補助療育紀錄；留空為全部）', { type: 'month', value: '' })}
         </div>`,
       onOpen: async e2 => {

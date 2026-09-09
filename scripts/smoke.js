@@ -488,11 +488,9 @@ function startServer() {
     assert(back.some(s => s.start_time === '09:00'), '取消單週設定後應回到固定班');
     await lin.ok('POST', '/api/availability/bulk', { counselor_id: 2, blocks: before });
   });
-  await test('週檢視與行事曆回傳資料', async () => {
+  await test('週檢視回傳資料', async () => {
     const w = await lin.ok('GET', `/api/schedule/week?start=${monday}`);
     assert(Array.isArray(w.appointments), '週檢視格式');
-    const c = await lin.ok('GET', `/api/schedule/calendar?from=${monday}&to=${addDays(monday, 30)}`);
-    assert(Array.isArray(c.appointments), '行事曆格式');
   });
 
   // ---------------------------------------------------------------- 行事曆訂閱
@@ -748,6 +746,33 @@ function startServer() {
   });
 
   // ---------------------------------------------------------------- 晤談紀錄與覆核
+  // 心理師只經手自己主責的個案；督導與管理者不受限（覆核與行政要看得到全所）
+  section('心理師的可見範圍');
+  await test('心理師的個案清單只出現自己主責的', async () => {
+    const mine = await lin.ok('GET', '/api/clients');
+    assert(mine.length, '應至少有一位主責個案');
+    assert(mine.every(c => c.counselor_id === 2), '不應出現別人主責的個案');
+    const all = await admin.ok('GET', '/api/clients');
+    assert(all.length > mine.length, '管理者應看得到更多');
+    // 下拉選單同一套規則，否則排約時還是選得到別人的個案
+    const opts = await lin.ok('GET', '/api/clients/options');
+    assert(opts.length === mine.length, '選單筆數應與清單一致');
+  });
+  await test('心理師開不了別人主責的個案，改也改不動', async () => {
+    const all = await admin.ok('GET', '/api/clients');
+    const others = all.find(c => c.counselor_id && c.counselor_id !== 2);
+    if (!others) { console.log('      （沒有別人主責的個案，略過）'); return; }
+    await lin.fails('GET', `/api/clients/${others.id}`, undefined, '自己主責');
+    await lin.fails('PUT', `/api/clients/${others.id}`, { note: '偷改' }, '自己主責');
+    // 督導不受限
+    await wu.ok('GET', `/api/clients/${others.id}`);
+  });
+  await test('證明書由所方行政開立，心理師連清單都拿不到', async () => {
+    await lin.fails('GET', '/api/certificates', undefined, '櫃檯');
+    await lin.fails('POST', '/api/certificates', { kind: 'treatment', client_id: clientId }, '櫃檯');
+    await admin.ok('GET', '/api/certificates');
+  });
+
   section('晤談紀錄保密與實習生覆核');
   let noteId, internId;
   await test('主責心理師可寫紀錄、非主責讀不到', async () => {
@@ -760,6 +785,12 @@ function startServer() {
     const mine = await lin.ok('GET', `/api/clients/${clientId}/notes`);
     assert(mine.length >= 1, '主責應讀得到');
   });
+  // 督考、早療補助與家長索取都要紙本；草稿還會改，所以只印已定稿的
+  await test('已定稿的紀錄可列印，草稿不給印', async () => {
+    const res = await lin.get(`/api/notes/${noteId}/print`);
+    equal(res.status, 400, '草稿不應提供列印');
+    assert(String(res.text).includes('尚未簽核'), '應說明原因：' + res.text);
+  });
   await test('督導可調閱', async () => {
     const rows = await wu.ok('GET', `/api/clients/${clientId}/notes`);
     assert(rows.length >= 1, '督導應讀得到');
@@ -767,6 +798,39 @@ function startServer() {
   await test('簽核後不可修改', async () => {
     await lin.ok('POST', `/api/notes/${noteId}/sign`, {});
     await lin.fails('PUT', `/api/notes/${noteId}`, { plan: '改改看' }, '定稿');
+  });
+  await test('定稿後可列印單筆與整份', async () => {
+    const one = await lin.get(`/api/notes/${noteId}/print`);
+    equal(one.status, 200, '定稿後應可列印');
+    assert(one.text.includes('晤談紀錄（SOAP）'), '成人應為 SOAP 版面');
+    const all = await lin.get(`/api/clients/${clientId}/notes/print`);
+    equal(all.status, 200, '整份列印應可用');
+    assert(all.text.includes('冒煙測試個案'), '應含個案姓名');
+    // 非主責、沒有紀錄權限的人一律印不到
+    const deny = await chen.get(`/api/notes/${noteId}/print`);
+    equal(deny.status, 403, '非主責不應印得到');
+  });
+  // 兒童青少年個案的紀錄用療育服務紀錄表的欄位，由後端依年齡自動決定
+  await test('未成年個案的紀錄自動採用療育服務紀錄表格式', async () => {
+    const kid = await admin.ok('POST', '/api/clients', {
+      name: '冒煙兒童', phone: '0900000456', birth_date: `${new Date().getFullYear() - 8}-05-05`,
+      counselor_id: 2
+    });
+    const r = await lin.ok('POST', '/api/notes', {
+      client_id: kid.id, date: monday, subjective: '家長回饋', assessment: '本次目標',
+      intervention: '活動內容', objective: '兒童表現', homework: '居家建議', plan: '下次目標',
+      guardian_sign: '王大明', risk_flag: 'none'
+    });
+    const got = await lin.ok('GET', `/api/notes/${r.id}`);
+    equal(got.note_format, 'therapy', '未成年應為療育服務紀錄表');
+    equal(got.guardian_sign, '王大明', '家長簽名應存下來');
+    await lin.ok('POST', `/api/notes/${r.id}/sign`, {});
+    const html = await lin.get(`/api/notes/${r.id}/print`);
+    assert(html.text.includes('療育服務紀錄表'), '列印應為療育服務紀錄表');
+    assert(html.text.includes('本次療育目標') && html.text.includes('兒童表現')
+      && html.text.includes('家長簽名'), '應含療育表的欄位名稱');
+    assert(!html.text.includes('S 主觀陳述'), '不該混到 SOAP 的欄位名稱');
+    await admin.ok('DELETE', `/api/clients/${kid.id}`);
   });
   await test('實習生紀錄須經督導覆核才定稿', async () => {
     const u = await admin.ok('POST', '/api/users', {
@@ -1311,7 +1375,11 @@ function startServer() {
     const pub = await (await fetch(`${BASE}/api/public/receipts/${token}`)).json();
     equal(pub.receipt_no, got.receipt_no, '公開頁應取得同一張收據');
     equal((pub.lines || []).length, 2, '公開頁也要有明細');
-    assert(pub.issuer_name === undefined && pub.invoice_id === undefined, '不應外流內部欄位');
+    // 開立人是收據版面本來就有的一欄（個案端與列印出來的必須是同一份），
+    // 但收費單編號、補印次數與 token 這些內部欄位不該出去
+    assert(pub.invoice_id === undefined && pub.print_count === undefined
+      && pub.share_token === undefined && pub.lines.every(l => l.id === undefined),
+    '不應外流內部欄位：' + JSON.stringify(Object.keys(pub)));
     // 亂猜的 token 一律查不到
     equal((await fetch(`${BASE}/api/public/receipts/${'0'.repeat(32)}`)).status, 404, '無效 token 應為 404');
     await admin.ok('POST', `/api/receipts/${mergedReceiptId}/void`, { reason: '測試作廢' });
@@ -1705,7 +1773,7 @@ function startServer() {
     }
   });
 
-  section('證明書（在職、離職、治療證明）');
+  section('證明書（在職、離職、諮商/治療證明）');
   await test('在職證明套版帶出帳號資料，文字可逐欄改寫後開立', async () => {
     const lin2 = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
     await admin.ok('PUT', `/api/users/${lin2.id}`, {
@@ -1744,12 +1812,12 @@ function startServer() {
     equal(tpl.data.rows.find(r => r.label === '離職日期').value, '民國 115 年 8 月 31 日', '離職日');
     assert(tpl.data.rows.find(r => r.label === '服務地點').value, '服務地點預設帶機構地址');
   });
-  await test('治療證明自動算出來談期間、次數與心理師，用途代入聲明', async () => {
+  await test('諮商/治療證明自動算出來談期間、次數與心理師，用途代入聲明', async () => {
     const clients = await admin.ok('GET', '/api/clients');
     const c = clients.find(x => x.id === clientId) || clients[0];
     const tpl = await admin.ok('GET',
       `/api/certificates/template?kind=treatment&subject_id=${c.id}&purpose=學校請假`);
-    equal(tpl.data.title, '治療證明', '標題');
+    equal(tpl.data.title, '諮商/治療證明', '標題');
     assert(tpl.data.statement.includes('學校請假'), '用途應代入聲明文字');
     const sessions = tpl.data.rows.find(r => r.label === '晤談次數').value;
     const done = (await admin.ok('GET', `/api/appointments?client_id=${c.id}`))
@@ -1760,7 +1828,7 @@ function startServer() {
       purpose: '學校請假', data: tpl.data
     });
     const html = await admin.get(`/api/certificates/${made.id}/print`);
-    assert(html.text.includes('治療證明') && html.text.includes('學校請假'), '列印頁應含聲明用途');
+    assert(html.text.includes('諮商/治療證明') && html.text.includes('學校請假'), '列印頁應含聲明用途');
     certIdTreatment = made.id;
   });
   await test('作廢後不可修改，作廢前不可刪除', async () => {
@@ -1948,7 +2016,7 @@ function startServer() {
     equal(doc.status, 200, 'Word 匯出');
     // 其他類別仍只印一份
     const one = await admin.ok('GET', `/api/certificates/template?kind=treatment&subject_id=${clientId}`);
-    equal(one.data.copies.length, 0, '治療證明不分聯');
+    equal(one.data.copies.length, 0, '諮商/治療證明不分聯');
   });
 
   section('兒童青少年表單');
@@ -2173,7 +2241,7 @@ function startServer() {
     // 回復系統預設
     await admin.ok('DELETE', '/api/certificates/template/treatment');
     const back = await admin.ok('GET', `/api/certificates/template?kind=treatment&subject_id=${clientId}`);
-    equal(back.data.title, '治療證明', '回復系統預設');
+    equal(back.data.title, '諮商/治療證明', '回復系統預設');
     assert(!back.has_saved_template, '已無自訂預設');
     await admin.ok('DELETE', '/api/certificates/template/early_intervention');
   });
