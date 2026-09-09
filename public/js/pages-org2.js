@@ -448,13 +448,56 @@ App.page('payouts', {
     '按「依當月晤談帶入」自動算出每位心理師的鐘點報酬，再逐筆確認；也可「新增報酬單」手動開。',
     '付款後按「付款」留紀錄；代扣所得稅與二代健保補充保費會一併算出。',
     '「年度扣繳彙總」供申報扣繳憑單使用。',
+    '結算完按「送出本月結算給心理師確認」，對方會在自己的「我的報酬確認」核對並手寫簽名；<strong>未經本人確認的月份按「付款」會被擋下</strong>，真的要先付得再確認一次，並記入稽核軌跡。',
+    '心理師回報有疑義時這裡會顯示他寫的說明，查完按「重送確認」讓他重新核對。線上簽好的名會直接印在勞務報酬單上，不必再簽紙本。',
   ],
   module: 'payouts',
   async render(el) {
     const draw = async () => {
       const month = el.querySelector('#m').value;
       const st = el.querySelector('#st').value;
-      const d = await GET(`/payouts?month=${month}&status=${st}`);
+      const [d, cm] = await Promise.all([
+        GET(`/payouts?month=${month}&status=${st}`),
+        GET(`/payout-months?month=${month}`).catch(() => ({ rows: [] }))
+      ]);
+      const CONFIRM = { sent: UI.tag('待確認', 'warn'), confirmed: UI.tag('已確認', 'ok'),
+        disputed: UI.tag('有疑義', 'danger') };
+      el.querySelector('#confirm').innerHTML = cm.rows.length ? `<div class="card">
+        <h3>本月結算確認
+          <span style="font-size:13px;font-weight:400;color:var(--muted)">
+            撥款前先讓本人核對；未確認的月份按「付款」會被擋下</span></h3>
+        ${UI.table(['心理師', '筆數', '實付合計', '狀態', '時間', ''], cm.rows.map(r => `<tr>
+          <td>${UI.esc(r.user_name)}</td><td>${r.count}</td><td>${UI.fmtMoney(r.net)}</td>
+          <td>${CONFIRM[r.confirm_status] || UI.tag('尚未送出', 'warn')}
+            ${r.reply_note ? `<br><span style="font-size:12.5px;color:var(--danger)">${UI.esc(r.reply_note)}</span>` : ''}</td>
+          <td style="font-size:12.5px">${UI.esc((r.confirmed_at || r.sent_at || '').slice(0, 16))}</td>
+          <td>${r.confirm_status === 'disputed' || r.confirm_status === 'confirmed'
+    ? `<button class="btn tiny secondary" data-reopen="${r.user_id}">重送確認</button>` : ''}</td></tr>`))}
+        <div class="toolbar" style="margin-top:10px"><div class="spacer"></div>
+          <button class="btn secondary" id="send-confirm">送出本月結算給心理師確認</button></div>
+      </div>` : '';
+      el.querySelectorAll('[data-reopen]').forEach(b => {
+        b.onclick = () => UI.modal({
+          title: '重送月結供確認',
+          submitText: '重送',
+          body: `<div class="form-grid">${UI.textarea('note', '處理說明（會顯示給心理師）',
+    { rows: 3, full: true, value: '' })}</div>
+            <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+              重送會清掉先前的簽名與疑義說明，請對方重新核對。</div>`,
+          onSubmit: async form => {
+            await POST(`/payout-months/${b.dataset.reopen}/${month}/reopen`, UI.formData(form));
+            UI.toast('已重送'); draw();
+          }
+        });
+      });
+      const sc = el.querySelector('#send-confirm');
+      if (sc) sc.onclick = async () => {
+        if (!await UI.confirm(`把 ${month} 的結算送給心理師確認？已確認過的不受影響。`)) return;
+        try {
+          const r = await POST('/payout-months/send', { month });
+          UI.toast(`已送出給 ${r.count} 位心理師`); draw();
+        } catch (e) { UI.err(e); }
+      };
       el.querySelector('#list').innerHTML = `
         <div class="stat-grid">
           <div class="stat"><div class="num">${UI.fmtMoney(d.total_gross)}</div><div class="label">給付總額</div></div>
@@ -487,19 +530,31 @@ App.page('payouts', {
       });
       el.querySelectorAll('[data-batch]').forEach(b => {
         b.onclick = async () => {
-          if (!await UI.confirm('整批切換付款狀態？')) return;
-          await POST(`/payouts/batch/${b.dataset.batch}/pay`, {});
-          UI.toast('已更新'); draw();
+          if (await payWithGate(`/payouts/batch/${b.dataset.batch}/pay`, '整批切換付款狀態？')) {
+            UI.toast('已更新'); draw();
+          }
         };
       });
       el.querySelectorAll('[data-e]').forEach(b => {
         b.onclick = () => payoutDialog(d.rows.find(x => x.id === Number(b.dataset.e)), month, draw);
       });
+      // 未經本人確認的月份會被後端擋下；真的要先付，得再確認一次並留在稽核軌跡裡
+      const payWithGate = async (url, msg) => {
+        if (!await UI.confirm(msg)) return false;
+        try {
+          await POST(url, {});
+          return true;
+        } catch (e) {
+          if (!/尚未|疑義/.test(e.message)) { UI.err(e); return false; }
+          if (!await UI.confirm(`${e.message}\n\n仍要現在付款嗎？（會記入稽核軌跡）`)) return false;
+          try { await POST(url, { override: 1 }); return true; } catch (e2) { UI.err(e2); return false; }
+        }
+      };
       el.querySelectorAll('[data-pay]').forEach(b => {
         b.onclick = async () => {
-          if (!await UI.confirm('確認此筆已付款？付款後金額不可修改。')) return;
-          await POST(`/payouts/${b.dataset.pay}/pay`, {});
-          UI.toast('已標記付款'); draw();
+          if (await payWithGate(`/payouts/${b.dataset.pay}/pay`, '確認此筆已付款？付款後金額不可修改。')) {
+            UI.toast('已標記付款'); draw();
+          }
         };
       });
       el.querySelectorAll('[data-unpay]').forEach(b => {
@@ -525,7 +580,7 @@ App.page('payouts', {
         <button class="btn secondary" id="gen">依當月晤談帶入</button>
         <button class="btn secondary" id="split">拆單建立</button>
         <button class="btn" id="add">新增報酬單</button>
-      </div><div id="list"></div>`;
+      </div><div id="confirm"></div><div id="list"></div>`;
     el.querySelector('#m').onchange = draw;
     el.querySelector('#st').onchange = draw;
     el.querySelector('#add').onclick = () => payoutDialog(null, el.querySelector('#m').value, draw);

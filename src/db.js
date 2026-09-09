@@ -185,6 +185,45 @@ db.exec(`CREATE TABLE IF NOT EXISTS payouts (
 );
 CREATE INDEX IF NOT EXISTS idx_payout_user ON payouts(user_id, month);
 
+-- 所方發給心理師的文件（空白表單、機構紀錄格式、作業規範、合約範本…）。
+-- 原本這些是用 LINE 或隨身碟傳，版本一亂就有人拿舊格式寫紀錄，督考時才發現。
+CREATE TABLE IF NOT EXISTS staff_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT '',           -- 紀錄格式／表單／規範／合約…（所方自訂）
+  version TEXT NOT NULL DEFAULT '',            -- 版本或版次，讓人看得出手上那份是不是最新的
+  note TEXT NOT NULL DEFAULT '',
+  stored_name TEXT NOT NULL DEFAULT '',        -- 實際落在 uploads 的檔名（空＝這筆只是外部連結）
+  orig_name TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  mime TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',                -- 外部連結（衛生局網站等），與檔案二擇一
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  uploaded_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+-- 當月薪資的月結確認：撥款前先讓心理師自己核對，不必一個一個問。
+-- 一位心理師一個月一張，涵蓋該月所有報酬單；確認時手寫簽名，
+-- 簽名圖與時間一併存下來，事後對帳說得清楚是誰在什麼時候確認的。
+CREATE TABLE IF NOT EXISTS payout_months (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  month TEXT NOT NULL,                         -- YYYY-MM
+  status TEXT NOT NULL DEFAULT 'sent',         -- sent 待確認 / confirmed 已確認 / disputed 有疑義
+  sent_at TEXT NOT NULL DEFAULT '',
+  sent_by INTEGER REFERENCES users(id),
+  confirmed_at TEXT NOT NULL DEFAULT '',
+  confirm_ip TEXT NOT NULL DEFAULT '',
+  sign_image TEXT NOT NULL DEFAULT '',         -- 手寫簽名（PNG data URI）
+  reply_note TEXT NOT NULL DEFAULT '',         -- 心理師回覆的疑義說明
+  handled_at TEXT NOT NULL DEFAULT '',         -- 所方處理疑義的時間
+  handled_note TEXT NOT NULL DEFAULT '',
+  UNIQUE (user_id, month)
+);
+
 -- 對外提醒發送紀錄（簡訊／LINE 走 webhook；未設定時記為待人工發送）
 CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1483,6 +1522,8 @@ if (getSetting('military_urls_seeded', '') !== '1') {
     // 留空就只印文字，不會有破圖。
     receipt_seal_image: '',
     receipt_seal_size: '192',      // 發票章（統編章）印在收據上的寬度（px）
+    // 所方發給心理師的文件分類（文件與表單頁的分類下拉）
+    staff_doc_categories: '機構紀錄格式,空白表單,作業規範,合約與報酬,其他',
     // 印花稅總繳章掃描圖：有上傳就用圖，沒有就印上面那組文字戳記
     receipt_stamp_image: ''
   };

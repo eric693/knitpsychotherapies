@@ -109,6 +109,7 @@ app.use('/api', require('./routes/intake'));
 app.use('/api', require('./routes/groups'));
 app.use('/api', require('./routes/partners'));
 app.use('/api', require('./routes/hr'));
+app.use('/api', require('./routes/staffdocs'));
 app.use('/api', require('./routes/schedule'));
 app.use('/api', require('./routes/notes'));
 app.use('/api', require('./routes/assessments'));

@@ -239,13 +239,37 @@ router.put('/payouts/:id', requireStaff('payouts'), (req, res) => {
   res.json({ ok: true });
 });
 
+// 「請心理師確認後我們再撥款」：沒確認過的月份，撥款一律先擋下並說明是哪一位、哪個月。
+// 帶 override 可放行（有人就是先匯了款、或本人當面確認過），但會留在稽核軌跡裡，
+// 而不是靜悄悄地繞過這道關卡。
+function confirmGate(rows, override) {
+  if (override) return '';
+  const need = [];
+  for (const key of new Set(rows.map(r => `${r.user_id}|${r.month}`))) {
+    const [uid, month] = key.split('|');
+    const st = db.prepare('SELECT status FROM payout_months WHERE user_id = ? AND month = ?').get(Number(uid), month);
+    if (!st || st.status !== 'confirmed') {
+      const u = db.prepare('SELECT name FROM users WHERE id = ?').get(Number(uid));
+      need.push(`${u ? u.name : uid}（${month}）${st && st.status === 'disputed' ? '回報有疑義'
+        : st ? '尚未確認' : '尚未送出月結'}`);
+    }
+  }
+  return need.length ? `以下月結尚未由本人確認，請先處理：${need.join('、')}` : '';
+}
+
 router.post('/payouts/:id/pay', requireStaff('payouts'), (req, res) => {
   const p = db.prepare('SELECT * FROM payouts WHERE id = ?').get(req.params.id);
   if (!p) return res.status(404).json({ error: '找不到此報酬單' });
   const paid = p.status !== 'paid';
+  // 只有「要付款」時才擋；取消付款是修正動作，不受此限
+  if (paid) {
+    const blocked = confirmGate([p], (req.body || {}).override);
+    if (blocked) return res.status(400).json({ error: blocked, need_confirm: true });
+  }
   db.prepare('UPDATE payouts SET status = ?, paid_at = ? WHERE id = ?')
     .run(paid ? 'paid' : 'pending', paid ? today() : '', p.id);
-  audit('staff', req.user.id, req.user.name, paid ? '報酬付款' : '取消報酬付款', String(p.user_id), { id: p.id });
+  audit('staff', req.user.id, req.user.name, paid ? '報酬付款' : '取消報酬付款', String(p.user_id),
+    { id: p.id, override: paid && (req.body || {}).override ? '未經本人確認即付款' : undefined });
   res.json({ ok: true });
 });
 
@@ -363,6 +387,10 @@ router.post('/payouts/batch/:batchId/pay', requireStaff('payouts'), (req, res) =
   const rows = db.prepare('SELECT * FROM payouts WHERE batch_id = ?').all(req.params.batchId);
   if (!rows.length) return res.status(404).json({ error: '找不到此批報酬單' });
   const paid = rows.some(r => r.status !== 'paid');
+  if (paid) {
+    const blocked = confirmGate(rows, (req.body || {}).override);
+    if (blocked) return res.status(400).json({ error: blocked, need_confirm: true });
+  }
   db.prepare('UPDATE payouts SET status = ?, paid_at = ? WHERE batch_id = ?')
     .run(paid ? 'paid' : 'pending', paid ? today() : '', req.params.batchId);
   audit('staff', req.user.id, req.user.name, paid ? '報酬付款（整批）' : '取消報酬付款（整批）',
@@ -447,7 +475,10 @@ function slipHtml(u, rows, opts) {
 <table>
   <tr><th>付款方式</th><td colspan="3">■ 匯款　　銀行：${esc(u.bank_name)}　　帳號：${esc(u.bank_account)}　　戶名：${esc(u.bank_holder || u.name)}</td></tr>
 </table>
-<div class="sign">上述資料經本人確認無誤，領款人：______________________（簽名）
+<div class="sign">上述資料經本人確認無誤，領款人：${opts.sign
+    ? `<img src="${opts.sign}" alt="領款人簽名" style="height:52px;vertical-align:middle">`
+      + `<br><span style="font-size:12px;color:#667">（本人於個案管理系統線上簽名確認　${esc(opts.signed_at)}）</span>`
+    : '______________________（簽名）'}
   <br>經手人：${esc(opts.handler)}</div>
 ${opts.note ? `<div class="note">${esc(opts.note)}</div>` : ''}
 <script>if (location.hash !== '#noprint') setTimeout(() => window.print(), 300);<\/script>
@@ -486,6 +517,12 @@ router.get('/payouts/slip', requireStaff('payouts'), (req, res) => {
     handler: getSetting('payout_slip_handler', '') || req.user.name,
     incomeTypeLabel: label[rows[0].income_type] || rows[0].income_type,
     item: rows[0].item,
+    // 該月的月結若已由本人線上簽名確認，就把簽名貼在領款人欄，不必再簽一次紙本
+    ...(() => {
+      const st = db.prepare("SELECT sign_image, confirmed_at FROM payout_months WHERE user_id = ? AND month = ? AND status = 'confirmed'")
+        .get(rows[0].user_id, rows[0].month);
+      return st && st.sign_image ? { sign: st.sign_image, signed_at: st.confirmed_at } : {};
+    })(),
     formDate: today()
   }));
 });

@@ -1691,7 +1691,8 @@ function startServer() {
     equal(slip.status, 200, '應可列印勞務報酬單');
     assert(slip.text.includes('勞務報酬單') && slip.text.includes('A123456789')
       && slip.text.includes('45,000'), '報酬單應含抬頭、身分證字號與合計金額');
-    await admin.ok('POST', `/api/payouts/batch/${r.batch_id}/pay`, {});
+    // 撥款前要先經本人確認（見「文件庫與月結確認」段）；這個測試只驗拆單與列印，故明確放行
+    await admin.ok('POST', `/api/payouts/batch/${r.batch_id}/pay`, { override: 1 });
     const paid = (await admin.ok('GET', '/api/payouts?month=2026-01')).rows
       .filter(x => x.batch_id === r.batch_id);
     assert(paid.every(x => x.status === 'paid'), '整批付款應一次生效');
@@ -2287,6 +2288,88 @@ function startServer() {
       '訊息送出端點應已移除');
     const meta = await admin.ok('GET', '/api/meta');
     assert(!meta.modules.some(m => m.key === 'messages'), '權限模組不應再有 messages');
+  });
+
+  // ---------------------------------------------------------------- 所方↔心理師
+  section('文件庫與月結確認');
+  await test('所方上傳文件，心理師下載得到；停用後看不到', async () => {
+    const mp = multipart(
+      { title: '療育服務紀錄表（空白）', category: '機構紀錄格式', version: 'v2', note: '兒青個案用' },
+      { name: 'note-form.txt', type: 'text/plain', buf: Buffer.from('療育服務紀錄表', 'utf8') });
+    const res = await admin.ok('POST', '/api/staff-documents', mp.body, { raw: true, headers: mp.headers });
+    assert(res.id, '應建立成功：' + JSON.stringify(res));
+    const mine = await lin.ok('GET', '/api/staff-documents');
+    assert(mine.rows.some(r => r.id === res.id), '心理師應看得到');
+    assert(!mine.can_manage, '心理師不應有維護權限');
+    const dl = await lin.get(`/api/staff-documents/${res.id}/download`);
+    equal(dl.status, 200, '心理師應下載得到');
+    assert(dl.text.includes('療育服務紀錄表'), '下載內容應正確');
+    // 心理師不能上傳或刪除（心理師的預設模組含 hr，這一關不能只看 hr）
+    await lin.fails('DELETE', `/api/staff-documents/${res.id}`, undefined, '所方維護');
+    await lin.fails('POST', '/api/staff-documents', { title: 'x', url: 'https://example.tw' }, '所方維護');
+    // 行政人員（具人事權限）維護得動
+    const officeList = await office.ok('GET', '/api/staff-documents');
+    assert(officeList.can_manage, '行政應可維護文件');
+    // 停用後心理師的清單就不再出現
+    await admin.ok('PUT', `/api/staff-documents/${res.id}`, { active: 0 });
+    const after = await lin.ok('GET', '/api/staff-documents');
+    assert(!after.rows.some(r => r.id === res.id), '停用後心理師不該看到');
+    await admin.ok('DELETE', `/api/staff-documents/${res.id}`);
+  });
+
+  let payoutForConfirm;
+  await test('月結送出前不能確認，送出後可簽名確認', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    const p1 = await admin.ok('POST', '/api/payouts',
+      { user_id: 2, month, item: '晤談鐘點', sessions: 4, gross: 8000, income_type: '9B' });
+    payoutForConfirm = p1.id;
+    // 還沒送出就想確認 → 擋下
+    await lin.fails('POST', `/api/my/payout-months/${month}/confirm`,
+      { sign_image: 'data:image/png;base64,iVBORw0KGgo=' }, '尚未送出');
+    await admin.ok('POST', '/api/payout-months/send', { month });
+    const mine = await lin.ok('GET', '/api/my/payout-months?month=' + month);
+    equal(mine.confirm_status, 'sent', '應為待確認');
+    equal(mine.net, mine.rows.reduce((a, b) => a + b.net, 0), '實付合計應等於各筆加總');
+    // 沒有簽名不給過
+    await lin.fails('POST', `/api/my/payout-months/${month}/confirm`, { sign_image: '' }, '簽名');
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    await lin.ok('POST', `/api/my/payout-months/${month}/confirm`, { sign_image: png });
+    const done = await lin.ok('GET', '/api/my/payout-months?month=' + month);
+    equal(done.confirm_status, 'confirmed', '應為已確認');
+    assert(done.confirmed_at, '應記下確認時間');
+    // 確認過的簽名會印在勞務報酬單上
+    const slip = await admin.get(`/api/payouts/slip?ids=${p1.id}`);
+    assert(slip.text.includes('線上簽名確認'), '報酬單應帶出線上簽名');
+    assert(!slip.text.includes('______________________（簽名）'), '不該還留著手簽空格');
+  });
+  await test('未經本人確認不得撥款，除非明確放行', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    const p2 = await admin.ok('POST', '/api/payouts',
+      { user_id: 3, month, item: '晤談鐘點', sessions: 2, gross: 4000, income_type: '9B' });
+    const blocked = await admin.post(`/api/payouts/${p2.id}/pay`, {});
+    equal(blocked.status, 400, '未確認不應付得出去');
+    assert(blocked.data.need_confirm, '應標明是待確認');
+    // 明確放行才付得出去
+    await admin.ok('POST', `/api/payouts/${p2.id}/pay`, { override: 1 });
+    const rows = (await admin.ok('GET', `/api/payouts?month=${month}`)).rows;
+    equal(rows.find(r => r.id === p2.id).status, 'paid', '放行後應為已付');
+    // 已確認的那位不會被擋
+    await admin.ok('POST', `/api/payouts/${payoutForConfirm}/pay`, {});
+    await admin.ok('DELETE', `/api/payouts/${p2.id}`).catch(() => {});
+  });
+  await test('回報疑義後所方看得到，重送後要重新確認', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    await admin.ok('POST', `/api/payout-months/2/${month}/reopen`, { note: '已查，9/12 那筆更正' });
+    let mine = await lin.ok('GET', '/api/my/payout-months?month=' + month);
+    equal(mine.confirm_status, 'sent', '重送後應回到待確認');
+    equal(mine.sign_image, '', '重送應清掉舊簽名');
+    equal(mine.handled_note, '已查，9/12 那筆更正', '應看得到行政的處理說明');
+    await lin.fails('POST', `/api/my/payout-months/${month}/dispute`, { note: '' }, '請說明');
+    await lin.ok('POST', `/api/my/payout-months/${month}/dispute`, { note: '鐘點數少算一次' });
+    const board = await admin.ok('GET', `/api/payout-months?month=${month}`);
+    const row = board.rows.find(r => r.user_id === 2);
+    equal(row.confirm_status, 'disputed', '所方應看到有疑義');
+    equal(row.reply_note, '鐘點數少算一次', '應帶出心理師寫的說明');
   });
 
   section('設定與範本的還原');
