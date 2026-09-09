@@ -1,103 +1,72 @@
 // 收據：開立、補開、作廢重開與補印
 
-// 印花稅總繳戳記：內容取自系統設定，與所內用印的戳章一致
-function stampHtml(r) {
-  if (String(r.receipt_stamp_enabled ?? '1') === '0') return '';
-  // 有上傳實體印花章的掃描圖就直接蓋圖，沒有才用文字戳記
-  if (r.receipt_stamp_image) {
-    return `<img src="${UI.esc(r.receipt_stamp_image)}" alt="印花稅總繳章"
-      style="width:150px;height:auto;mix-blend-mode:multiply">`;
-  }
-  return `<div style="display:inline-block;border:1.5px solid #1f3f8f;color:#1f3f8f;
-      padding:6px 12px;font-size:12.5px;font-weight:600;line-height:1.7;text-align:center">
-    <div>${UI.esc(r.center_name || '')}</div>
-    <div>${UI.esc(r.receipt_stamp_note || '')}</div>
-    <div>${UI.esc(r.receipt_stamp_authority || '')}</div>
-    <div>負責總繳人：${UI.esc(r.receipt_stamp_payer || r.center_director || '')}</div>
-  </div>`;
-}
-
-// 發票章（統一編號章）：後台上傳的掃描圖，沒上傳就不印，不會出現破圖
-function sealHtml(r, size) {
-  if (!r.receipt_seal_image) return '';
-  return `<img src="${UI.esc(r.receipt_seal_image)}" alt="諮商所發票章"
-    style="width:${size || 108}px;height:auto;mix-blend-mode:multiply">`;
-}
-
-function receiptHtml(r) {
-  const money = v => 'NT$ ' + Number(v || 0).toLocaleString('zh-TW');
-  return `<div id="printable" style="font-size:14px;line-height:2;max-width:640px;margin:0 auto">
-    <div style="text-align:center">
-      <div style="font-size:19px;font-weight:700">${UI.esc(r.center_name || '')}</div>
-      <div style="font-size:12.5px;color:#6b7a85">
-        ${UI.esc(r.center_address || '')}${r.center_phone ? '　電話 ' + UI.esc(r.center_phone) : ''}
-        ${r.center_license_no ? '<br>開業執照字號：' + UI.esc(r.center_license_no) : ''}
-        ${r.center_tax_id ? '　統一編號：' + UI.esc(r.center_tax_id) : ''}</div>
-      <div style="font-size:17px;font-weight:700;margin:10px 0 4px;letter-spacing:4px">
-        ${UI.esc(r.receipt_title || '心理諮商服務費收據')}</div>
-      ${r.status === 'void' ? '<div style="color:#d9534f;font-weight:700">（本張已作廢）</div>' : ''}
-    </div>
-    <table style="width:100%;border-collapse:collapse;margin-top:10px">
-      <tr><td style="width:110px;color:#6b7a85">收據編號</td><td><strong>${UI.esc(r.receipt_no)}</strong></td>
-        <td style="width:80px;color:#6b7a85">日期</td><td>${UI.esc(r.date)}</td></tr>
-      <tr><td style="color:#6b7a85">抬頭</td><td>${UI.esc(r.title || r.client_name)}</td>
-        <td style="color:#6b7a85">統一編號</td>
-        <td><div style="display:flex;align-items:center;gap:10px">
-          <span>${UI.esc(r.tax_id || '－')}</span>${sealHtml(r, 96)}</div></td></tr>
-      <tr><td style="color:#6b7a85">個案編號</td><td>${UI.esc(r.client_code || '')}</td>
-        <td style="color:#6b7a85">服務日期</td><td>${UI.esc(r.service_date || r.date)}</td></tr>
-      <tr><td style="color:#6b7a85">服務項目</td><td colspan="3">${UI.esc(r.item)}
-        ${r.plan_name ? '（' + UI.esc(r.plan_name) + '）' : ''}</td></tr>
-      <tr><td style="color:#6b7a85">心理師</td><td>${UI.esc(r.counselor_name || '－')}</td>
-        <td style="color:#6b7a85">付款方式</td><td>${UI.esc(r.method || '－')}</td></tr>
-    </table>
-    <div style="border-top:1px solid #c9d2d9;border-bottom:1px solid #c9d2d9;margin-top:10px;padding:10px 0;
-      font-size:20px;font-weight:700;text-align:right">${money(r.amount)}</div>
-    ${r.reissue_of ? `<div style="font-size:12.5px;color:#6b7a85">（本張係重開，原收據編號 ${UI.esc(r.reissue_of)}）</div>` : ''}
-    ${r.note ? `<div style="font-size:13px;margin-top:6px">備註：${UI.nl2br(r.note)}</div>` : ''}
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:26px;font-size:13.5px">
-      <div>開立人：${UI.esc(r.issuer_name || '')}</div>
-      <div style="display:flex;align-items:center;gap:12px">
-        <span>負責心理師：${UI.esc(r.center_director || '')}　　（用印）</span>
-        ${stampHtml(r)}
-      </div>
-    </div>
-    <div style="font-size:12px;color:#6b7a85;margin-top:16px">${UI.esc(r.receipt_footer || '')}</div>
-  </div>`;
-}
-
 async function showReceipt(id) {
   const r = await GET(`/receipts/${id}`);
   UI.modal({
     title: `收據 ${r.receipt_no}`, wide: true, hideFooter: true,
-    body: `${receiptHtml(r)}
-      <div class="toolbar" style="margin-top:14px"><div class="spacer"></div>
+    body: `${Receipt.html(r)}
+      <div class="toolbar" style="margin-top:14px;flex-wrap:wrap"><div class="spacer"></div>
         ${r.status === 'valid' ? '<button class="btn secondary" id="line">LINE 傳給個案</button>' : ''}
-        <button class="btn" id="pr">列印${r.print_count ? `（已印 ${r.print_count} 次）` : ''}</button></div>`,
+        <button class="btn secondary" data-rc="png">下載圖片</button>
+        <button class="btn secondary" data-rc="pdf">下載 PDF</button>
+        <button class="btn" data-rc="print">列印${r.print_count ? `（已印 ${r.print_count} 次）` : ''}</button></div>
+      ${r.share_url ? `<div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+        個案專用連結（LINE 卡片上的按鈕就是開這一條，作廢或重開後即失效）：<br>
+        <span style="word-break:break-all">${UI.esc(r.share_url)}</span></div>` : ''}`,
     onOpen: body => {
-      body.querySelector('#pr').onclick = async () => {
-        await POST(`/receipts/${id}/printed`).catch(() => {});
-        window.print();
-      };
+      const node = body.querySelector('#printable');
+      Receipt.bindExport(body, node, r, () => POST(`/receipts/${id}/printed`).catch(() => {}));
       const lb = body.querySelector('#line');
-      if (lb) lb.onclick = async () => { const o = await POST(`/receipts/${id}/line`); UI.toast(o.message); };
+      // 傳給個案的是「收據本身的圖」，不是摘要卡片 —— 要申請保險的個案需要的是憑證本身。
+      // 圖在瀏覽器這邊產生後上傳，伺服器再給 LINE 一條公開網址。
+      if (lb) lb.onclick = async () => {
+        lb.disabled = true;
+        const was = lb.textContent;
+        lb.textContent = '產生收據圖…';
+        try {
+          const fd = new FormData();
+          fd.append('image', await Receipt.toPngBlob(node), `${r.receipt_no}.png`);
+          lb.textContent = '傳送中…';
+          const o = await POST(`/receipts/${id}/line`, fd);
+          UI.toast(o.message || '已傳送');
+        } catch (e) { UI.err(e); } finally { lb.disabled = false; lb.textContent = was; }
+      };
     }
   });
 }
 
-function issueDialog(inv, onDone) {
+// invs：要開在同一張收據上的收費單（一筆是原本的行為，多筆就是合併開立）
+function issueDialog(invs, onDone) {
+  const list = Array.isArray(invs) ? invs : (invs ? [invs] : []);
+  const inv = list[0] || null;
+  const merged = list.length > 1;
+  const total = list.reduce((a, v) => a + v.amount, 0);
+  const dates = list.map(v => v.service_date || v.date).filter(Boolean).sort();
+  const span = dates.length ? (dates[0] === dates[dates.length - 1] ? dates[0]
+    : `${dates[0]} ~ ${dates[dates.length - 1]}`) : UI.today();
   UI.modal({
-    title: inv ? `開立收據：${inv.client_name}` : '手動開立收據',
+    title: merged ? `合併開立收據：${inv.client_name}（${list.length} 筆）`
+      : (inv ? `開立收據：${inv.client_name}` : '手動開立收據'),
     wide: true,
-    body: `<div class="form-grid">
+    body: `${merged ? `<div class="notice" style="margin-bottom:10px">
+        合併 ${list.length} 筆收費單開成一張收據，合計 ${UI.fmtMoney(total)}；
+        收據上會逐筆列出每次的服務日期與金額（申請保險時對方要看得到明細）。
+        金額由系統加總，不可手改。<br>
+        ${list.map(v => `${UI.esc(v.service_date || v.date)}　${UI.esc(v.item)}　${UI.fmtMoney(v.amount)}`).join('<br>')}
+      </div>` : ''}
+    <div class="form-grid">
       ${inv ? '' : '<div class="form-row full" id="cli-row"></div>'}
       ${UI.input('date', '收據日期', { type: 'date', value: UI.today() })}
-      ${UI.input('amount', '金額', { type: 'number', value: inv ? inv.amount : 0 })}
+      ${merged ? `<div class="form-row"><label>金額（${list.length} 筆合計）</label>
+        <input value="${UI.fmtMoney(total)}" disabled></div>`
+    : UI.input('amount', '金額', { type: 'number', value: inv ? inv.amount : 0 })}
       ${UI.input('title', '抬頭（可改為公司或家長姓名）', { value: inv ? inv.client_name : '', full: true })}
       ${UI.input('tax_id', '統一編號（報帳用，可留空）', { value: '' })}
       ${UI.inputList('method', '付款方式', App.meta.pay_methods || [], { value: inv ? inv.method : '現金' })}
-      ${UI.input('item', '服務項目', { value: inv ? inv.item : '心理諮商服務費', full: true })}
-      ${UI.input('service_date', '服務（晤談）日期', { type: 'date', value: inv ? (inv.service_date || inv.date) : UI.today() })}
+      ${UI.input('item', '服務項目', {
+    value: merged ? `心理諮商服務費（${list.length} 次）` : (inv ? inv.item : '心理諮商服務費'), full: true })}
+      ${merged ? `<div class="form-row"><label>服務（晤談）日期</label><input value="${UI.esc(span)}" disabled></div>`
+    : UI.input('service_date', '服務（晤談）日期', { type: 'date', value: inv ? (inv.service_date || inv.date) : UI.today() })}
       ${UI.textarea('note', '備註', { value: '' })}
     </div>`,
     onOpen: async body => {
@@ -110,7 +79,8 @@ function issueDialog(inv, onDone) {
     },
     onSubmit: async el => {
       const data = UI.formData(el);
-      if (inv) data.invoice_id = inv.id;
+      if (list.length) data.invoice_ids = list.map(v => v.id);
+      if (merged) { delete data.amount; delete data.service_date; }
       const r = await POST('/receipts', data);
       UI.toast(`已開立收據 ${r.receipt_no}`);
       onDone && onDone();
@@ -124,7 +94,9 @@ App.page('receipts', {
   sub: '晤談結束後個案要收據就開一張；事後要補開、補印或重開都在這裡',
   help: [
     '上半部是已收款但還沒開收據的收費單，個案要收據就按「開立收據」。',
-    '下半部是已開立的收據：可「檢視／列印」、「LINE 傳給個案」、金額打錯用「編輯」或「重開」，整張不要了按「作廢」。',
+    '同一位個案要把好幾次併成一張（報稅或申請保險常這樣要求）：勾選那幾筆再按「合併開立」。收據上會逐筆列出每次的服務日期與金額，總額為加總，金額由系統算不可手改。',
+    '檢視收據時可「下載 PDF」「下載圖片」或「列印」；「LINE 傳給個案」送出的是收據本身的圖，個案存下來就能拿去申請保險，卡片上另附一條可開啟完整收據的連結。',
+    '下半部是已開立的收據：金額打錯用「編輯」或「重開」，整張不要了按「作廢」。作廢或重開後，先前給個案的連結與圖片會立刻失效。',
     '作廢的收據會留存不刪除，重開會產生新號碼。',
   ],
   module: 'billing',
@@ -139,12 +111,20 @@ App.page('receipts', {
 
       <div class="card"><h3>待開立（已收款但尚未開收據）
           <span style="font-size:13px;font-weight:400;color:var(--muted)">個案回頭要收據時，直接從這裡補開</span></h3>
-        ${UI.table(['收款日', '個案', '項目', '方案', '金額', ''], pending.map(i => `<tr>
+        <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">
+          同一位個案要把好幾次併成一張收據（報稅、申請保險常這樣要求）：
+          勾選那幾筆再按「合併開立」，收據上會逐筆列出日期與金額，總額為加總。</div>
+        ${UI.table(['', '收款日', '個案', '項目', '方案', '金額', ''], pending.map(i => `<tr>
+          <td><input type="checkbox" class="pk-inv" data-c="${i.client_id}" value="${i.id}" style="width:auto"></td>
           <td>${(i.paid_at || i.date).slice(0, 10)}</td>
           <td>${UI.esc(i.client_name)}<br><span style="font-size:12px;color:var(--muted)">${UI.esc(i.client_code)}</span></td>
           <td>${UI.esc(i.item)}</td><td>${UI.esc(i.plan_name || '-')}</td>
           <td>${UI.fmtMoney(i.amount)}</td>
-          <td><button class="btn tiny" data-issue="${i.id}">開立收據</button></td></tr>`), '沒有待開立的收費單')}</div>
+          <td><button class="btn tiny" data-issue="${i.id}">開立收據</button></td></tr>`), '沒有待開立的收費單')}
+        <div class="toolbar" style="margin-top:10px">
+          <span id="pk-info" style="font-size:13px;color:var(--muted)">尚未勾選</span>
+          <div class="spacer"></div>
+          <button class="btn secondary" id="merge" disabled>合併開立</button></div></div>
 
       <div class="card"><h3>已開立收據
           <span style="font-size:13px;font-weight:400;color:var(--muted)">有效合計 ${UI.fmtMoney(data.total_amount)}</span></h3>
@@ -208,6 +188,28 @@ App.page('receipts', {
     el.querySelectorAll('[data-issue]').forEach(b => {
       b.onclick = () => issueDialog(pending.find(i => i.id === Number(b.dataset.issue)), reload);
     });
+    // 合併只在同一位個案之內成立：憑證的抬頭與個案編號只有一個，混不得。
+    // 勾到第二位個案時直接講清楚，不要等按下去才被退。
+    const boxes = [...el.querySelectorAll('.pk-inv')];
+    const mergeBtn = el.querySelector('#merge');
+    const info = el.querySelector('#pk-info');
+    const sync = () => {
+      const on = boxes.filter(b => b.checked);
+      const rows = on.map(b => pending.find(i => i.id === Number(b.value)));
+      const clients = new Set(on.map(b => b.dataset.c));
+      const sum = rows.reduce((a, v) => a + v.amount, 0);
+      if (!on.length) { info.textContent = '尚未勾選'; mergeBtn.disabled = true; return; }
+      if (clients.size > 1) {
+        info.innerHTML = '<span style="color:var(--danger)">勾選的不是同一位個案，無法合併</span>';
+        mergeBtn.disabled = true;
+        return;
+      }
+      info.textContent = `已勾選 ${on.length} 筆　${rows[0].client_name}　合計 ${UI.fmtMoney(sum)}`;
+      mergeBtn.disabled = on.length < 2;
+    };
+    boxes.forEach(b => { b.onchange = sync; });
+    mergeBtn.onclick = () => issueDialog(
+      boxes.filter(b => b.checked).map(b => pending.find(i => i.id === Number(b.value))), reload);
     el.querySelectorAll('[data-v]').forEach(b => { b.onclick = () => showReceipt(b.dataset.v); });
     el.querySelectorAll('[data-void]').forEach(b => {
       b.onclick = () => UI.modal({

@@ -159,6 +159,7 @@ router.get('/invoices/:id/receipt', requireStaff('billing'), (req, res) => {
     receipt_stamp_authority: getSetting('receipt_stamp_authority', '臺中市'),
     receipt_stamp_payer: getSetting('receipt_stamp_payer'),
     receipt_seal_image: getSetting('receipt_seal_image'),
+    receipt_seal_size: getSetting('receipt_seal_size', '192'),
     receipt_stamp_image: getSetting('receipt_stamp_image')
   });
 });

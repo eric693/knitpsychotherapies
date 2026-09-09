@@ -1236,7 +1236,7 @@ function startServer() {
   });
 
   section('收據');
-  let receiptId, receiptNo;
+  let receiptId, receiptNo, mergedReceiptId;
   await test('收款方式選錯可更正，並分別統計現金與轉帳', async () => {
     const list = await admin.ok('GET', '/api/invoices');
     const inv = list.rows.find(i => i.status === 'paid');
@@ -1271,6 +1271,52 @@ function startServer() {
     assert(/^GM\d{6}\d{4}$/.test(r.receipt_no) || /^\w+\d{10}$/.test(r.receipt_no), '收據編號格式：' + r.receipt_no);
     receiptId = r.id;
     receiptNo = r.receipt_no;
+  });
+  // 個案報稅或申請保險常常是「把這幾次併成一張」，一次一張收據拿去會被退件
+  await test('多筆收費單可合併開成一張收據，明細與總額都對得起來', async () => {
+    const mk = async (amount, item) => {
+      const c = await admin.ok('POST', '/api/invoices', { client_id: clientId, item, amount });
+      await admin.ok('POST', `/api/invoices/${c.id}/pay`, { method: '現金' });
+      return c.id;
+    };
+    const a = await mk(1500, '合併測試一');
+    const b = await mk(2500, '合併測試二');
+    const r = await admin.ok('POST', '/api/receipts', { invoice_ids: [a, b] });
+    equal(r.merged, 2, '應記錄合併了兩筆');
+    const got = await admin.ok('GET', `/api/receipts/${r.id}`);
+    equal(got.amount, 4000, '總額應為兩筆加總');
+    equal((got.lines || []).length, 2, '應帶出兩筆明細');
+    assert(got.item.includes('2 次'), '項目應標明次數：' + got.item);
+    // 已被合併涵蓋的收費單不該再出現在待開立清單，否則會被重複開一次
+    const pending = await admin.ok('GET', '/api/receipts/pending');
+    assert(!pending.some(i => i.id === a || i.id === b), '已開過的收費單不應留在待開立清單');
+    // 再開一次要被擋下
+    await admin.fails('POST', '/api/receipts', { invoice_ids: [a] }, '已開立收據');
+    mergedReceiptId = r.id;
+  });
+  await test('合併只能在同一位個案之內', async () => {
+    const others = await admin.ok('GET', '/api/clients');
+    const other = others.find(c => c.id !== clientId);
+    const mine = await admin.ok('POST', '/api/invoices', { client_id: clientId, item: '甲', amount: 1000 });
+    const yours = await admin.ok('POST', '/api/invoices', { client_id: other.id, item: '乙', amount: 1000 });
+    await admin.ok('POST', `/api/invoices/${mine.id}/pay`, { method: '現金' });
+    await admin.ok('POST', `/api/invoices/${yours.id}/pay`, { method: '現金' });
+    await admin.fails('POST', '/api/receipts', { invoice_ids: [mine.id, yours.id] }, '同一位個案');
+  });
+  // 個案從 LINE 點進來的連結：不必登入就看得到，但作廢後必須立刻失效
+  await test('收據公開連結免登入可看，作廢後即失效', async () => {
+    const got = await admin.ok('GET', `/api/receipts/${mergedReceiptId}`);
+    assert(/\/receipt\/[0-9a-f]{32}$/.test(got.share_url || ''), '應產生公開連結：' + got.share_url);
+    const token = got.share_url.split('/').pop();
+    const pub = await (await fetch(`${BASE}/api/public/receipts/${token}`)).json();
+    equal(pub.receipt_no, got.receipt_no, '公開頁應取得同一張收據');
+    equal((pub.lines || []).length, 2, '公開頁也要有明細');
+    assert(pub.issuer_name === undefined && pub.invoice_id === undefined, '不應外流內部欄位');
+    // 亂猜的 token 一律查不到
+    equal((await fetch(`${BASE}/api/public/receipts/${'0'.repeat(32)}`)).status, 404, '無效 token 應為 404');
+    await admin.ok('POST', `/api/receipts/${mergedReceiptId}/void`, { reason: '測試作廢' });
+    equal((await fetch(`${BASE}/api/public/receipts/${token}`)).status, 404, '作廢後連結應失效');
+    await admin.ok('POST', `/api/receipts/${mergedReceiptId}/unvoid`, {});
   });
   await test('收費單與收據共用同一條號碼序列，不會兩張單同號', async () => {
     // 兩邊各算各的話，同一個月都會從 0001 開始，等於不同單據印出同一個號

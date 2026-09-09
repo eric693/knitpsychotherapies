@@ -257,8 +257,18 @@ function receiptFlex(r) {
       kv('金額', `NT$ ${Number(r.amount).toLocaleString('zh-TW')}`),
       ...(r.title ? [kv('抬頭', r.title)] : []),
       noteBox(msgText('line_text_receipt_note'))
-    ]
+    ],
+    // 要申請保險、報稅的個案需要的是憑證本身，不是摘要。
+    // 連結開啟的是與所方列印完全同一份版面，個案可自行存成 PDF 或圖片。
+    footer: r.share_url
+      ? [actionButton('檢視／下載收據', { type: 'uri', label: '檢視／下載收據', uri: r.share_url })]
+      : []
   });
+}
+
+// LINE 的圖片訊息只吃網址（https、jpg/png），不能直接塞檔案內容
+function imageMessage(url) {
+  return { type: 'image', originalContentUrl: url, previewImageUrl: url };
 }
 
 function textMessage(text) { return { type: 'text', text: String(text).slice(0, 4900) }; }
@@ -349,6 +359,28 @@ async function pushFlex({ to, flex, kind = 'line', client_id = null, appointment
   return r.ok ? { status: 'sent', message: '已以 LINE 推播' } : { status: 'failed', message: r.error };
 }
 
+// 一次推多則訊息（收據就是「圖片 + 摘要卡片」兩則）。
+// pushFlex 與 pushText 是這個函式的兩個常用情形，記錄與失敗處理走同一套。
+async function pushMessages({ to, messages, summary = '', kind = 'line', client_id = null,
+  appointment_id = null, user = null }) {
+  const list = (messages || []).filter(Boolean);
+  if (!list.length) return { status: 'failed', message: '沒有要送出的內容' };
+  if (!lineEnabled()) {
+    logNotification({ kind, client_id, appointment_id, channel: 'manual', target: to,
+      content: summary, status: 'manual' });
+    return { status: 'manual', message: '尚未設定 LINE official 帳號，已記錄為待人工通知' };
+  }
+  if (!to) {
+    logNotification({ kind, client_id, appointment_id, channel: 'line', target: '', content: summary,
+      status: 'failed', error: '尚未綁定 LINE' });
+    return { status: 'failed', message: '對方尚未綁定 LINE 官方帳號' };
+  }
+  const r = await callLine(PUSH_URL, { to, messages: list });
+  logNotification({ kind, client_id, appointment_id, channel: 'line', target: to, content: summary,
+    status: r.ok ? 'sent' : 'failed', error: r.error, user, payload: list });
+  return r.ok ? { status: 'sent', message: '已以 LINE 推播' } : { status: 'failed', message: r.error };
+}
+
 // 推一則純文字。櫃檯在「晤談提醒」頁按發送時走這裡 ——
 // 他常會臨時改一句話，送出的內容要跟畫面上看到的一致，所以不套 Flex 卡片。
 async function pushText({ to, text, kind = 'line', client_id = null, appointment_id = null, user = null }) {
@@ -389,6 +421,6 @@ module.exports = {
   card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
   bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, portalUrl,
   counselorScheduleFlex, counselorBookingFlex, receiptFlex,
-  pushFlex, pushText, replyMessages, verifySignature, logNotification,
+  pushFlex, pushText, pushMessages, imageMessage, replyMessages, verifySignature, logNotification,
   retryNotification, retryFailedNotifications
 };

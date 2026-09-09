@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>收據</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <meta name="theme-color" content="#0e7c7b">
+  <meta name="robots" content="noindex,nofollow">
+  <style>
+    .rc-wrap { max-width: 720px; margin: 0 auto; padding: 18px 14px 60px; }
+    .rc-card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+    .rc-bar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 16px; }
+    .rc-note { font-size: 12.5px; color: var(--muted); line-height: 1.8; text-align: center; margin-top: 14px; }
+    /* 列印時只留收據本身，按鈕與說明都不印出來 */
+    @media print {
+      .rc-bar, .rc-note { display: none !important; }
+      .rc-card { border: 0; padding: 0; }
+      .rc-wrap { padding: 0; max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="rc-wrap">
+    <div id="app"><div class="rc-card"><div class="empty">載入中…</div></div></div>
+  </div>
+  <div id="toast"></div>
+  <script src="/js/api.js"></script>
+  <script src="/js/ui.js"></script>
+  <script src="/js/receipt-view.js"></script>
+  <script>
+    // 個案從 LINE 點連結進來看到的頁面。內容與所方開立、列印的完全同一份版面，
+    // 並提供 PDF／圖片下載 —— 要拿去申請保險的就是這一份。
+    (async () => {
+      const token = location.pathname.split('/').filter(Boolean).pop() || '';
+      const app = document.getElementById('app');
+      let r;
+      try {
+        r = await GET('/public/receipts/' + encodeURIComponent(token));
+      } catch (e) {
+        app.innerHTML = `<div class="rc-card"><div class="empty">${UI.esc(e.message || '連結已失效')}</div></div>`;
+        return;
+      }
+      document.title = `收據 ${r.receipt_no}｜${r.center_name || ''}`;
+      app.innerHTML = `<div class="rc-card">${Receipt.html(r)}</div>
+        <div class="rc-bar">
+          <button class="btn" data-rc="pdf">下載 PDF</button>
+          <button class="btn secondary" data-rc="png">下載圖片</button>
+          <button class="btn secondary" data-rc="print">列印</button>
+        </div>
+        <div class="rc-note">
+          此連結僅供本人保存與報帳使用，請勿轉傳。<br>
+          如需紙本收據或內容有誤，請與 ${UI.esc(r.center_name || '本所')}
+          ${r.center_phone ? '（' + UI.esc(r.center_phone) + '）' : ''}聯繫。
+        </div>`;
+      Receipt.bindExport(app, app.querySelector('#printable'), r);
+    })();
+  </script>
+</body>
+</html>

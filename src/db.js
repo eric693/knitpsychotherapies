@@ -976,6 +976,23 @@ db.exec(`CREATE TABLE IF NOT EXISTS receipts (
 CREATE INDEX IF NOT EXISTS idx_receipt_client ON receipts(client_id, date);
 CREATE INDEX IF NOT EXISTS idx_receipt_no ON receipts(receipt_no);`);
 
+// 一張收據可涵蓋同一個案的多筆收費單（個案常常是幾次晤談後一起要一張報保險用的收據）。
+// receipts.invoice_id 保留為「第一筆」以相容既有資料與查詢，明細以這張表為準。
+db.exec(`CREATE TABLE IF NOT EXISTS receipt_invoices (
+  receipt_id INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  PRIMARY KEY (receipt_id, invoice_id)
+);
+CREATE INDEX IF NOT EXISTS idx_receipt_inv ON receipt_invoices(invoice_id);`);
+
+ensureColumns('receipts', {
+  // 給個案的收據連結／圖片用的隨機字串。個案不必登入就能開，所以要夠長且可隨時重設。
+  share_token: "TEXT NOT NULL DEFAULT ''",
+  // 櫃檯按「LINE 傳給個案」時，由瀏覽器把收據畫面轉成 PNG 上傳，這裡記檔名。
+  // LINE 的圖片訊息只能給網址，所以檔案要落地並有一條公開（帶 token）的路徑。
+  image_name: "TEXT NOT NULL DEFAULT ''"
+});
+
 // ---- 證明書（在職、離職、治療證明）----
 // 版面與文字都存在 data（JSON）裡：標題、每一列的欄位名與內容、聲明段落、
 // 機構抬頭與核章欄位皆可逐張改寫，套版只提供預設值，不限制所方怎麼寫。
@@ -1449,6 +1466,7 @@ if (getSetting('military_urls_seeded', '') !== '1') {
     // 發票章（統一編號章）掃描圖：存 data URI，收據列印時蓋在用印欄旁邊。
     // 留空就只印文字，不會有破圖。
     receipt_seal_image: '',
+    receipt_seal_size: '192',      // 發票章（統編章）印在收據上的寬度（px）
     // 印花稅總繳章掃描圖：有上傳就用圖，沒有就印上面那組文字戳記
     receipt_stamp_image: ''
   };

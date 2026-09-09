@@ -78,6 +78,30 @@ app.get('/calendar/:token/mindcare.ics', (req, res) => {
   res.send(cal.body);
 });
 
+// 收據的公開連結：個案從 LINE 點進來看到的就是與所方開立、列印完全同一份版面。
+// 網址帶的是每張收據各自的隨機 token（作廢或重開即失效），不需要登入也不會外洩其他資料。
+// /image.png 是櫃檯按「LINE 傳給個案」時由瀏覽器產生並上傳的那張圖，
+// LINE 的圖片訊息只吃網址，所以要有這一條公開路徑讓 LINE 伺服器抓得到。
+app.get('/receipt/:token/image.png', (req, res) => {
+  const t = String(req.params.token || '');
+  if (!/^[0-9a-f]{32}$/.test(t)) return res.status(404).type('text/plain').send('not found');
+  const row = db.prepare("SELECT image_name FROM receipts WHERE share_token = ? AND status = 'valid'").get(t);
+  const file = row && row.image_name ? path.join(UPLOAD_DIR, path.basename(row.image_name)) : '';
+  if (!file || !fs.existsSync(file)) return res.status(404).type('text/plain').send('not found');
+  res.type('png');
+  res.set('Cache-Control', 'public, max-age=86400');
+  fs.createReadStream(file).pipe(res);
+});
+app.get('/receipt/:token', (req, res, next) => {
+  if (!/^[0-9a-f]{32}$/.test(String(req.params.token || ''))) return next();
+  const file = path.join(PUBLIC_DIR, 'receipt.html');
+  if (!fs.existsSync(file)) return next();
+  const html = fs.readFileSync(file, 'utf8')
+    .replace(/(src|href)="(\/(?:js|css)\/[^"?]+)"/g, (m, attr, url) => `${attr}="${url}?v=${assetVersion()}"`);
+  res.set('Cache-Control', 'no-store');
+  res.type('html').send(html);
+});
+
 // ---- 模組路由 ----
 app.use('/api/portal', require('./routes/portal'));
 app.use('/api', require('./routes/clients'));
