@@ -1146,6 +1146,14 @@ CREATE TABLE IF NOT EXISTS line_bindings (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );`);
 
+// 綁定碼原本只掛在「已建檔的個案」或「員工」身上，但線上預約的人多半還沒建檔 ——
+// 他填完表單當下就是最願意加好友的時候，等櫃檯建檔後再發碼往往已經找不到人。
+// 因此讓綁定碼也能掛在預約申請上：對方加好友並傳碼即完成綁定，
+// 之後櫃檯建檔時再把 userId 帶進個案資料。
+ensureColumns('line_bindings', {
+  booking_request_id: 'INTEGER REFERENCES booking_requests(id) ON DELETE CASCADE'
+});
+
 ensureColumns('service_plans', {
   // 通訊（視訊）諮商這類方案預設就是線上，排約時直接帶入，不必每次改
   default_mode: "TEXT NOT NULL DEFAULT 'onsite'",
@@ -1489,6 +1497,7 @@ if (getSetting('military_urls_seeded', '') !== '1') {
     // 避免櫃檯要盯兩個地方而漏看。要開放個案在專區留言時把這裡改成 1。
     booking_max_days: '45',             // 最遠可約幾天後
     booking_slot_step: '30',            // 表單上時段間隔（分鐘）
+    booking_rate_limit: '5',        // 線上預約每 IP 每 10 分鐘可送出的次數（0 = 不限）
     booking_require_birth: '1',         // 是否必填生日（補助方案需驗年齡）
     booking_notice: '送出後為「預約申請」，櫃檯確認並回覆後才算完成預約。\n'
       + '如需取消或改期請提前來電；未於規定時間前告知者，本所得依公告收取部分費用。',

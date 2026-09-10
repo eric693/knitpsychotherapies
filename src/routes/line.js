@@ -92,14 +92,26 @@ async function handleEvent(ev) {
     if (code) {
       const bind = db.prepare("SELECT * FROM line_bindings WHERE code = ? AND status = 'pending'").get(code);
       if (bind && (!bind.expires_at || bind.expires_at >= today())) {
+        // 線上預約完成後拿到的碼掛在「預約申請」上（那時還沒建檔）。
+        // 綁在申請上，櫃檯建檔時再把 userId 帶進個案資料；若已經建過檔就直接寫進去。
+        const br = bind.booking_request_id
+          ? db.prepare('SELECT * FROM booking_requests WHERE id = ?').get(bind.booking_request_id) : null;
         const name = bind.client_id
           ? (db.prepare('SELECT name FROM clients WHERE id = ?').get(bind.client_id) || {}).name
-          : (db.prepare('SELECT name FROM users WHERE id = ?').get(bind.user_id) || {}).name;
+          : bind.user_id
+            ? (db.prepare('SELECT name FROM users WHERE id = ?').get(bind.user_id) || {}).name
+            : (br ? br.name : '');
         if (bind.client_id) db.prepare('UPDATE clients SET line_user_id = ? WHERE id = ?').run(lineUserId, bind.client_id);
         if (bind.user_id) db.prepare('UPDATE users SET line_user_id = ? WHERE id = ?').run(lineUserId, bind.user_id);
+        if (br) {
+          db.prepare('UPDATE booking_requests SET line_user_id = ?, source = ? WHERE id = ?')
+            .run(lineUserId, 'line', br.id);
+          if (br.client_id) db.prepare('UPDATE clients SET line_user_id = ? WHERE id = ?').run(lineUserId, br.client_id);
+        }
         db.prepare("UPDATE line_bindings SET status = 'done', line_user_id = ?, bound_at = ? WHERE id = ?")
           .run(lineUserId, nowStamp(), bind.id);
-        audit('system', null, 'LINE', '完成 LINE 綁定', String(bind.client_id || bind.user_id || ''));
+        audit('system', null, 'LINE', '完成 LINE 綁定',
+          String(bind.client_id || bind.user_id || (br ? `預約申請 ${br.id}` : '')));
         await line.replyMessages(ev.replyToken, [bindingWelcome(name || '您')]);
         return;
       }

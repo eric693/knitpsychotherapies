@@ -293,6 +293,47 @@ const BK = {
     }
   },
 
+  // 預約完成後的 LINE 區塊。這是對方最願意加好友的時候 ——
+  // 加好友只是加好友，系統還不知道他是誰，所以要連綁定一起完成：
+  // 「開啟聊天室並帶入綁定碼」按下去訊息已經填好，直接送出就綁定成功。
+  lineBox(r) {
+    const c = BK.cfg;
+    if (r.line_bound) {
+      return `<div class="bk-note" style="margin-top:14px;text-align:left">
+        ✓ 已與您的 LINE 連結，預約結果與晤談提醒都會傳到這裡。</div>`;
+    }
+    const b = r.line_bind;
+    if (!b || !b.code) {
+      return r.line_add_friend_url ? `<a class="btn" style="margin-top:14px;display:inline-block"
+        href="${UI.esc(r.line_add_friend_url)}" target="_blank" rel="noopener">加入 LINE 接收提醒</a>` : '';
+    }
+    return `<div class="bk-card" style="margin-top:16px;text-align:left;border:1px solid var(--primary)">
+      <h2 style="font-size:16px;margin:0 0 6px">接收預約結果與晤談提醒</h2>
+      <div class="bk-note" style="margin-bottom:10px">
+        加入官方帳號並完成連結後，預約結果、晤談提醒與收據都會傳到您的 LINE。
+      </div>
+      <ol style="font-size:14px;line-height:2;padding-left:20px;margin:0 0 10px">
+        <li>按「加入好友」${c.line_official_name ? `（${UI.esc(c.line_official_name)}）` : ''}</li>
+        <li>回到這頁按「開啟聊天室並送出連結碼」，訊息已經填好，直接送出即可</li>
+      </ol>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${r.line_add_friend_url ? `<a class="btn" href="${UI.esc(r.line_add_friend_url)}"
+          target="_blank" rel="noopener">① 加入好友</a>` : ''}
+        ${b.message_url ? `<a class="btn secondary" href="${UI.esc(b.message_url)}"
+          target="_blank" rel="noopener">② 開啟聊天室並送出連結碼</a>` : ''}
+      </div>
+      <div style="margin-top:12px;font-size:14px">
+        連結碼：<strong id="bind-code" style="font-size:22px;letter-spacing:3px">${UI.esc(b.code)}</strong>
+        <button class="btn secondary" type="button" id="copy-code"
+          style="margin-left:8px;padding:4px 10px;font-size:13px">複製</button>
+      </div>
+      <div class="bk-note" style="margin-top:8px">
+        手機若沒有自動帶入，加好友後把上面這 6 個數字傳給官方帳號也可以。
+        連結碼 ${UI.esc(b.expires_at)} 前有效；沒完成也不影響預約，我們仍會以電話與您聯繫。
+      </div>
+    </div>`;
+  },
+
   done(r) {
     const c = BK.cfg;
     document.getElementById('app').innerHTML = `<div class="bk-card done-box">
@@ -304,8 +345,7 @@ const BK = {
         ${BK.sel.plan ? `\n方案：${BK.sel.plan.name}\n您需支付：NT$ ${r.self_pay}` : ''}
         ${r.center_phone ? `\n\n如需修改或有疑問，請來電 ${r.center_phone}。` : ''}
       </div>
-      ${r.line_add_friend_url ? `<a class="btn" style="margin-top:14px;display:inline-block"
-        href="${UI.esc(r.line_add_friend_url)}" target="_blank" rel="noopener">加入 LINE 接收提醒</a>` : ''}
+      ${BK.lineBox(r)}
       ${r.portal_url ? `<div style="margin-top:14px">
         <a class="btn secondary" style="display:inline-block"
           href="${UI.esc(r.portal_url)}" target="_blank" rel="noopener">前往個案專區</a>
@@ -314,6 +354,12 @@ const BK = {
           帳號為本次填寫的手機號碼，預設密碼是手機號碼後 6 碼。</div></div>` : ''}
       <div class="bk-note" style="margin-top:16px">${UI.esc(c.crisis_note || '')}</div>
     </div>`;
+    const copy = document.getElementById('copy-code');
+    if (copy) copy.onclick = async () => {
+      const code = document.getElementById('bind-code').textContent.trim();
+      try { await navigator.clipboard.writeText(code); copy.textContent = '已複製'; }
+      catch { copy.textContent = '請長按上方號碼複製'; }
+    };
   }
 };
 

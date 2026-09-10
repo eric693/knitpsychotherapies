@@ -2649,6 +2649,81 @@ function startServer() {
     assert(d.ok, '簽章正確時應處理事件');
     await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '' });
   });
+  // 線上預約（免登入）結束後，當場就能加好友並完成綁定 ——
+  // 那是對方最願意加的時候，等櫃檯建檔後再發碼往往已經找不到人。
+  await test('線上預約完成後給連結碼，加好友傳碼即綁定，建檔時帶進個案', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    const plan = (await (await fetch(`${BASE}/api/public/booking-config`)).json()).plans[0];
+    const phone = '0955000111';
+    const sent = await (await fetch(`${BASE}/api/public/bookings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '綁定測試', phone, birth_date: '1995-05-05',
+        plan_id: plan.id, consent: true, main_issue: '測試' })
+    })).json();
+    assert(sent.ok, '預約應送出成功：' + JSON.stringify(sent));
+    assert(!sent.line_bound, '未從 LINE 進來時不應標記為已綁定');
+    assert(sent.line_bind && /^\d{6}$/.test(sent.line_bind.code), '應給一組 6 碼連結碼');
+    assert(sent.line_bind.message_url.includes(sent.line_bind.code), '聊天室連結應帶入該碼');
+
+    // 對方加好友後把碼傳進官方帳號
+    const body = JSON.stringify({
+      events: [{ type: 'message', replyToken: 'rb1', source: { userId: 'Ubooking777' },
+        message: { type: 'text', text: sent.line_bind.code } }]
+    });
+    const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+    const hook = await fetch(BASE + '/api/line/webhook', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+    equal(hook.status, 200, 'webhook 應受理');
+    const req1 = (await admin.ok('GET', '/api/bookings')).find(x => x.id === sent.id);
+    equal(req1.line_user_id, 'Ubooking777', '綁定後申請上應記下 userId');
+
+    // 櫃檯建檔時要把 userId 帶進個案資料，否則綁了等於白綁
+    const made = await admin.ok('POST', `/api/bookings/${sent.id}/create-client`, {});
+    const c = await admin.ok('GET', `/api/clients/${made.client_id}`);
+    equal(c.line_user_id, 'Ubooking777', '建檔後個案應已綁定 LINE');
+    // 同一組碼不能再用一次
+    const again = await fetch(BASE + '/api/line/webhook', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+    equal(again.status, 200, 'webhook 仍回 200');
+    await admin.ok('DELETE', `/api/clients/${made.client_id}`);
+    await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '', line_channel_token: '' });
+  });
+  await test('從 LINE 進來預約的舊個案，當場補上綁定', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token' });
+    // 冒煙測試會在同一個 IP 連送多筆，把送單上限暫時放寬（測完還原）
+    await admin.ok('PUT', '/api/settings', { booking_rate_limit: '0' });
+    const phone = '0955000222';
+    const c = await admin.ok('POST', '/api/clients', { name: '舊個案綁定', phone });
+    equal((await admin.ok('GET', `/api/clients/${c.id}`)).line_user_id, '', '一開始未綁定');
+    const plan = (await (await fetch(`${BASE}/api/public/booking-config`)).json()).plans[0];
+    const sent = await (await fetch(`${BASE}/api/public/bookings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '舊個案綁定', phone, birth_date: '1990-01-01',
+        plan_id: plan.id, consent: true, line_user_id: 'Uoldclient9' })
+    })).json();
+    assert(sent.ok, '預約應送出成功：' + JSON.stringify(sent));
+    assert(sent.line_bound, '已帶 userId 時應標記為已綁定');
+    assert(!sent.line_bind, '已綁定就不該再發碼');
+    equal((await admin.ok('GET', `/api/clients/${c.id}`)).line_user_id, 'Uoldclient9', '應當場補上綁定');
+    await admin.ok('DELETE', `/api/clients/${c.id}`);
+    await admin.ok('PUT', '/api/settings', { booking_rate_limit: '5' });
+    await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '', line_channel_token: '' });
+  });
+  await test('線上預約的送單上限可由設定調整，超過即擋下', async () => {
+    await admin.ok('PUT', '/api/settings', { booking_rate_limit: '1' });
+    const plan = (await (await fetch(`${BASE}/api/public/booking-config`)).json()).plans[0];
+    const send = n => fetch(`${BASE}/api/public/bookings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '節流測試' + n, phone: '09550003' + n, birth_date: '1990-01-01',
+        plan_id: plan.id, consent: true })
+    });
+    // 上限本來就已被前面的測試用掉，這裡只需確認「調低之後真的擋得住」
+    const blocked = await send(1);
+    equal(blocked.status, 429, '超過上限應回 429');
+    await admin.ok('PUT', '/api/settings', { booking_rate_limit: '5' });
+  });
   await test('綁定 LINE 的個案，櫃檯直接排約也會收到「預約已成立」', async () => {
     // 原本只有「線上申請確認」才推卡片，櫃檯自己排的約個案完全收不到通知。
     await admin.ok('PUT', '/api/line/settings', { line_channel_secret: 'smoke-secret' });

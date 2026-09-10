@@ -10,6 +10,7 @@
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { db, audit, today, addDays, getSetting, nowStamp, ageYears, nextClientCode } = require('../db');
 const { requireStaff, rateLimit } = require('../auth');
 const plans = require('../plans');
@@ -20,7 +21,10 @@ const router = express.Router();
 
 // 公開端點的節流：同一 IP 每 10 分鐘最多 20 次查詢、5 次送單
 const publicRead = rateLimit({ windowMs: 10 * 60 * 1000, max: 60, prefix: 'bookread:' });
-const publicWrite = rateLimit({ windowMs: 10 * 60 * 1000, max: 5, prefix: 'bookwrite:' });
+// 送單上限可在系統設定調整（0 = 不限）。同一間公司或同一個電信 NAT 後面的人
+// 會共用一個 IP，寫死太低會讓他們互相卡到，設定太高又擋不住灌單。
+const publicWrite = rateLimit({ windowMs: 10 * 60 * 1000, prefix: 'bookwrite:',
+  max: () => Number(getSetting('booking_rate_limit', '5')) });
 
 function planPublic(p) {
   const topics = db.prepare('SELECT id, name, fee, fee_options FROM plan_topics WHERE plan_id = ? AND active = 1 ORDER BY sort, id')
@@ -63,6 +67,7 @@ router.get('/public/booking-config', publicRead, (req, res) => {
     crisis_note: getSetting('ui_crisis_note'),
     line_add_friend_url: getSetting('line_add_friend_url'),
     line_official_id: getSetting('line_official_id'),
+    line_official_name: getSetting('line_official_name'),
     portal_url: require('../line').portalUrl(),
     lead_days: Number(getSetting('booking_lead_days', '1')),
     max_days: Number(getSetting('booking_max_days', '45')),
@@ -187,6 +192,12 @@ router.post('/public/bookings', publicWrite, async (req, res) => {
   // 這時若填的手機對得上已經綁定過的個案，就用他綁定的 userId ——
   // 否則舊個案從選單預約，結果與提醒都推不回去，他只會覺得「系統壞了」。
   if (!lineUserId && client && client.line_user_id) lineUserId = client.line_user_id;
+  // 反過來：從 LINE 進來預約、手機也對得上已建檔的個案，但那筆個案還沒綁定 ——
+  // 這就是綁定的最好時機，當場補上，之後的提醒才推得回去。
+  if (lineUserId && client && !client.line_user_id) {
+    db.prepare('UPDATE clients SET line_user_id = ? WHERE id = ?').run(lineUserId, client.id);
+    audit('client', client.id, client.name, '線上預約時完成 LINE 綁定', client.code);
+  }
 
   const info = db.prepare(`INSERT INTO booking_requests
     (name, phone, email, gender, birth_date, is_new, client_id, plan_id, topic_id, counselor_id,
@@ -228,8 +239,27 @@ router.post('/public/bookings', publicWrite, async (req, res) => {
     });
   }
 
+  // 預約當下是對方最願意加好友的時候，等櫃檯建檔後再發碼往往已經找不到人。
+  // 已經從 LINE 進來（帶得出 userId）的就不必再綁；其餘發一組碼，
+  // 加好友後把碼傳進官方帳號即完成綁定 —— 碼掛在這筆申請上，建檔時再帶進個案資料。
+  const bindInfo = (() => {
+    if (lineUserId || !line.lineEnabled()) return null;
+    const code = String(crypto.randomInt(100000, 999999));
+    db.prepare('INSERT INTO line_bindings (code, booking_request_id, expires_at) VALUES (?,?,?)')
+      .run(code, id, addDays(today(), 7));
+    const oaId = getSetting('line_official_id', '');
+    return {
+      code,
+      expires_at: addDays(today(), 7),
+      // 帶碼的聊天室連結：對方按下去訊息已經填好，直接送出就綁定完成，不必手動輸入
+      message_url: oaId ? `https://line.me/R/oaMessage/${encodeURIComponent(oaId)}/?${encodeURIComponent(code)}` : ''
+    };
+  })();
+
   res.json({
     ok: true, id,
+    line_bound: !!lineUserId,
+    line_bind: bindInfo,
     require_review: !!plan.require_review,
     message: plan.require_review
       ? '已收到您的預約申請，我們確認後會盡快與您聯繫。'
@@ -414,8 +444,8 @@ function createClientFromBooking(b, user) {
      emergency_name, emergency_phone, emergency_relationship,
      guardian_name, guardian_phone,
      counselor_id, status, main_issue, note, source, is_minor, intake_date,
-     password_hash, must_change_password, assign_type)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'intake',?,?,?,?,?,?,?,?)`).run(
+     password_hash, must_change_password, assign_type, line_user_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'intake',?,?,?,?,?,?,?,?,?)`).run(
     code, b.name, b.gender || '', b.birth_date || '', b.phone, b.email || '',
     b.address || '', b.id_no || '', b.education || '',
     b.emergency_name || '', b.emergency_phone || '', b.emergency_relationship || '',
@@ -426,7 +456,10 @@ function createClientFromBooking(b, user) {
     b.source === 'google_form' ? 'Google 預約表單' : '線上預約表單',
     age !== null && age < adultAge ? 1 : 0, today(), pwHash, pwHash ? 1 : 0,
     // 個案在預約表單自己點名心理師的算「指定案」，其餘由所方派案（年報表類別代碼要分）
-    b.counselor_id ? 'designated' : 'assigned');
+    b.counselor_id ? 'designated' : 'assigned',
+    // 對方在預約時就綁好的 LINE：不帶進來的話，之前的綁定等於白做，
+    // 預約成立與晤談提醒都推不回去，他只會覺得「我明明加了好友」。
+    b.line_user_id || '');
   db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(info.lastInsertRowid, b.id);
   audit('staff', user.id, user.name, '由預約申請建檔', code);
   return { client_id: info.lastInsertRowid, code };

@@ -61,16 +61,19 @@ function clientIp(req) {
 }
 
 // 僅套在未登入的攻擊面（登入），不套一般 API：整所常共用一個對外 IP
+// max 可傳函式：上限要能由系統設定調整時用（例如線上預約 —— 同一間公司、
+// 同一個電信 NAT 後面的人會共用一個 IP，寫死 5 次會讓他們互相卡到）。
 function rateLimit({ windowMs, max, prefix = '' }) {
   const hits = new Map();
   return (req, res, next) => {
     const now = Date.now();
+    const limit = typeof max === 'function' ? (Number(max()) || 0) : max;
     const key = prefix + clientIp(req);
     if (hits.size > 20000) for (const [k, v] of hits) if (v.reset <= now) hits.delete(k);
     let e = hits.get(key);
     if (!e || e.reset <= now) { e = { count: 0, reset: now + windowMs }; hits.set(key, e); }
     e.count++;
-    if (e.count > max) {
+    if (limit > 0 && e.count > limit) {
       res.setHeader('Retry-After', Math.ceil((e.reset - now) / 1000));
       return res.status(429).json({ error: '請求過於頻繁，請稍後再試' });
     }
