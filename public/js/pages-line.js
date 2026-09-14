@@ -35,6 +35,36 @@ function formAnswers(b) {
     </details>`;
 }
 
+// 預約成立了、但個案沒綁 LINE（成立通知沒送出去）時的提示。
+// 以前只跳一行「對方尚未綁定」，櫃檯看了也不知道下一步；
+// 現在直接給連結碼與帶碼連結，打電話或傳簡訊給個案即可。對方傳出碼後系統會自動補送成立通知。
+function linePendingDialog(p) {
+  const m = UI.modal({
+    title: '預約已成立，但個案尚未綁定 LINE', hideFooter: true,
+    body: `<div style="font-size:14px;line-height:1.9">
+        預約成立通知<strong>沒有送出</strong>（個案沒有綁定官方 LINE）。
+        可以請個案加入好友後，把下面的連結碼傳給官方帳號；<strong>傳出後系統會自動補送這封預約成立通知</strong>，
+        之後的晤談提醒也會照常收到。</div>
+      <div style="margin:12px 0;font-size:15px">連結碼：
+        <strong style="font-size:24px;letter-spacing:3px">${UI.esc(p.code)}</strong>
+        <span style="font-size:12.5px;color:var(--muted)">（${UI.esc(p.expires_at)} 前有效）</span></div>
+      ${p.message_url ? `<div class="form-row full"><label>帶碼連結（可直接貼到簡訊，對方點開按送出即完成）</label>
+        <input id="lp-url" readonly value="${UI.esc(p.message_url)}"></div>` : ''}
+      ${p.add_friend_url ? `<div style="font-size:13px;margin-top:6px">加好友網址：${UI.esc(p.add_friend_url)}</div>` : ''}
+      <div class="toolbar" style="margin-top:14px"><div class="spacer"></div>
+        ${p.message_url ? '<button class="btn secondary" id="lp-copy" type="button">複製給個案的訊息</button>' : ''}
+        <button class="btn" id="lp-ok" type="button">知道了</button></div>`
+  });
+  const copy = m.body.querySelector('#lp-copy');
+  if (copy) copy.onclick = async () => {
+    const text = `您好，您的預約已成立。為了收到預約通知與晤談提醒，請先加入我們的 LINE 官方帳號`
+      + `${p.add_friend_url ? `（${p.add_friend_url}）` : ''}，再點以下連結按送出即可完成連結：${p.message_url}`;
+    try { await navigator.clipboard.writeText(text); UI.toast('已複製，可直接貼到簡訊'); }
+    catch { m.body.querySelector('#lp-url').select(); UI.toast('請手動複製上方連結', true); }
+  };
+  m.body.querySelector('#lp-ok').onclick = () => m.close();
+}
+
 async function bookingDialog(id, onDone) {
   const b = await GET(`/bookings/${id}`);
   const slotBtns = (b.slots || []).map(s =>
@@ -134,15 +164,17 @@ async function bookingDialog(id, onDone) {
     onSubmit: async el => {
       const data = UI.formData(el);
       const send = () => POST(`/bookings/${id}/confirm`, data);
+      const done = r => {
+        if (r.line_pending) { UI.toast('已成立預約'); linePendingDialog(r.line_pending); }
+        else UI.toast(`已成立預約${r.notify ? '（' + r.notify.message + '）' : ''}`);
+      };
       try {
-        const r = await send();
-        UI.toast(`已成立預約${r.notify ? '（' + r.notify.message + '）' : ''}`);
+        done(await send());
       } catch (e) {
         if (!/已使用|已排滿|限 /.test(e.message)) throw e;
         if (!await UI.confirm(`${e.message}\n\n仍要成立嗎？（會記錄於稽核軌跡）`)) return false;
         data.override = true;
-        const r = await send();
-        UI.toast(`已成立預約${r.notify ? '（' + r.notify.message + '）' : ''}`);
+        done(await send());
       }
       onDone && onDone();
     }
@@ -157,6 +189,7 @@ App.page('bookings', {
     '舊個案在個案專區選的方案若勾了「需櫃檯確認才成立」，送出的也是申請而非預約（來源顯示 portal），時段並未先保留給他。',
     '線上預約（免登入）送出後，畫面會直接給一組 6 碼連結碼與「加入好友」「開啟聊天室並送出連結碼」兩顆按鈕；對方送出後即完成綁定，之後你按「由申請資料建檔」時 LINE 會一併帶進個案資料，不必再另外發碼。',
     '從官方帳號進來預約的人本來就帶得出 LINE 身分，完成頁不會再要他綁一次；若手機對得上已建檔但尚未綁定的個案，系統會當場補上綁定。',
+    '綁定<strong>不是全自動</strong>：LINE 不會告訴系統剛加好友的人是誰，一定要對方把連結碼傳進官方帳號。沒傳的人，成立預約時會跳出連結碼與「複製給個案的訊息」，貼到簡訊給他即可；他傳出連結碼後，系統會<strong>自動補送</strong>先前沒送出的預約成立通知。',
     '按「處理」打開申請明細：初次預約的人要先「由申請資料建檔」，再選心理師與時段按「成立預約」；約不成按「未能成立（通知個案）」回覆。',
     '狀態「待處理」就是還沒處理完的；上方可用關鍵字、狀態、方案、心理師與送出日期篩選。',
     '已經建檔、但在系統外排約（例如 Google 表單匯入）的申請，勾選後按「移出待處理（已建檔）」即可，會移到歷史申請並保留表單原始回答。可以直接全選再按，還沒建檔的會被略過並列出原因；只有「同手機且同姓名」的個案才會自動對應，避免家人共用手機時掛錯人。',

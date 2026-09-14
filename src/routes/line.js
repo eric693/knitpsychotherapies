@@ -113,6 +113,11 @@ async function handleEvent(ev) {
         audit('system', null, 'LINE', '完成 LINE 綁定',
           String(bind.client_id || bind.user_id || (br ? `預約申請 ${br.id}` : '')));
         await line.replyMessages(ev.replyToken, [bindingWelcome(name || '您')]);
+        // 綁定前就成立、當時送不出去的預約通知，現在補上
+        const boundClient = bind.client_id || (br && br.client_id) || null;
+        if (boundClient) {
+          try { await resendMissedConfirmations(boundClient); } catch (e) { console.error('補送預約通知失敗：', e.message); }
+        }
         return;
       }
       await line.replyMessages(ev.replyToken, [line.textMessage('綁定碼不正確或已失效，請向諮商所索取新的綁定碼。')]);
@@ -453,6 +458,31 @@ router.post('/notifications/:id/resolve', requireStaff('settings'), (req, res) =
 
 // ---- 推播：晤談提醒（個案）----
 
+// 綁定晚到的補送：常見情形是個案線上預約時沒把連結碼傳出去，櫃檯成立預約時
+// 通知就送不出去（尚未綁定）。等他之後補傳連結碼，這些「預約已成立」要自動補上，
+// 否則他綁定了卻不知道自己的預約已經成立、約在幾點。
+// 只補「今天以後、仍有效」且「從來沒有成功送出過成立通知」的預約，不會重複推。
+async function resendMissedConfirmations(clientId) {
+  const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(Number(clientId) || 0);
+  if (!c || !c.line_user_id) return 0;
+  const rows = db.prepare(`SELECT a.id FROM appointments a
+    WHERE a.client_id = ? AND a.status = 'booked' AND a.date >= ?
+      AND EXISTS (SELECT 1 FROM notifications n WHERE n.appointment_id = a.id AND n.kind = 'booking_confirm')
+      AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.appointment_id = a.id
+        AND n.kind = 'booking_confirm' AND n.status = 'sent')
+    ORDER BY a.date, a.start_time LIMIT 10`).all(c.id, today());
+  let sent = 0;
+  for (const r of rows) {
+    const a = apptForFlex(r.id);
+    if (!a) continue;
+    const out = await line.pushFlex({ to: c.line_user_id, flex: line.bookingConfirmedFlex(a),
+      kind: 'booking_confirm', client_id: c.id, appointment_id: a.id });
+    if (out.status === 'sent') sent++;
+  }
+  if (sent) audit('system', null, 'LINE', '綁定後補送預約成立通知', c.code, { count: sent });
+  return sent;
+}
+
 function apptForFlex(id) {
   return db.prepare(`SELECT a.*, c.name AS client_name, c.code AS client_code, c.line_user_id,
       c.risk_level, u.name AS counselor_name, p.name AS plan_name, t.name AS topic_name
@@ -594,5 +624,6 @@ async function runDailyPush() {
 }
 
 module.exports = router;
+module.exports.resendMissedConfirmations = resendMissedConfirmations;
 module.exports.runDailyPush = runDailyPush;
 module.exports.pushClientReminders = pushClientReminders;

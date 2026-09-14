@@ -2740,6 +2740,44 @@ function startServer() {
     await admin.ok('DELETE', `/api/clients/${made.client_id}`);
     await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '', line_channel_token: '' });
   });
+  // 預約時沒把連結碼傳出去的人：成立預約時要讓櫃檯拿到碼，他之後補傳時自動補送成立通知
+  await test('未綁定就成立預約：櫃檯拿得到連結碼；個案補傳後自動補送成立通知', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    await admin.ok('PUT', '/api/settings', { booking_rate_limit: '0' });
+    const plan = (await (await fetch(`${BASE}/api/public/booking-config`)).json()).plans[0];
+    const sent = await (await fetch(`${BASE}/api/public/bookings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '晚綁定測試', phone: '0955000333', birth_date: '1993-03-03',
+        plan_id: plan.id, consent: true })
+    })).json();
+    assert(sent.line_bind && sent.line_bind.code, '預約時應發出連結碼');
+    // 個案沒傳碼 —— 櫃檯直接建檔並成立預約
+    const made = await admin.ok('POST', `/api/bookings/${sent.id}/create-client`, {});
+    const day = addDays(monday, 30);
+    const slots = await admin.ok('GET', `/api/slots?counselor_id=2&date=${day}`);
+    const conf = await admin.ok('POST', `/api/bookings/${sent.id}/confirm`,
+      { client_id: made.client_id, counselor_id: 2, date: day, start_time: slots[0].start_time, override: true });
+    assert(conf.notify && conf.notify.status !== 'sent', '未綁定時成立通知應送不出去');
+    assert(conf.line_pending, '應把連結碼帶回給櫃檯');
+    equal(conf.line_pending.code, sent.line_bind.code, '預約時發的碼還有效就沿用同一組，別讓個案手上的碼失效');
+    assert(conf.line_pending.message_url.includes(sent.line_bind.code), '帶碼連結應正確');
+
+    // 個案後來才把碼傳進官方帳號
+    const body = JSON.stringify({ events: [{ type: 'message', replyToken: 'rlate', source: { userId: 'Ulate555' },
+      message: { type: 'text', text: sent.line_bind.code } }] });
+    const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+    await fetch(BASE + '/api/line/webhook', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+    const c = await admin.ok('GET', `/api/clients/${made.client_id}`);
+    equal(c.line_user_id, 'Ulate555', '補傳後個案應完成綁定');
+    // 補送的那封：推播用的是測試 token 送不出去，但要看得到系統「有再試著送一次」
+    const logs = await admin.ok('GET', '/api/notifications/failed');
+    const again = logs.rows.filter(r => r.kind === 'booking_confirm' && r.appointment_id === conf.appointment_id);
+    assert(again.some(r => r.target === 'Ulate555'), '綁定後應對該 LINE 補送一次預約成立通知：' + JSON.stringify(again));
+    await admin.ok('PUT', '/api/settings', { booking_rate_limit: '5' });
+    await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '', line_channel_token: '' });
+  });
   await test('從 LINE 進來預約的舊個案，當場補上綁定', async () => {
     await admin.ok('PUT', '/api/line/settings',
       { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token' });

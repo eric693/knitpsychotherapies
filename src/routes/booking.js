@@ -588,8 +588,30 @@ router.post('/bookings/:id/confirm', requireStaff('bookings'), async (req, res) 
       })
     });
   }
+  // 個案沒綁 LINE、成立通知送不出去時，直接給櫃檯一組可轉傳的連結碼與帶碼連結：
+  // 預約當下發的碼還有效就沿用（對方手上可能已經有），過期或沒發過才另產一組掛在個案上。
+  // 對方傳出連結碼後，webhook 會自動補送這封預約成立通知。
+  let linePending = null;
+  if (line.lineEnabled() && !(client.line_user_id || b.line_user_id)) {
+    let bind = db.prepare(`SELECT code, expires_at FROM line_bindings
+      WHERE status = 'pending' AND expires_at >= ? AND (booking_request_id = ? OR client_id = ?)
+      ORDER BY id DESC LIMIT 1`).get(today(), b.id, client.id);
+    if (!bind) {
+      const code = String(crypto.randomInt(100000, 999999));
+      db.prepare('INSERT INTO line_bindings (code, client_id, expires_at) VALUES (?,?,?)')
+        .run(code, client.id, addDays(today(), 7));
+      bind = { code, expires_at: addDays(today(), 7) };
+    }
+    const oaId = getSetting('line_official_id', '');
+    linePending = {
+      code: bind.code, expires_at: bind.expires_at,
+      add_friend_url: getSetting('line_add_friend_url', ''),
+      message_url: oaId ? `https://line.me/R/oaMessage/${encodeURIComponent(oaId)}/?${encodeURIComponent(bind.code)}` : '',
+      phone: client.phone || b.phone || ''
+    };
+  }
   res.json({ ok: true, appointment_id: info.lastInsertRowid, room_id: roomId,
-    warnings: check.warnings, notify });
+    warnings: check.warnings, notify, line_pending: linePending });
 });
 
 router.post('/bookings/:id/reject', requireStaff('bookings'), async (req, res) => {
