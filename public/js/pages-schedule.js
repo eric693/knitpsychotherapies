@@ -306,9 +306,15 @@ App.page('schedule', {
             <div><div class="dg-label">時間</div>${a.date} ${a.start_time}-${a.end_time}</div>
             <div><div class="dg-label">心理師</div>${UI.esc(a.counselor_name || '')}</div>
             <div><div class="dg-label">類型</div>${UI.esc(TW.appt_type[a.type] || a.type)}／${UI.esc(TW.appt_mode[a.mode])}</div>
+            <div><div class="dg-label">方案</div>${a.plan_name
+    ? `<strong>${UI.esc(a.plan_name)}</strong>${a.topic_name ? `<div style="font-size:12.5px;color:var(--muted)">${UI.esc(a.topic_name)}</div>` : ''}`
+    : '<span style="color:var(--muted)">未指定方案</span>'}</div>
             <div><div class="dg-label">諮商室</div>${UI.esc(a.room_name || '-')}</div>
             <div><div class="dg-label">狀態</div>${stateTag('appt_status', a.status)}</div>
-            <div><div class="dg-label">費用</div>${UI.fmtMoney(a.fee)}</div>
+            <div><div class="dg-label">費用</div>${a.subsidy_amount
+    // 補助方案的 fee 只存「個案自付」，只顯示它會看成「這筆免費」；把方案給付一起列出來
+    ? `個案自付 ${UI.fmtMoney(a.fee)}<div style="font-size:12.5px;color:var(--muted)">方案給付 ${UI.fmtMoney(a.subsidy_amount)}，合計 ${UI.fmtMoney((a.fee || 0) + a.subsidy_amount)}</div>`
+    : UI.fmtMoney(a.fee)}</div>
             <div><div class="dg-label">來源</div>${UI.esc(TW.source_kind[a.source] || a.source)}</div>
             <div><div class="dg-label">個案確認</div>${a.confirmed_at
     ? UI.tag('已於 LINE 確認前往', 'ok') + `<div style="font-size:12px;color:var(--muted)">${UI.esc(a.confirmed_at.slice(0, 16))}</div>`
