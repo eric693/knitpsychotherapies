@@ -2372,6 +2372,26 @@ function startServer() {
     equal(row.reply_note, '鐘點數少算一次', '應帶出心理師寫的說明');
   });
 
+  // 「報酬與扣繳」頁已從心理師選單拿掉；帳號若被勾了 payouts 模組，API 也只能拿到本人的
+  await test('心理師就算有報酬模組，也只看得到自己的報酬', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    const other = await admin.ok('POST', '/api/payouts',
+      { user_id: 3, month, item: '他人鐘點', sessions: 1, gross: 3000, income_type: '9B' });
+    const u = (await admin.ok('GET', '/api/users')).find(x => x.id === 2);
+    const before = u.permissions;
+    const perms = Array.isArray(before) ? before : JSON.parse(before || '[]');
+    await admin.ok('PUT', '/api/users/2', { permissions: [...new Set([...perms, 'payouts'])] });
+    try {
+      const rows = (await lin.ok('GET', `/api/payouts?month=${month}`)).rows;
+      assert(rows.every(r => r.user_id === 2), '心理師不應看到別人的報酬：' + JSON.stringify(rows.map(r => r.user_id)));
+      const slip = await lin.get(`/api/payouts/slip?ids=${other.id}`);
+      equal(slip.status, 403, '心理師不應印得到別人的報酬單');
+    } finally {
+      await admin.ok('PUT', '/api/users/2', { permissions: perms });
+      await admin.ok('DELETE', `/api/payouts/${other.id}`).catch(() => {});
+    }
+  });
+
   section('設定與範本的還原');
   await test('系統設定可逐欄或整組還原成預設值', async () => {
     const defs = await admin.ok('GET', '/api/settings/defaults');

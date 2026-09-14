@@ -201,31 +201,33 @@ App.page('bookings', {
         <button class="btn tiny danger" id="bulk-del">批次刪除</button>
         <span id="bulk-count" style="font-size:12.5px;color:var(--muted)"></span>
       </div>
-      ${UI.table(['', '送出時間', '姓名／電話', '身分', '方案／主題', '希望時段', '心理師', '額度', ''],
+      ${UI.table(['', '操作', '姓名／電話', '方案／希望時段', '心理師', '送出時間'],
+      // 操作鍵放在每列最前面：原本排在第九欄，一般筆電寬度要捲到最右邊才按得到「處理」。
+      // 身分併進姓名、時段併進方案、額度併進方案，欄數從九欄收成六欄，整張表一眼看得完。
       pending.map(r => `<tr>
         <td><input type="checkbox" class="bulk-pick" value="${r.id}"></td>
-        <td>${UI.esc(r.created_at.slice(5, 16))}</td>
-        <td>${UI.esc(r.name)}<br><span style="font-size:12px;color:var(--muted)">${UI.esc(r.phone)}</span></td>
-        <td>${r.client_id ? UI.tag('舊個案', 'primary') + '<br>' + UI.esc(r.client_code || '') : UI.tag('初次', 'warn')}
-          ${r.age !== null ? `<br><span style="font-size:12px;color:var(--muted)">${r.age} 歲</span>` : ''}</td>
-        <td>${UI.esc(r.plan_name || '-')}${r.topic_name ? '<br><span style="font-size:12px;color:var(--muted)">' + UI.esc(r.topic_name) + '</span>' : ''}</td>
-        <td>${r.date ? `${r.date}<br>${r.start_time}` : UI.esc(r.alt_note || '未指定')}</td>
-        <td>${UI.esc(r.counselor_name || '由諮商所安排')}</td>
-        <td>${r.usage ? `${r.usage.used}/${r.usage.quota}${r.usage.over ? ' ' + UI.tag('已用完', 'danger') : ''}` : '-'}</td>
-        <td style="white-space:nowrap"><button class="btn tiny" data-b="${r.id}">處理</button>
-          <button class="btn tiny secondary" data-be="${r.id}">編輯</button>
-          <button class="btn tiny danger" data-bd="${r.id}">刪除</button></td></tr>`), '目前沒有待處理的申請')}</div>
+        <td><div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
+          <button class="btn tiny" data-b="${r.id}">處理</button>
+          <span style="display:flex;gap:4px">
+            <button class="btn tiny secondary" data-be="${r.id}">編輯</button>
+            <button class="btn tiny danger" data-bd="${r.id}">刪除</button></span></div></td>
+        <td class="wrap" style="min-width:120px">${UI.esc(r.name)}　${r.client_id ? UI.tag('舊個案', 'primary') : UI.tag('初次', 'warn')}
+          <br><span style="font-size:12px;color:var(--muted)">${UI.esc(r.phone)}${r.client_code ? '　' + UI.esc(r.client_code) : ''}${r.age !== null ? `　${r.age} 歲` : ''}</span></td>
+        <td class="wrap" style="min-width:140px">${UI.esc(r.plan_name || '-')}${r.topic_name ? `<span style="font-size:12px;color:var(--muted)">（${UI.esc(r.topic_name)}）</span>` : ''}
+          <br><span style="font-size:12.5px">${r.date ? `${r.date} ${r.start_time}` : UI.esc(r.alt_note || '未指定時段')}</span>
+          ${r.usage ? `<br><span style="font-size:12px;color:var(--muted)">額度 ${r.usage.used}/${r.usage.quota}</span>${r.usage.over ? ' ' + UI.tag('已用完', 'danger') : ''}` : ''}</td>
+        <td class="wrap" style="min-width:70px">${UI.esc(r.counselor_name || '由諮商所安排')}</td>
+        <td style="font-size:12.5px">${UI.esc(r.created_at.slice(5, 16))}</td></tr>`), '目前沒有待處理的申請')}</div>
 
       <div class="card"><h3>歷史申請</h3>
-      ${UI.table(['送出時間', '姓名', '方案', '時段', '狀態', '處理', ''], rows.filter(r => r.status !== 'new').slice(0, 100)
+      ${UI.table(['', '狀態', '姓名', '方案／時段', '處理紀錄', '送出時間'], rows.filter(r => r.status !== 'new').slice(0, 100)
       .map(r => `<tr>
-        <td>${UI.esc(r.created_at.slice(0, 16))}</td><td>${UI.esc(r.name)}</td>
-        <td>${UI.esc(r.plan_name || '-')}</td>
-        <td>${r.date ? r.date + ' ' + r.start_time : '-'}</td>
+        <td>${r.status === 'confirmed' ? '' : `<button class="btn tiny danger" data-bd="${r.id}">刪除</button>`}</td>
         <td>${UI.tag(BOOKING_STATUS[r.status] || r.status, r.status === 'confirmed' ? 'ok' : '')}</td>
-        <td>${UI.esc((r.handled_at || '').slice(0, 16))}${r.reply_note ? '<br><span style="font-size:12px;color:var(--muted)">' + UI.esc(r.reply_note) + '</span>' : ''}</td>
-        <td style="white-space:nowrap">${r.status === 'confirmed' ? ''
-    : `<button class="btn tiny danger" data-bd="${r.id}">刪除</button>`}</td>
+        <td>${UI.esc(r.name)}</td>
+        <td class="wrap" style="min-width:140px">${UI.esc(r.plan_name || '-')}<br><span style="font-size:12.5px">${r.date ? r.date + ' ' + r.start_time : '-'}</span></td>
+        <td class="wrap" style="font-size:12.5px;min-width:120px">${UI.esc((r.handled_at || '').slice(0, 16))}${r.reply_note ? '<br><span style="color:var(--muted)">' + UI.esc(r.reply_note) + '</span>' : ''}</td>
+        <td style="font-size:12.5px">${UI.esc(r.created_at.slice(0, 16))}</td>
         </tr>`), '尚無紀錄')}</div>`;
     // 篩選一律送回後端處理，資料上千筆時前端才不必整批載入
     const apply = () => {

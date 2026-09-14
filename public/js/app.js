@@ -6,16 +6,40 @@ const App = {
 
   page(key, def) { App.pages[key] = def; },
 
+  // 依角色拿掉的頁面。這些是櫃檯與管理用的作業畫面（總覽、線上預約申請、候補遞補、
+  // 晤談提醒、報酬與扣繳…），心理師用不到，放在選單上只是多一排要略過的東西。
+  // 以「角色」而不是逐一取消模組權限來做：之後新增的心理師帳號自動一致，
+  // 不會因為某個帳號被多勾了一個模組，選單就又冒出來。
+  ROLE_HIDDEN_PAGES: {
+    counselor: ['dashboard', 'bookings', 'waitlist', 'today', 'reminders', 'payouts'],
+    admin: ['today']
+  },
+  roleHidden(key) {
+    return !!App.me && (App.ROLE_HIDDEN_PAGES[App.me.role] || []).includes(key);
+  },
+  // 這個人能不能開這一頁（選單與路由共用同一個判斷，免得選單藏了、網址卻打得開）
+  pageAllowed(key) {
+    const p = App.pages[key];
+    if (!p || App.roleHidden(key)) return false;
+    if (App.hidden(key) || (p.module && App.hidden(p.module))) return false;
+    if (p.visible && !p.visible()) return false;
+    return !p.module || App.can(p.module);
+  },
+  // 登入後的首頁：總覽被拿掉的角色（心理師）落在「我的工作台」
+  home() {
+    return ['dashboard', 'my', 'schedule', 'clients'].find(k => App.pageAllowed(k)) || 'my';
+  },
+
   async boot() {
     try {
       App.me = await GET('/me');
       App.meta = await GET('/meta').catch(() => ({}));
       App.renderLayout();
-      App.go(location.hash.slice(1) || 'dashboard');
+      App.go(location.hash.slice(1) || App.home());
     } catch {
       App.renderLogin();
     }
-    window.addEventListener('hashchange', () => App.go(location.hash.slice(1) || 'dashboard'));
+    window.addEventListener('hashchange', () => App.go(location.hash.slice(1) || App.home()));
   },
 
   onUnauthorized() { if (App.me) { App.me = null; App.renderLogin(); } },
@@ -116,13 +140,7 @@ const App = {
   renderLayout() {
     const navHtml = App.navGroups.map(g => {
       // module 為單一模組字串；visible() 供跨多模組判斷的頁面（如資料匯入）自行決定是否顯示
-      const items = g.keys.filter(k => {
-        const p = App.pages[k];
-        if (!p) return false;
-        if (App.hidden(k) || (p.module && App.hidden(p.module))) return false;
-        if (p.visible && !p.visible()) return false;
-        return !p.module || App.can(p.module);
-      });
+      const items = g.keys.filter(k => App.pageAllowed(k));
       if (!items.length) return '';
       return `<div class="nav-group">${g.label}</div>` +
         items.map(k => `<a href="#${k}" data-nav="${k}">${UI.esc(App.pages[k].title)}
@@ -218,7 +236,12 @@ const App = {
     // 個案詳情以 hash 帶 id：#client/12
     const [k, arg] = key.split('/');
     const def = App.pages[k];
-    if (!def || (def.module && !App.can(def.module))) return App.go('dashboard');
+    // 個案詳情（client/12）不在選單上，照原本只看模組權限；其餘頁面與選單同一套判斷
+    const allowed = k === 'client' ? (def && (!def.module || App.can(def.module))) : App.pageAllowed(k);
+    if (!allowed) {
+      const home = App.home();
+      return k === home ? null : App.go(home);
+    }
     document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === k));
     if (location.hash.slice(1) !== key) history.replaceState(null, '', '#' + key);
     const el = document.getElementById('page');

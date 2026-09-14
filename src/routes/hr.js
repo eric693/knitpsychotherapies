@@ -177,8 +177,10 @@ router.get('/payouts', requireStaff('payouts'), (req, res) => {
   if (month) { where.push('p.month = ?'); args.push(month); }
   if (user_id) { where.push('p.user_id = ?'); args.push(Number(user_id)); }
   if (status) { where.push('p.status = ?'); args.push(status); }
-  // 行政人員只看得到自己的報酬明細
-  if (req.user.role === 'staff') { where.push('p.user_id = ?'); args.push(req.user.id); }
+  // 行政人員與心理師只看得到自己的報酬明細。
+  // 「報酬與扣繳」頁已從心理師選單拿掉，但帳號若被勾了 payouts 模組，直接打 API 仍拿得到
+  // 全所每個人領多少 —— 選單藏起來不等於資料擋住了，這裡一併限定為本人。
+  if (['staff', 'counselor'].includes(req.user.role)) { where.push('p.user_id = ?'); args.push(req.user.id); }
   const rows = db.prepare(`SELECT p.*, u.name AS user_name, u.license_type
     FROM payouts p JOIN users u ON u.id = p.user_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -496,7 +498,7 @@ router.get('/payouts/slip', requireStaff('payouts'), (req, res) => {
         ORDER BY pay_date, id`).all(...ids);
   if (!rows.length) return res.status(404).send('找不到報酬單');
   // 行政人員只能印自己的（與 /payouts 清單同一道限制）
-  if (req.user.role === 'staff' && rows.some(r => r.user_id !== req.user.id)) {
+  if (['staff', 'counselor'].includes(req.user.role) && rows.some(r => r.user_id !== req.user.id)) {
     return res.status(403).send('無權檢視他人的報酬單');
   }
   if (new Set(rows.map(r => r.user_id)).size > 1) {
