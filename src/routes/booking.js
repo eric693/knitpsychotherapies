@@ -313,6 +313,37 @@ router.get('/bookings', requireStaff('bookings'), (req, res) => {
   })));
 });
 
+// 已建檔的申請移出待處理，但不刪 —— Google 表單的完整原始回答只存在申請上，
+// 建檔只帶得走主要欄位，刪了就再也查不到當初「方便時段」「得知來源」這些怎麼填。
+// 舊表單匯入的個案多半是在系統外排約的，申請永遠不會走到「成立預約」，
+// 不另給一個狀態的話，待處理清單會一直堆著一大半早就處理完的人。
+//
+// 申請沒對應到個案時，只在「同手機且同姓名」時才自動對應：
+// 家人共用一支手機很常見，只比手機會把媽媽的申請掛到孩子的檔上。
+function markFiled(r, user) {
+  if (r.status === 'confirmed') return { ok: false, why: '已成立預約，不需移出' };
+  if (r.status === 'filed') return { ok: false, why: '已是「已建檔」' };
+  let client = r.client_id
+    ? db.prepare('SELECT * FROM clients WHERE id = ? AND active = 1').get(r.client_id) : null;
+  if (!client && !r.client_id && r.phone) {
+    client = db.prepare('SELECT * FROM clients WHERE phone = ? AND name = ? AND active = 1').get(r.phone, r.name) || null;
+  }
+  if (!client) return { ok: false, why: r.client_id ? '對應的個案已停用' : '找不到已建檔的個案（同手機且同姓名），請先建檔' };
+  // 申請在匯入時只用手機比對就先掛上了個案；家人共用手機時會掛到別人的檔上（例如孩子的申請掛到媽媽）。
+  // 姓名對不起來就不自動移出，請人工確認，免得把孩子的申請當成媽媽已建檔。
+  if (client.name !== r.name) {
+    return { ok: false, why: `對應的個案是「${client.name}」，與申請姓名不同（可能是家人共用手機），請人工確認` };
+  }
+  db.prepare(`UPDATE booking_requests SET status = 'filed', client_id = ?, handled_by = ?, handled_at = ?,
+      reply_note = CASE WHEN reply_note = '' THEN ? ELSE reply_note END WHERE id = ?`)
+    .run(client.id, user ? user.id : null, nowStamp(), `已建檔（${client.code}）`, r.id);
+  // 申請上認得出 LINE、個案卻還沒綁的，順手帶過去（與建檔時的規則一致）
+  if (r.line_user_id && !client.line_user_id) {
+    db.prepare('UPDATE clients SET line_user_id = ? WHERE id = ?').run(r.line_user_id, client.id);
+  }
+  return { ok: true, client_code: client.code, linked: !r.client_id };
+}
+
 // 批次處理：舊表單一次匯入上百筆，一筆一筆開太慢。
 // 支援「批次建檔」與「批次退回」；成立預約仍需逐筆確認時段，不做批次。
 router.post('/bookings/bulk', requireStaff('bookings'), (req, res) => {
@@ -320,7 +351,7 @@ router.post('/bookings/bulk', requireStaff('bookings'), (req, res) => {
   const ids = (Array.isArray(b.ids) ? b.ids : []).map(Number).filter(Boolean).slice(0, 300);
   const action = b.action;
   if (!ids.length) return res.status(400).json({ error: '請先勾選要處理的申請' });
-  if (!['create-client', 'reject', 'delete'].includes(action)) {
+  if (!['create-client', 'reject', 'delete', 'mark-filed'].includes(action)) {
     return res.status(400).json({ error: '不支援的批次動作' });
   }
   if (action === 'create-client' && req.user.role !== 'admin' && !(req.userModules || []).includes('clients')) {
@@ -337,6 +368,9 @@ router.post('/bookings/bulk', requireStaff('bookings'), (req, res) => {
         db.prepare(`UPDATE booking_requests SET status = 'rejected', reply_note = ?, handled_by = ?, handled_at = ?
           WHERE id = ?`).run(note, req.user.id, nowStamp(), r.id);
         done.push(r.id);
+      } else if (action === 'mark-filed') {
+        const m = markFiled(r, req.user);
+        if (m.ok) done.push(r.id); else skipped.push({ id: r.id, name: r.name, why: m.why });
       } else if (action === 'delete') {
         if (r.status === 'confirmed') { skipped.push({ id: r.id, name: r.name, why: '已成立，不可刪除' }); continue; }
         db.prepare('DELETE FROM booking_requests WHERE id = ?').run(r.id);
@@ -589,3 +623,4 @@ router.post('/bookings/:id/reject', requireStaff('bookings'), async (req, res) =
 });
 
 module.exports = router;
+module.exports.markFiled = markFiled;

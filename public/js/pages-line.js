@@ -14,7 +14,7 @@ const TEXT_FIELDS = [
   ['line_text_receipt_note', '收據已開立：灰底注意事項', 2]
 ];
 
-const BOOKING_STATUS = { new: '待處理', confirmed: '已成立', rejected: '未成立', cancelled: '已取消' };
+const BOOKING_STATUS = { new: '待處理', confirmed: '已成立', filed: '已建檔', rejected: '未成立', cancelled: '已取消' };
 
 // Google 表單的問題會增刪，同步時整份回應都留了一份；
 // 這裡原樣攤開來，櫃檯不必回 Google 後台就看得到個案填的每一個字。
@@ -159,6 +159,7 @@ App.page('bookings', {
     '從官方帳號進來預約的人本來就帶得出 LINE 身分，完成頁不會再要他綁一次；若手機對得上已建檔但尚未綁定的個案，系統會當場補上綁定。',
     '按「處理」打開申請明細：初次預約的人要先「由申請資料建檔」，再選心理師與時段按「成立預約」；約不成按「未能成立（通知個案）」回覆。',
     '狀態「待處理」就是還沒處理完的；上方可用關鍵字、狀態、方案、心理師與送出日期篩選。',
+    '已經建檔、但在系統外排約（例如 Google 表單匯入）的申請，勾選後按「移出待處理（已建檔）」即可，會移到歷史申請並保留表單原始回答。可以直接全選再按，還沒建檔的會被略過並列出原因；只有「同手機且同姓名」的個案才會自動對應，避免家人共用手機時掛錯人。',
   ],
   module: 'bookings',
   async render(el) {
@@ -197,6 +198,7 @@ App.page('bookings', {
       <div class="toolbar" style="margin:0 0 8px">
         <label style="font-size:13px"><input type="checkbox" id="bulk-all"> 全選</label>
         <button class="btn tiny secondary" id="bulk-client">批次建檔</button>
+        <button class="btn tiny secondary" id="bulk-filed" title="已經建檔、在系統外排約的申請移出待處理，保留原始表單">移出待處理（已建檔）</button>
         <button class="btn tiny secondary" id="bulk-reject">批次退回</button>
         <button class="btn tiny danger" id="bulk-del">批次刪除</button>
         <span id="bulk-count" style="font-size:12.5px;color:var(--muted)"></span>
@@ -223,7 +225,7 @@ App.page('bookings', {
       ${UI.table(['', '狀態', '姓名', '方案／時段', '處理紀錄', '送出時間'], rows.filter(r => r.status !== 'new').slice(0, 100)
       .map(r => `<tr>
         <td>${r.status === 'confirmed' ? '' : `<button class="btn tiny danger" data-bd="${r.id}">刪除</button>`}</td>
-        <td>${UI.tag(BOOKING_STATUS[r.status] || r.status, r.status === 'confirmed' ? 'ok' : '')}</td>
+        <td>${UI.tag(BOOKING_STATUS[r.status] || r.status, ['confirmed', 'filed'].includes(r.status) ? 'ok' : '')}</td>
         <td>${UI.esc(r.name)}</td>
         <td class="wrap" style="min-width:140px">${UI.esc(r.plan_name || '-')}<br><span style="font-size:12.5px">${r.date ? r.date + ' ' + r.start_time : '-'}</span></td>
         <td class="wrap" style="font-size:12.5px;min-width:120px">${UI.esc((r.handled_at || '').slice(0, 16))}${r.reply_note ? '<br><span style="color:var(--muted)">' + UI.esc(r.reply_note) + '</span>' : ''}</td>
@@ -277,6 +279,8 @@ App.page('bookings', {
     if (el.querySelector('#bulk-client')) {
       el.querySelector('#bulk-client').onclick = () => bulk('create-client', '建檔');
       el.querySelector('#bulk-del').onclick = () => bulk('delete', '刪除');
+      // 可以直接全選再按：沒建檔的會被略過並列出原因，不會被誤移
+      el.querySelector('#bulk-filed').onclick = () => bulk('mark-filed', '移出待處理（已建檔）');
       el.querySelector('#bulk-reject').onclick = () => UI.modal({
         title: '批次退回',
         body: `<div class="form-grid">${UI.textarea('reply_note', '退回原因（會記在每一筆申請上）', { rows: 3 })}</div>`,

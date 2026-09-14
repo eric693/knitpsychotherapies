@@ -2473,6 +2473,37 @@ function startServer() {
     await admin.ok('POST', '/api/bookings/bulk', { ids, action: 'delete' });
     await admin.ok('PUT', '/api/integrations/google-form', { secret: '' });
   });
+  // 已在系統外建檔、排約的舊表單申請：移出待處理但保留原始表單，不是刪掉
+  await test('已建檔的申請可移出待處理並保留原始表單；未建檔與同手機不同名的不會被誤移', async () => {
+    const gen = await admin.ok('PUT', '/api/integrations/google-form', { regenerate: true });
+    const send = async (name, phone, rid) => (await (await fetch(BASE + '/api/integrations/google-form', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret: gen.secret, response_id: rid,
+        answers: { 姓名: name, 手機: phone, '方便時段': '平日晚上', '預約項目': '個別治療／諮商（50 分鐘）' } })
+    })).json()).id;
+    // 甲：已有同手機同姓名的個案（匯入建檔、未與申請連起來）
+    const c1 = await admin.ok('POST', '/api/clients', { name: '移出甲', phone: '0955002001' });
+    // 乙：同手機但不同姓名（家人共用手機）—— 不可自動對應
+    const c2 = await admin.ok('POST', '/api/clients', { name: '移出乙媽媽', phone: '0955002002' });
+    const a = await send('移出甲', '0955002001', 'filed-1');
+    const b = await send('移出乙孩子', '0955002002', 'filed-2');
+    const n = await send('移出丙', '0955002003', 'filed-3');   // 丙：根本沒建檔
+    const r = await admin.ok('POST', '/api/bookings/bulk', { ids: [a, b, n], action: 'mark-filed' });
+    equal(r.done, 1, '只有甲該被移出：' + JSON.stringify(r));
+    equal(r.skipped.length, 2, '乙丙都要略過');
+    assert(r.skipped.find(x => x.name === '移出乙孩子').why.includes('姓名不同'), '乙要說明是姓名不同（家人共用手機）');
+    assert(r.skipped.find(x => x.name === '移出丙').why.includes('找不到已建檔'), '丙要說明是還沒建檔');
+    const moved = (await admin.ok('GET', '/api/bookings?status=filed')).find(x => x.id === a);
+    assert(moved, '甲應變成已建檔');
+    equal(moved.client_id, c1.id, '甲應對應到同手機同姓名的個案');
+    assert(String(moved.form_answers || '').includes('平日晚上'), '原始表單回答要保留');
+    const pending = await admin.ok('GET', '/api/bookings?status=new');
+    assert(pending.some(x => x.id === b) && pending.some(x => x.id === n), '乙丙仍留在待處理');
+    for (const id of [a, b, n]) await admin.ok('DELETE', `/api/bookings/${id}`);
+    await admin.ok('DELETE', `/api/clients/${c1.id}`);
+    await admin.ok('DELETE', `/api/clients/${c2.id}`);
+    await admin.ok('PUT', '/api/integrations/google-form', { secret: '' });
+  });
   await test('重複申請清單標出同電話或已建檔者', async () => {
     const dup = await admin.ok('GET', '/api/bookings/duplicates');
     assert(Array.isArray(dup), '應回傳清單');
