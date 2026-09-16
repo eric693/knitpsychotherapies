@@ -779,17 +779,22 @@ App.page('announcements', {
   help: [
     '所內公告，全所員工登入後在總覽看得到。',
     '按「新增公告」發布，設定有效期限後過期會自動收起。',
+    '公告由所方（管理者、行政、督導）發布；心理師只能檢視，看不到新增與編輯按鈕。',
   ],
   module: 'announcements',
   async render(el) {
     const rows = await GET('/announcements');
-    el.innerHTML = `<div class="toolbar"><div class="spacer"></div><button class="btn" id="add">新增公告</button></div>
+    // 心理師只看不發（後端另有同一道檢查）
+    const canEdit = App.me.role !== 'counselor';
+    el.innerHTML = `${canEdit ? '<div class="toolbar"><div class="spacer"></div><button class="btn" id="add">新增公告</button></div>' : ''}
       <div class="card">${UI.table(['日期', '標題', '對象', '發布者', ''], rows.map(a => `<tr>
-        <td>${a.publish_date}</td><td>${a.pinned ? '📌 ' : ''}${UI.esc(a.title)}</td>
+        <td>${a.publish_date}</td><td>${a.pinned ? '📌 ' : ''}${UI.esc(a.title)}
+          ${canEdit ? '' : `<div style="font-size:13px;color:var(--muted);white-space:pre-wrap;max-width:520px">${UI.esc(a.content || '')}</div>`}</td>
         <td>${({ all: '全部', staff: '所內', client: '個案' })[a.audience]}</td>
         <td>${UI.esc(a.author || '')}</td>
-        <td style="white-space:nowrap"><button class="btn tiny secondary" data-e="${a.id}">編輯</button>
-          <button class="btn tiny danger" data-d="${a.id}">刪除</button></td></tr>`), '尚無公告')}</div>`;
+        <td style="white-space:nowrap">${canEdit ? `<button class="btn tiny secondary" data-e="${a.id}">編輯</button>
+          <button class="btn tiny danger" data-d="${a.id}">刪除</button>` : ''}</td></tr>`), '尚無公告')}</div>`;
+    if (!canEdit) return;
     // 新增與編輯共用同一張表單；有帶 a 就是編輯
     const dialog = a => UI.modal({
       title: a ? '編輯公告' : '新增公告',

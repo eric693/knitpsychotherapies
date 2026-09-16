@@ -11,6 +11,27 @@ const router = express.Router();
 // ---- 總覽 ----
 // 心理師個人儀表板：總覽是所方視角，這裡是「我的」視角——
 // 我的服務量、待補紀錄、督導時數、繼續教育積分與執照倒數，資料一律限本人。
+// 我的工作台：預約異動清單（預約、申請、改期、取消…）。
+// 心理師只看自己個案的（這筆預約的心理師是他，或個案的主責是他）；其他角色看全所。
+// 預設近 14 天、最多 60 筆，可帶 days 調整；who=client 只看個案本人做的異動。
+router.get('/my/appointment-events', requireStaff(), (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
+  const where = [`e.created_at >= datetime('now','localtime','-${days} days')`], args = [];
+  if (req.user.role === 'counselor') {
+    where.push('(e.counselor_id = ? OR c.counselor_id = ?)');
+    args.push(req.user.id, req.user.id);
+  }
+  if (req.query.who === 'client') where.push("e.actor_type = 'client'");
+  const rows = db.prepare(`SELECT e.*, c.name AS client_name, c.code AS client_code, u.name AS counselor_name,
+      (SELECT COUNT(*) FROM appointments x WHERE x.client_id = e.client_id AND x.status = 'done') AS done_count
+    FROM appointment_events e
+    JOIN clients c ON c.id = e.client_id
+    LEFT JOIN users u ON u.id = e.counselor_id
+    WHERE ${where.join(' AND ')}
+    ORDER BY e.created_at DESC, e.id DESC LIMIT 60`).all(...args);
+  res.json({ days, rows });
+});
+
 router.get('/my-dashboard', requireStaff(), (req, res) => {
   const uid = req.user.id;
   const t = today();
@@ -516,7 +537,13 @@ router.get('/announcements', requireStaff(), (req, res) => {
   res.json(db.prepare(`SELECT a.*, u.name AS author FROM announcements a
     LEFT JOIN users u ON u.id = a.created_by ORDER BY a.pinned DESC, a.publish_date DESC, a.id DESC LIMIT 100`).all());
 });
-router.post('/announcements', requireStaff('announcements'), (req, res) => {
+// 公告由所方發布；心理師只看不發。擋在後端 —— 心理師的預設模組含 announcements
+// （他們要看得到公告），只把按鈕藏起來的話，直接打 API 一樣發得出去。
+function requireAnnouncementEditor(req, res, next) {
+  if (req.user.role === 'counselor') return res.status(403).json({ error: '公告由所方發布，心理師僅能檢視' });
+  next();
+}
+router.post('/announcements', requireStaff('announcements'), requireAnnouncementEditor, (req, res) => {
   const { title = '', content = '', audience = 'all', pinned = 0, publish_date = today() } = req.body || {};
   if (!title) return res.status(400).json({ error: '請填寫標題' });
   const info = db.prepare('INSERT INTO announcements (title, content, audience, pinned, publish_date, created_by) VALUES (?,?,?,?,?,?)')
@@ -524,7 +551,7 @@ router.post('/announcements', requireStaff('announcements'), (req, res) => {
   res.json({ id: info.lastInsertRowid });
 });
 // 公告發出後常要改錯字或補內容，不必刪掉重發
-router.put('/announcements/:id', requireStaff('announcements'), (req, res) => {
+router.put('/announcements/:id', requireStaff('announcements'), requireAnnouncementEditor, (req, res) => {
   const a = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
   if (!a) return res.status(404).json({ error: '找不到此公告' });
   const b = { ...a, ...req.body };
@@ -536,7 +563,7 @@ router.put('/announcements/:id', requireStaff('announcements'), (req, res) => {
   audit('staff', req.user.id, req.user.name, '修改公告', String(b.title));
   res.json({ ok: true });
 });
-router.delete('/announcements/:id', requireStaff('announcements'), (req, res) => {
+router.delete('/announcements/:id', requireStaff('announcements'), requireAnnouncementEditor, (req, res) => {
   db.prepare('DELETE FROM announcements WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });

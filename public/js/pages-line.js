@@ -367,6 +367,8 @@ App.page('line', {
     '下方可管理個案／心理師的綁定，以及調整提醒時間與推播開關；未設定憑證時所有通知只會產生文字紀錄，不會對外送出任何個資。',
     '「個案隨手打字時要回什麼」可選完整卡片／一行文字加連結／不回覆。圖文選單已經有「我要預約」的話，選「不回覆」就不會再跳出預約卡片（剛加好友時仍會回一則）。',
     '圖文選單要貼的網址就是「線上預約表單網址」。注意選單對所有人是同一條網址，沒有卡片那種每人專屬的識別，系統會改用表單填的手機去對已綁定的個案。',
+    '<strong>一個家庭共用一個 LINE</strong>（例如 2-3 個孩子都在晤談、家長自己也做青壯方案）：在個案清單按「產生綁定碼」時，系統會列出可能是同一家的人（已授權家人代訂、或聯絡電話相同），勾選後一組碼就能一次綁好，家長只要傳一次。之後每張預約與提醒卡片都會寫明是哪一位的晤談，家長按卡片上的「我會準時前往」也認得是哪個孩子。',
+    '家長若自己也是個案並能登入個案專區，所方授權過代訂的孩子會自動併進他在專區拿到的綁定碼。',
   ],
   module: 'settings',
   async render(el) {
@@ -507,13 +509,43 @@ const LINEPAGE = {
     const codeDialog = r => UI.modal({
       title: 'LINE 綁定碼', hideFooter: true,
       body: `<div style="text-align:center;font-size:32px;font-weight:700;letter-spacing:6px;margin:12px 0">${r.code}</div>
+        ${(r.family || []).length ? `<div class="notice" style="margin-bottom:10px">
+          這組碼會<strong>一次綁定 ${r.family.length + 1} 位</strong>：連同 ${r.family.map(n => UI.esc(n)).join('、')}。
+          家長只要傳一次，每位的預約通知與提醒都會送到同一個 LINE，卡片上會寫明是誰的晤談。</div>` : ''}
         <div style="font-size:13.5px;line-height:1.9">
           1. 請對方加入諮商所的 LINE 官方帳號${r.add_friend_url
     ? `（<a href="${UI.esc(r.add_friend_url)}" target="_blank" rel="noopener">加好友連結</a>）` : ''}<br>
-          2. 在聊天室輸入這 6 碼<br>
+          2. 在聊天室輸入這 6 碼${r.message_url ? `（或點<a href="${UI.esc(r.message_url)}" target="_blank" rel="noopener">帶碼連結</a>直接送出）` : ''}<br>
           3. 收到「綁定完成」卡片即完成，之後的提醒都會送到 LINE<br>
           有效期限：${r.expires_at}</div>`
     });
+    // 產生個案的綁定碼前，先看有沒有可能是同一家的人（家人代訂、聯絡電話相同），
+    // 有的話讓櫃檯勾選一起綁；沒有就直接產碼，流程跟原本一樣。
+    const issueClient = async (clientId, again) => {
+      if (again && !await UI.confirm('重新產生綁定碼？對方輸入新碼後，這位的 LINE 會改綁到輸入的帳號。')) return;
+      const s = await GET(`/line/family-suggest?client_id=${clientId}`).catch(() => ({ suggestions: [] }));
+      if (!s.suggestions.length) { codeDialog(await POST('/line/bind-code', { client_id: clientId })); reload(); return; }
+      UI.modal({
+        title: `產生綁定碼：${s.client.name}`,
+        submitText: '產生綁定碼',
+        body: `<div style="font-size:13.5px;line-height:1.8;margin-bottom:8px">
+            找到可能是同一家的人。同一個家庭有好幾位在晤談時（例如 2-3 個孩子、家長自己也在做方案），
+            勾選後<strong>一組碼就能一次綁到家長的同一個 LINE</strong>，不必每位各傳一次。</div>
+          ${UI.table(['', '姓名', '編號', '依據', 'LINE'], s.suggestions.map(f => `<tr>
+            <td><input type="checkbox" class="fam-pick" value="${f.id}" style="width:auto"></td>
+            <td>${UI.esc(f.name)}${f.is_minor ? ' ' + UI.tag('未成年', '') : ''}</td>
+            <td>${UI.esc(f.code)}</td>
+            <td style="font-size:12.5px">${f.why.map(w => UI.esc(w)).join('、')}</td>
+            <td>${f.bound ? UI.tag('已綁定', 'ok') : UI.tag('未綁定', '')}</td></tr>`))}
+          <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+            「聯絡電話相同」只是依電話比對，可能填錯，請確認真的是同一家再勾。已綁定的勾了會改綁到這次傳碼的 LINE。</div>`,
+        onSubmit: async form => {
+          const ids = [...form.querySelectorAll('.fam-pick:checked')].map(x => Number(x.value));
+          codeDialog(await POST('/line/bind-code', { client_id: clientId, family_client_ids: ids }));
+          reload();
+        }
+      });
+    };
     // 已綁定者除了解除，也要能重發綁定碼（換手機、換 LINE 帳號時最常用）
     const actions = (kind, r) => (r.bound
       ? `<button class="btn tiny" data-re${kind}="${r.id}">重新綁定</button>
@@ -553,7 +585,7 @@ const LINEPAGE = {
       <div class="card"><h3>尚未使用的綁定碼</h3>
         ${UI.table(['綁定碼', '對象', '有效至', '產生時間', ''], d.pending.map(p => `<tr>
           <td><strong>${UI.esc(p.code)}</strong></td>
-          <td>${UI.esc(p.client_name || p.user_name || '')}</td>
+          <td>${UI.esc(p.client_name || p.user_name || '')}${p.family_count ? ` 等 ${p.family_count + 1} 位（家庭碼）` : ''}</td>
           <td>${UI.esc(p.expires_at)}</td><td>${UI.esc(p.created_at.slice(0, 16))}</td>
           <td style="text-align:right"><button class="btn tiny danger" data-void="${p.id}">作廢</button></td>
           </tr>`), '沒有待使用的綁定碼')}</div>`;
@@ -576,13 +608,13 @@ const LINEPAGE = {
       b.onclick = () => issue({ user_id: Number(b.dataset.news) });
     });
     el.querySelectorAll('[data-newc]').forEach(b => {
-      b.onclick = () => issue({ client_id: Number(b.dataset.newc) });
+      b.onclick = () => issueClient(Number(b.dataset.newc));
     });
     el.querySelectorAll('[data-res]').forEach(b => {
       b.onclick = () => issue({ user_id: Number(b.dataset.res) }, true);
     });
     el.querySelectorAll('[data-rec]').forEach(b => {
-      b.onclick = () => issue({ client_id: Number(b.dataset.rec) }, true);
+      b.onclick = () => issueClient(Number(b.dataset.rec), true);
     });
     el.querySelectorAll('[data-uns]').forEach(b => {
       b.onclick = async () => {

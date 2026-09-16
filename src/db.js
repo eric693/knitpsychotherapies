@@ -1154,6 +1154,41 @@ ensureColumns('line_bindings', {
   booking_request_id: 'INTEGER REFERENCES booking_requests(id) ON DELETE CASCADE'
 });
 
+// 家庭一次綁定：同一個家庭常有 2-3 個孩子在晤談、家長自己也可能在做青壯方案，
+// 通知全都要送到家長的同一個 LINE。一組綁定碼可以一併涵蓋這幾位個案，
+// 家長傳一次碼就全部綁好，不必一個孩子傳一次。
+// 預約異動紀錄：誰、什麼時候、對哪一筆預約做了什麼（預約／申請／改期／取消…）。
+// 心理師要在「我的工作台」看到自己個案的預約變化，不必自己去翻排程比對。
+// 稽核軌跡雖然也記了，但各處寫法不一（有的記個案編號、有的記預約 id），
+// 撈不出「這是誰的心理師」，所以另立一張專用的表，在每個異動點直接寫一筆。
+db.exec(`CREATE TABLE IF NOT EXISTS appointment_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+  counselor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  appointment_id INTEGER,                      -- 刪除預約後仍要留紀錄，故不設外鍵
+  booking_request_id INTEGER,
+  kind TEXT NOT NULL,                          -- booked 預約 / request 預約申請 / rescheduled 改期 /
+                                               -- cancelled 取消 / cancel_requested 申請取消 / no_show 未到 /
+                                               -- withdrawn 撤回申請 / deleted 刪除
+  date TEXT NOT NULL DEFAULT '',               -- 異動後（或被取消的那筆）的晤談日期時間
+  start_time TEXT NOT NULL DEFAULT '',
+  from_date TEXT NOT NULL DEFAULT '',          -- 改期前
+  from_time TEXT NOT NULL DEFAULT '',
+  actor_type TEXT NOT NULL DEFAULT 'staff',    -- client 個案本人（專區／線上表單／LINE）/ staff 所方
+  actor_name TEXT NOT NULL DEFAULT '',
+  via TEXT NOT NULL DEFAULT '',                -- 個案專區／線上預約表單／LINE／櫃檯
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_appt_event_time ON appointment_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_appt_event_counselor ON appointment_events(counselor_id, created_at);`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS line_binding_members (
+  binding_id INTEGER NOT NULL REFERENCES line_bindings(id) ON DELETE CASCADE,
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  PRIMARY KEY (binding_id, client_id)
+);`);
+
 ensureColumns('service_plans', {
   // 通訊（視訊）諮商這類方案預設就是線上，排約時直接帶入，不必每次改
   default_mode: "TEXT NOT NULL DEFAULT 'onsite'",

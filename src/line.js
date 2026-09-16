@@ -153,6 +153,8 @@ function bookingConfirmedFlex(a) {
       { type: 'text', text: `${a.date}（${weekdayOf(a.date)}）${a.start_time}-${a.end_time}`,
         weight: 'bold', size: 'lg', color: '#3b4a55', wrap: true },
       sep(),
+      // 家長一個 LINE 可能收好幾個孩子的通知，每張都寫清楚是誰的
+      ...(a.client_name ? [kv('個案', a.client_name)] : []),
       kv('心理師', a.counselor_name),
       ...(a.plan_name ? [kv('方案', a.plan_name)] : []),
       ...(a.topic_name ? [kv('主題', a.topic_name)] : []),
@@ -190,6 +192,7 @@ function reminderFlex(a) {
       { type: 'text', text: `${a.date}（${weekdayOf(a.date)}）${a.start_time}-${a.end_time}`,
         weight: 'bold', size: 'lg', color: '#3b4a55', wrap: true },
       sep(),
+      ...(a.client_name ? [kv('個案', a.client_name)] : []),
       kv('心理師', a.counselor_name),
       ...(a.plan_name ? [kv('方案', a.plan_name)] : []),
       kv('形式', a.mode === 'online' ? '線上視訊' : '到所晤談'),

@@ -16,6 +16,7 @@ const { requireStaff, rateLimit } = require('../auth');
 const plans = require('../plans');
 const line = require('../line');
 const schedule = require('./schedule');
+const { logApptEvent } = require('../appt-events');
 
 const router = express.Router();
 
@@ -219,6 +220,12 @@ router.post('/public/bookings', publicWrite, async (req, res) => {
 
   const id = info.lastInsertRowid;
   audit('client', client ? client.id : null, name, '線上預約申請', String(id), { plan: plan.name, date, startTime });
+  // 只記已建檔的舊個案（複診）：初次來的人還沒有個案檔，會出現在「線上預約申請」待處理
+  if (client) {
+    logApptEvent({ client_id: client.id, counselor_id: counselorId || client.counselor_id || null,
+      booking_request_id: id, kind: 'request', date, start_time: startTime, actor_type: 'client',
+      actor_name: name, via: lineUserId ? 'LINE' : '線上預約表單', note: plan.name });
+  }
 
   const payload = {
     name, plan_name: plan.name, topic_name: topic ? topic.name : '',
@@ -566,9 +573,12 @@ router.post('/bookings/:id/confirm', requireStaff('bookings'), async (req, res) 
       String(body.reply_note || ''), b.id);
 
   audit('staff', req.user.id, req.user.name, '線上預約成立', client.code, { date, startTime, override: !!body.override });
+  logApptEvent({ appointment_id: info.lastInsertRowid, booking_request_id: b.id, kind: 'booked',
+    actor_type: 'staff', actor_name: req.user.name, via: '櫃檯（成立線上申請）' });
 
   const counselor = db.prepare('SELECT name, line_user_id, meeting_room_url FROM users WHERE id = ?').get(counselorId);
   const payload = {
+    client_name: client.name,
     date, start_time: startTime, end_time: endT, counselor_name: counselor ? counselor.name : '',
     plan_name: quote.plan ? quote.plan.name : '', topic_name: quote.topic ? quote.topic.name : '',
     mode: b.mode, fee: quote.fee, self_pay: quote.self_pay, subsidy_amount: quote.subsidy_amount,

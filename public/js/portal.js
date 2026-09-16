@@ -82,15 +82,19 @@ const Portal = {
   lineCard(d) {
     if (!d || !d.enabled) return '';
     const name = UI.esc(d.official_name || 'LINE 官方帳號');
-    if (d.bound) {
+    const fam = (d.family_unbound || []).map(n => UI.esc(n)).join('、');
+    // 自己已綁、家人都綁好了才顯示「已綁定」；還有孩子沒綁就照樣給碼，傳一次就一起綁
+    if (d.bound && !fam) {
       return `<div class="card"><h3>LINE 提醒 ${UI.tag('已綁定', 'ok')}</h3>
         <div style="font-size:14px;line-height:1.9">已與「${name}」連結，晤談前 ${d.reminder_hours} 小時會收到提醒，
           預約成立與異動也會通知您。</div>
         <button class="btn tiny secondary" id="line-unbind" style="margin-top:10px">解除綁定</button></div>`;
     }
-    return `<div class="card"><h3>LINE 提醒 ${UI.tag('尚未綁定', 'warn')}</h3>
+    return `<div class="card"><h3>LINE 提醒 ${d.bound ? UI.tag('家人尚未綁定', 'warn') : UI.tag('尚未綁定', 'warn')}</h3>
       <div style="font-size:14px;line-height:1.9">綁定後，晤談前 ${d.reminder_hours} 小時會用 LINE 提醒您，
         預約成立與異動也會通知，不必擔心記錯時間。</div>
+      ${fam ? `<div class="notice" style="margin-top:8px;font-size:13.5px">
+        這組綁定碼會<strong>一併綁定 ${fam}</strong>，傳一次碼，家人的通知也會送到同一個 LINE，卡片上會寫明是誰的晤談。</div>` : ''}
       <div style="margin-top:12px;font-size:14px;line-height:2">
         <strong>步驟 1</strong>　加「${name}」為好友
         ${d.add_friend_url ? `<br><a class="btn small" style="margin:6px 0"

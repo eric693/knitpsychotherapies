@@ -2392,6 +2392,38 @@ function startServer() {
     }
   });
 
+  // 我的工作台的預約異動：記得到個案本人與所方的異動，心理師只看得到自己個案的
+  await test('預約異動：預約／改期／取消都有紀錄，心理師只看得到自己個案的', async () => {
+    const day = addDays(monday, 44);   // 週三
+    const slots = await admin.ok('GET', `/api/slots?counselor_id=2&date=${day}`);
+    assert(slots.length >= 2, '這天應有可約時段');
+    const later = slots.find(x => x.start_time >= slots[0].end_time) || slots[slots.length - 1];
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: day, start_time: slots[0].start_time, override: true });
+    const appt = (await admin.ok('GET', `/api/appointments?date=${day}`)).find(x => x.id === a.id);
+    await admin.ok('PUT', `/api/appointments/${a.id}`, { ...appt, start_time: later.start_time,
+      end_time: later.end_time, override: true });
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled', cancel_reason: '個案臨時有事' });
+
+    const mine = (await lin.ok('GET', '/api/my/appointment-events')).rows.filter(e => e.appointment_id === a.id);
+    const kinds = mine.map(e => e.kind);
+    assert(kinds.includes('booked') && kinds.includes('rescheduled') && kinds.includes('cancelled'),
+      '主責心理師應看到預約、改期、取消：' + JSON.stringify(kinds));
+    const moved = mine.find(e => e.kind === 'rescheduled');
+    equal(moved.from_time, slots[0].start_time, '改期要記得原本的時間');
+    equal(moved.start_time, later.start_time, '改期要記得新的時間');
+    equal(mine.find(e => e.kind === 'cancelled').note, '個案臨時有事', '取消要帶出原因');
+
+    // 別的心理師看不到這位個案的異動；管理者看得到
+    const others = (await chen.ok('GET', '/api/my/appointment-events')).rows;
+    assert(!others.some(e => e.client_id === clientId), '非主責心理師不應看到別人個案的異動');
+    assert((await admin.ok('GET', '/api/my/appointment-events')).rows.some(e => e.appointment_id === a.id), '管理者應看得到');
+    // 前面個案端（專區）做過的預約／改期／取消，也要記成「個案本人」
+    const byClient = (await admin.ok('GET', '/api/my/appointment-events?days=90&who=client')).rows;
+    assert(byClient.length && byClient.every(e => e.actor_type === 'client'), '應記到個案本人做的異動');
+    assert(byClient.some(e => e.via === '個案專區'), '應標明是從個案專區來的');
+  });
+
   section('設定與範本的還原');
   await test('系統設定可逐欄或整組還原成預設值', async () => {
     const defs = await admin.ok('GET', '/api/settings/defaults');
@@ -2777,6 +2809,62 @@ function startServer() {
     assert(again.some(r => r.target === 'Ulate555'), '綁定後應對該 LINE 補送一次預約成立通知：' + JSON.stringify(again));
     await admin.ok('PUT', '/api/settings', { booking_rate_limit: '5' });
     await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '', line_channel_token: '' });
+  });
+  // 同一家 2-3 個孩子加上家長自己：一組碼綁到同一個 LINE，家長按任一個孩子的卡片都要認得
+  await test('家庭綁定：一組碼綁多位家人，卡片寫明是誰，家長按第二個孩子的卡片也認得', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    const parent = await admin.ok('POST', '/api/clients', { name: '家庭測試媽媽', phone: '0955777001' });
+    const kid1 = await admin.ok('POST', '/api/clients', { name: '家庭測試大寶', guardian_phone: '0955777001', counselor_id: 2 });
+    const kid2 = await admin.ok('POST', '/api/clients', { name: '家庭測試二寶', guardian_phone: '0955777001', counselor_id: 2 });
+    const other = await admin.ok('POST', '/api/clients', { name: '不相干的人', phone: '0955777999' });
+    try {
+      const sug = await admin.ok('GET', `/api/line/family-suggest?client_id=${parent.id}`);
+      const ids = sug.suggestions.map(x => x.id);
+      assert(ids.includes(kid1.id) && ids.includes(kid2.id), '聯絡電話相同的孩子要列為建議：' + JSON.stringify(sug.suggestions));
+      assert(!ids.includes(other.id), '不相干的人不該出現');
+      const code = await admin.ok('POST', '/api/line/bind-code', { client_id: parent.id, family_client_ids: [kid1.id, kid2.id] });
+      equal(code.family.length, 2, '家庭碼應涵蓋兩個孩子');
+
+      const hook = async (events) => {
+        const body = JSON.stringify({ events });
+        const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+        return fetch(BASE + '/api/line/webhook', { method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+      };
+      await hook([{ type: 'message', replyToken: 'rf1', source: { userId: 'Ufamily1' },
+        message: { type: 'text', text: code.code } }]);
+      for (const c of [parent, kid1, kid2]) {
+        equal((await admin.ok('GET', `/api/clients/${c.id}`)).line_user_id, 'Ufamily1', '三位都應綁到同一個 LINE');
+      }
+      equal((await admin.ok('GET', `/api/clients/${other.id}`)).line_user_id, '', '不相干的人不受影響');
+
+      // 家長按「二寶」那張提醒卡的「我會準時前往」
+      const day = addDays(monday, 37);   // 週三：林心理師有排班，其他測試沒用到這天
+      const slots = await admin.ok('GET', `/api/slots?counselor_id=2&date=${day}`);
+      assert(slots.length >= 2, '這天應有至少兩個可約時段');
+      const appt = await admin.ok('POST', '/api/appointments',
+        { client_id: kid2.id, counselor_id: 2, date: day, start_time: slots[0].start_time, override: true });
+      await hook([{ type: 'postback', replyToken: 'rf2', source: { userId: 'Ufamily1' },
+        postback: { data: `act=confirm&id=${appt.id}` } }]);
+      const row = (await admin.ok('GET', `/api/appointments?date=${day}`)).find(a => a.id === appt.id);
+      assert(row.confirmed_at, '家長按二寶的卡片應記錄為已確認出席（以前只認第一位）');
+      // 別人的 LINE 按同一張卡不該生效
+      const appt2 = await admin.ok('POST', '/api/appointments',
+        { client_id: kid1.id, counselor_id: 2, date: day,
+          start_time: (slots.find(x => x.start_time >= slots[0].end_time) || slots[slots.length - 1]).start_time, override: true });
+      await hook([{ type: 'postback', replyToken: 'rf3', source: { userId: 'Ustranger' },
+        postback: { data: `act=confirm&id=${appt2.id}` } }]);
+      const row2 = (await admin.ok('GET', `/api/appointments?date=${day}`)).find(a => a.id === appt2.id);
+      assert(!row2.confirmed_at, '不是綁在這個 LINE 的人按了不該生效');
+      // 成立通知卡片要寫明是哪一位
+      const logs = await admin.ok('GET', '/api/notifications/failed');
+      const card = logs.rows.find(r => r.kind === 'booking_confirm' && r.appointment_id === appt.id);
+      assert(card && String(card.payload).includes('家庭測試二寶'), '成立卡片應寫明個案姓名');
+    } finally {
+      for (const c of [parent, kid1, kid2, other]) await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+      await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '', line_channel_token: '' });
+    }
   });
   await test('從 LINE 進來預約的舊個案，當場補上綁定', async () => {
     await admin.ok('PUT', '/api/line/settings',

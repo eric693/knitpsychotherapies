@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const { db, audit, today, addDays, getSetting, setSetting, nowStamp } = require('../db');
 const { requireStaff } = require('../auth');
 const line = require('../line');
+const { logApptEvent } = require('../appt-events');
 
 const router = express.Router();
 
@@ -103,6 +104,10 @@ async function handleEvent(ev) {
             : (br ? br.name : '');
         if (bind.client_id) db.prepare('UPDATE clients SET line_user_id = ? WHERE id = ?').run(lineUserId, bind.client_id);
         if (bind.user_id) db.prepare('UPDATE users SET line_user_id = ? WHERE id = ?').run(lineUserId, bind.user_id);
+        // 家庭碼：同一組碼涵蓋的其他家人一併綁到這個 LINE
+        const members = db.prepare(`SELECT c.id, c.name FROM line_binding_members m
+          JOIN clients c ON c.id = m.client_id WHERE m.binding_id = ? AND c.active = 1`).all(bind.id);
+        for (const m of members) db.prepare('UPDATE clients SET line_user_id = ? WHERE id = ?').run(lineUserId, m.id);
         if (br) {
           db.prepare('UPDATE booking_requests SET line_user_id = ?, source = ? WHERE id = ?')
             .run(lineUserId, 'line', br.id);
@@ -112,11 +117,12 @@ async function handleEvent(ev) {
           .run(lineUserId, nowStamp(), bind.id);
         audit('system', null, 'LINE', '完成 LINE 綁定',
           String(bind.client_id || bind.user_id || (br ? `預約申請 ${br.id}` : '')));
-        await line.replyMessages(ev.replyToken, [bindingWelcome(name || '您')]);
-        // 綁定前就成立、當時送不出去的預約通知，現在補上
-        const boundClient = bind.client_id || (br && br.client_id) || null;
-        if (boundClient) {
-          try { await resendMissedConfirmations(boundClient); } catch (e) { console.error('補送預約通知失敗：', e.message); }
+        await line.replyMessages(ev.replyToken, [bindingWelcome(
+          members.length ? `${[name, ...members.map(m => m.name)].filter(Boolean).join('、')}的家長` : (name || '您'))]);
+        // 綁定前就成立、當時送不出去的預約通知，現在補上（家人的也一起）
+        const boundClients = [bind.client_id || (br && br.client_id), ...members.map(m => m.id)].filter(Boolean);
+        for (const cid of boundClients) {
+          try { await resendMissedConfirmations(cid); } catch (e) { console.error('補送預約通知失敗：', e.message); }
         }
         return;
       }
@@ -133,10 +139,14 @@ async function handleEvent(ev) {
     const data = new URLSearchParams(String((ev.postback && ev.postback.data) || ''));
     const act = data.get('act');
     const id = Number(data.get('id')) || 0;
-    const client = db.prepare('SELECT * FROM clients WHERE line_user_id = ? AND active = 1').get(lineUserId);
     const appt = id ? db.prepare('SELECT * FROM appointments WHERE id = ?').get(id) : null;
-    // 只認自己的預約：換人綁定或轉傳卡片都動不到別人的資料
-    if (!client || !appt || appt.client_id !== client.id) {
+    // 只認綁在這個 LINE 上的個案的預約：換人綁定或轉傳卡片都動不到別人的資料。
+    // 一個 LINE 可能綁了好幾位家人（家長替 2-3 個孩子收通知），要找的是「這筆預約的個案」
+    // 是否也綁在這個 LINE 上，而不是只取第一位 —— 否則家長按第二個孩子的卡片會被當成別人的。
+    const client = appt
+      ? db.prepare('SELECT * FROM clients WHERE id = ? AND line_user_id = ? AND active = 1').get(appt.client_id, lineUserId)
+      : null;
+    if (!client || !appt) {
       await line.replyMessages(ev.replyToken, [line.textMessage('這筆預約已經有變動，請直接來電與我們確認。')]);
       return;
     }
@@ -157,6 +167,8 @@ async function handleEvent(ev) {
           cancel_request_reason = CASE WHEN cancel_request_reason = '' THEN 'LINE 回覆需要改期或取消' ELSE cancel_request_reason END
         WHERE id = ?`).run(nowStamp(), appt.id);
       audit('client', client.id, client.name, '以 LINE 提出改期／取消', client.code, { id: appt.id });
+      logApptEvent({ appointment_id: appt.id, kind: 'cancel_requested', actor_type: 'client',
+        actor_name: client.name, via: 'LINE', note: '回覆需要改期或取消' });
       const phone = getSetting('center_phone', '');
       await line.replyMessages(ev.replyToken, [line.textMessage(
         `已收到您的改期／取消需求（${appt.date} ${appt.start_time}），櫃檯會與您聯繫。`
@@ -308,7 +320,8 @@ router.get('/line/bindings', requireStaff(), (req, res) => {
     })),
     client_total: clientTotal,
     pending: db.prepare(`SELECT b.id, b.code, b.expires_at, b.created_at,
-        c.name AS client_name, u.name AS user_name, b.user_id
+        c.name AS client_name, u.name AS user_name, b.user_id,
+        (SELECT COUNT(*) FROM line_binding_members m WHERE m.binding_id = b.id) AS family_count
       FROM line_bindings b LEFT JOIN clients c ON c.id = b.client_id LEFT JOIN users u ON u.id = b.user_id
       WHERE b.status = 'pending' AND b.expires_at >= ? ORDER BY b.id DESC LIMIT 50`).all(today())
   });
@@ -325,14 +338,56 @@ router.post('/line/bind-code', requireStaff(), (req, res) => {
   if (userId && userId !== req.user.id && req.user.role !== 'admin') {
     return res.status(403).json({ error: '只能為自己產生綁定碼' });
   }
+  // 家人一起綁：只接受在案的個案，且不能是員工碼
+  const family = clientId ? [...new Set((Array.isArray(b.family_client_ids) ? b.family_client_ids : [])
+    .map(Number).filter(id => id && id !== clientId))]
+    .map(id => db.prepare('SELECT id, name FROM clients WHERE id = ? AND active = 1').get(id)).filter(Boolean) : [];
   // 同一對象只留最新一組碼：舊的先作廢，免得兩組碼同時流通說不清哪組有效
   db.prepare(`UPDATE line_bindings SET status = 'expired'
     WHERE status = 'pending' AND ${clientId ? 'client_id' : 'user_id'} = ?`).run(clientId || userId);
   const code = String(crypto.randomInt(100000, 999999));
-  db.prepare(`INSERT INTO line_bindings (code, client_id, user_id, expires_at) VALUES (?,?,?,?)`)
-    .run(code, clientId, userId, addDays(today(), 1));
-  audit('staff', req.user.id, req.user.name, '產生 LINE 綁定碼', String(clientId || userId));
-  res.json({ code, expires_at: addDays(today(), 1), add_friend_url: getSetting('line_add_friend_url') });
+  // 家庭碼給家長的時間多一點（要先加好友、再找時間傳），單人碼維持一天
+  const expires = addDays(today(), family.length ? 7 : 1);
+  const info = db.prepare(`INSERT INTO line_bindings (code, client_id, user_id, expires_at) VALUES (?,?,?,?)`)
+    .run(code, clientId, userId, expires);
+  const addMember = db.prepare('INSERT OR IGNORE INTO line_binding_members (binding_id, client_id) VALUES (?,?)');
+  for (const f of family) addMember.run(info.lastInsertRowid, f.id);
+  audit('staff', req.user.id, req.user.name, '產生 LINE 綁定碼', String(clientId || userId),
+    family.length ? { family: family.map(f => f.id) } : undefined);
+  const oaId = getSetting('line_official_id', '');
+  res.json({ code, expires_at: expires, add_friend_url: getSetting('line_add_friend_url'),
+    message_url: oaId ? `https://line.me/R/oaMessage/${encodeURIComponent(oaId)}/?${encodeURIComponent(code)}` : '',
+    family: family.map(f => f.name) });
+});
+
+// 產碼前的家人建議：櫃檯按「產生綁定碼」時，把可能是同一家的人列出來讓他勾。
+// 依據兩個來源，都要人工確認才會綁 ——
+//   1. 已授權「家人代訂」的（所方明確建立過的家庭關係）
+//   2. 聯絡電話相同的（孩子的家長電話＝兄弟姊妹的家長電話，或＝家長本人的手機）
+// 電話可能填錯，所以只列出、不自動勾成已綁。
+router.get('/line/family-suggest', requireStaff(), (req, res) => {
+  const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(Number(req.query.client_id) || 0);
+  if (!c) return res.status(404).json({ error: '找不到此個案' });
+  const found = new Map();
+  const add = (row, why) => {
+    if (!row || row.id === c.id) return;
+    const cur = found.get(row.id);
+    if (cur) { if (!cur.why.includes(why)) cur.why.push(why); return; }
+    found.set(row.id, { id: row.id, name: row.name, code: row.code, bound: !!row.line_user_id,
+      is_minor: !!row.is_minor, why: [why] });
+  };
+  for (const r of db.prepare(`SELECT c.* FROM client_family f JOIN clients c ON c.id = f.member_id
+      WHERE f.client_id = ? AND c.active = 1
+    UNION SELECT c.* FROM client_family f JOIN clients c ON c.id = f.client_id
+      WHERE f.member_id = ? AND c.active = 1`).all(c.id, c.id)) add(r, '家人代訂');
+  const phones = [c.phone, c.guardian_phone].map(p => String(p || '').trim()).filter(Boolean);
+  for (const p of new Set(phones)) {
+    for (const r of db.prepare(`SELECT * FROM clients WHERE active = 1 AND (phone = ? OR guardian_phone = ?)`).all(p, p)) {
+      add(r, '聯絡電話相同');
+    }
+  }
+  res.json({ client: { id: c.id, name: c.name, code: c.code, bound: !!c.line_user_id },
+    suggestions: [...found.values()] });
 });
 
 // 心理師自助綁定：加好友後若沒綁定，系統只把他當一般民眾回覆預約說明，

@@ -11,6 +11,7 @@ const plans = require('../plans');
 const line = require('../line');
 const { freeSlots, conflictOf } = require('./schedule');
 const { consentsForClient } = require('../consents');
+const { logApptEvent } = require('../appt-events');
 
 const router = express.Router();
 const loginRateLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 30, prefix: 'portal:' });
@@ -287,6 +288,9 @@ router.post('/appointments', requireClient, async (req, res) => {
       forClient.line_user_id || '');
     audit('client', req.client.id, req.client.name, '個案端預約申請', req.client.code,
       { date, start_time, plan: plan.name, for: proxy ? forClient.code : '' });
+    logApptEvent({ client_id: forClient.id, counselor_id: cid, booking_request_id: reqInfo.lastInsertRowid,
+      kind: 'request', date, start_time, actor_type: 'client', actor_name: req.client.name, via: '個案專區',
+      note: `${plan.name}${proxy ? `（由${req.client.name}代訂）` : ''}` });
     if (counselor && counselor.line_user_id) {
       try {
         await line.pushFlex({
@@ -314,6 +318,9 @@ router.post('/appointments', requireClient, async (req, res) => {
     meetingUrl, (proxy ? `由${req.client.name}於個案專區代訂。` : '') + String(note || ''));
   audit('client', req.client.id, req.client.name, proxy ? '個案端代訂家人預約' : '個案端預約',
     req.client.code, { date, start_time, plan: plan ? plan.name : '', for: proxy ? forClient.code : '' });
+  logApptEvent({ appointment_id: info.lastInsertRowid, kind: 'booked', actor_type: 'client',
+    actor_name: req.client.name, via: '個案專區',
+    note: `${plan ? plan.name : ''}${proxy ? `（由${req.client.name}代訂）` : ''}` });
   // 心理師端通知：個案自己在專區排進來的，跟線上申請成立時一樣要讓心理師知道
   if (counselor && counselor.line_user_id) {
     try {
@@ -357,6 +364,8 @@ router.post('/booking-requests/:id/cancel', requireClient, (req, res) => {
     .run('個案於專區自行撤回', b.id);
   audit('client', req.client.id, req.client.name, '個案端撤回預約申請', req.client.code,
     { date: b.date, start_time: b.start_time });
+  logApptEvent({ client_id: b.client_id, counselor_id: b.counselor_id, booking_request_id: b.id, kind: 'withdrawn',
+    date: b.date, start_time: b.start_time, actor_type: 'client', actor_name: req.client.name, via: '個案專區' });
   res.json({ ok: true });
 });
 
@@ -407,6 +416,8 @@ router.post('/appointments/:id/reschedule', requireClient, async (req, res) => {
   const who = db.prepare('SELECT id, name, code FROM clients WHERE id = ?').get(a.client_id) || req.client;
   audit('client', req.client.id, req.client.name, '個案端改期', req.client.code,
     { from: original, to: `${date} ${start_time}`, for: who.id === req.client.id ? '' : who.code });
+  logApptEvent({ appointment_id: a.id, kind: 'rescheduled', from_date: a.date, from_time: a.start_time,
+    actor_type: 'client', actor_name: req.client.name, via: '個案專區' });
   await notifyCounselor(a.counselor_id, '個案自行改期',
     `${who.name}（${who.code}）已將晤談由 ${original} 改為 ${date} ${start_time}。`);
   res.json({ ok: true, date, start_time, end_time: slot.end_time });
@@ -435,6 +446,8 @@ router.post('/appointments/:id/cancel', requireClient, async (req, res) => {
     // 個案檔案的晤談歷程也會列出申請時間與事由。
     audit('client', req.client.id, req.client.name, '個案端申請取消', req.client.code,
       { date: a.date, for: who.id === req.client.id ? '' : who.code });
+    logApptEvent({ appointment_id: a.id, kind: 'cancel_requested', actor_type: 'client',
+      actor_name: req.client.name, via: '個案專區', note: reason });
     return res.json({
       ok: true, pending: true,
       message: `距晤談時間已不足 ${hours} 小時，已為您送出取消申請並通知櫃檯；`
@@ -445,6 +458,8 @@ router.post('/appointments/:id/cancel', requireClient, async (req, res) => {
     .run(reason || '個案自行取消', a.id);
   audit('client', req.client.id, req.client.name, '個案端取消預約', req.client.code,
     { date: a.date, for: who.id === req.client.id ? '' : who.code });
+  logApptEvent({ appointment_id: a.id, kind: 'cancelled', actor_type: 'client',
+    actor_name: req.client.name, via: '個案專區', note: reason });
   await notifyCounselor(a.counselor_id, '個案取消晤談',
     `${who.name}（${who.code}）已取消 ${a.date} ${a.start_time} 的晤談`
     + `${reason ? `，事由：${reason}` : ''}。此時段已釋出，可於「候補遞補」頁安排。`);
@@ -552,7 +567,12 @@ router.get('/line', requireClient, (req, res) => {
     add_friend_url: getSetting('line_add_friend_url', ''),
     reminder_hours: Number(getSetting('line_reminder_hours', '24'))
   };
-  if (!enabled || out.bound) return res.json(out);
+  // 家長在專區綁定時，所方已授權他代訂的孩子若還沒綁，同一組碼一起帶上 ——
+  // 家長傳一次碼，自己與孩子的通知就都到同一個 LINE。
+  const familyUnbound = bookableMembers(req.client.id)
+    .map(m => db.prepare(`SELECT id, name FROM clients WHERE id = ? AND line_user_id = ''`).get(m.id)).filter(Boolean);
+  out.family_unbound = familyUnbound.map(m => m.name);
+  if (!enabled || (out.bound && !familyUnbound.length)) return res.json(out);
   // 沿用還沒過期的那組碼，重整頁面不會一直換新碼讓人混淆
   let bind = db.prepare(`SELECT code, expires_at FROM line_bindings
     WHERE client_id = ? AND status = 'pending' AND (expires_at IS NULL OR expires_at >= date('now','localtime'))
@@ -569,6 +589,9 @@ router.get('/line', requireClient, (req, res) => {
       catch (e) { if (i === 9) throw e; }
     }
   }
+  const bindRow = db.prepare('SELECT id FROM line_bindings WHERE code = ?').get(bind.code);
+  const addMember = db.prepare('INSERT OR IGNORE INTO line_binding_members (binding_id, client_id) VALUES (?,?)');
+  for (const m of familyUnbound) addMember.run(bindRow.id, m.id);
   res.json({ ...out, code: bind.code, expires_at: bind.expires_at, message_url: officialMessageUrl(bind.code) });
 });
 // 個案自己解除綁定（換手機、不想再收提醒），不必打電話請櫃檯處理

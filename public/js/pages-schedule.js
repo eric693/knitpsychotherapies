@@ -208,11 +208,12 @@ async function apptStatusDialog(a, onDone) {
 
 App.page('schedule', {
   title: '預約排程',
-  sub: '週檢視：同一心理師或諮商室時段衝突會即時擋下；下方可設定每週可預約時段與請假',
+  sub: '週檢視：同一心理師或諮商室時段衝突會即時擋下；下方為諮商室使用表',
   help: [
     '<strong>週檢視</strong>：點任一張預約卡可看明細，並做「狀態異動／修改／刪除」。卡片顏色＝預約狀態，對照表在表格上方。',
     '右上「新增預約」排新的一筆；同一心理師或同一諮商室撞時段會直接擋下。',
-    '下方「排班設定」用格子刷出每週可預約時段，不在格線上的時間（如 13:15-14:05）用「自訂時段」加，請假也在同一區登錄。',
+    '下方是「諮商室使用表」，看各間諮商室的使用狀況；點有人的格子可改那筆預約，點空格可在那個時段新增。',
+    '每週可預約時段與請假已移到選單的「心理師排班／請假」。',
     '上方下拉可只看某一位心理師。',
   ],
   module: 'schedule',
@@ -277,8 +278,8 @@ App.page('schedule', {
         ${days.map(dt => `<th>${dt.slice(5)}（${UI.weekdayName(dt)}）${dt === UI.today() ? ' ●' : ''}</th>`).join('')}
       </tr></thead><tbody><tr>${days.map(dt => `<td class="week-day" data-day="${dt}"
         style="vertical-align:top;min-width:150px;cursor:pointer" title="點空白處可在這天新增預約">${cell(dt)}</td>`).join('')}</tr></tbody></table></div>
-      <h3 style="margin:18px 0 8px">排班設定</h3>
-      <div id="shift-panel"><div class="empty">載入中...</div></div>`;
+      <h3 style="margin:18px 0 8px">諮商室使用表</h3>
+      <div id="room-panel"><div class="empty">載入中...</div></div>`;
 
     el.querySelector('#prev').onclick = () => App.go('schedule/' + UI.addDays(start, -7));
     el.querySelector('#next').onclick = () => App.go('schedule/' + UI.addDays(start, 7));
@@ -357,8 +358,13 @@ App.page('schedule', {
       };
     });
 
-    // 排班設定（原「我的排班」獨立頁）併入同一頁，可預約時段與請假只有這一處入口
-    renderShiftPanel(el.querySelector('#shift-panel'), null, () => App.go('schedule/' + start));
+    // 下方放諮商室使用表（原排班設定的位置；排班與請假已獨立成「心理師排班／請假」頁）。
+    // 使用表切換日期時就地重畫，不跳離預約排程。
+    const roomPanel = el.querySelector('#room-panel');
+    const drawRooms = a => renderRoomBoard(roomPanel, a, drawRooms).catch(e => {
+      roomPanel.innerHTML = `<div class="empty">${UI.esc(e.message)}</div>`;
+    });
+    drawRooms(start);
   }
 });
 

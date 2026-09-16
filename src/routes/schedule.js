@@ -5,6 +5,7 @@ const { sendNotification } = require('../notify');
 const { ensureToken, resetToken } = require('../ics');
 const plans = require('../plans');
 const line = require('../line');
+const { logApptEvent } = require('../appt-events');
 const { endTime, defaultSessionMinutes } = plans;
 
 const router = express.Router();
@@ -181,6 +182,8 @@ router.post('/appointments', requireStaff('schedule'), async (req, res) => {
     fee, quote.subsidy_amount, Number(b.package_id) || null,
     Number(b.plan_id) || null, Number(b.topic_id) || null, quote.counselor_share,
     b.source || 'staff', b.note || '', meeting_url, req.user.id);
+  logApptEvent({ appointment_id: info.lastInsertRowid, kind: 'booked', actor_type: 'staff',
+    actor_name: req.user.name, via: '櫃檯' });
   audit('staff', req.user.id, req.user.name, '新增預約', client.code,
     { date: b.date, time: b.start_time, plan_id: b.plan_id || null, override: !!b.override });
   // 全所只有 2-3 間，排滿時要講清楚，不要靜悄悄留一筆沒有空間的預約
@@ -195,6 +198,7 @@ router.post('/appointments', requireStaff('schedule'), async (req, res) => {
       to: client.line_user_id, kind: 'booking_confirm', client_id: client.id,
       appointment_id: info.lastInsertRowid, user: req.user,
       flex: line.bookingConfirmedFlex({
+        client_name: client.name,
         date: b.date, start_time: b.start_time, end_time,
         counselor_name: (db.prepare('SELECT name FROM users WHERE id = ?').get(Number(b.counselor_id)) || {}).name || '',
         plan_name: quotePlan ? quotePlan.name : '', topic_name: quote.topic ? quote.topic.name : '',
@@ -266,6 +270,12 @@ router.put('/appointments/:id', requireStaff('schedule'), (req, res) => {
     b.type, b.mode, quote.fee, quote.subsidy_amount, Number(b.plan_id) || null, Number(b.topic_id) || null,
     quote.counselor_share, b.note || '', meeting_url, a.id);
   audit('staff', req.user.id, req.user.name, '修改預約', String(a.id));
+  // 只有時間或心理師真的變了才算異動；改備註、改收費不會出現在工作台
+  if (a.date !== b.date || a.start_time !== b.start_time || Number(a.counselor_id) !== Number(b.counselor_id)) {
+    logApptEvent({ appointment_id: a.id, kind: 'rescheduled', from_date: a.date, from_time: a.start_time,
+      actor_type: 'staff', actor_name: req.user.name, via: '櫃檯',
+      note: Number(a.counselor_id) !== Number(b.counselor_id) ? '更換心理師' : '' });
+  }
   res.json({ ok: true });
 });
 
@@ -352,6 +362,10 @@ router.post('/appointments/:id/status', requireStaff('schedule'), (req, res) => 
   });
   tx();
   audit('staff', req.user.id, req.user.name, '預約狀態異動', client ? client.code : String(a.id), { status });
+  if (['cancelled', 'no_show'].includes(status) && a.status !== status) {
+    logApptEvent({ appointment_id: a.id, kind: status, actor_type: 'staff', actor_name: req.user.name, via: '櫃檯',
+      note: cancel_reason });
+  }
   // 取消／未到會把時段空出來，順手回報候補名單中可遞補的人選，讓櫃檯當下就能通知
   const opening = (status === 'cancelled' || status === 'no_show') && a.date >= today()
     ? { date: a.date, start_time: a.start_time, end_time: a.end_time, counselor_id: a.counselor_id,
@@ -367,6 +381,9 @@ router.delete('/appointments/:id', requireStaff('schedule'), (req, res) => {
   if (db.prepare('SELECT 1 FROM session_notes WHERE appointment_id = ?').get(a.id)) {
     return res.status(400).json({ error: '此預約已有晤談紀錄，不可刪除' });
   }
+  // 刪除前先記：刪掉之後就查不到是誰的、原本約在幾點
+  logApptEvent({ appointment_id: a.id, client_id: a.client_id, counselor_id: a.counselor_id, kind: 'deleted',
+    date: a.date, start_time: a.start_time, actor_type: 'staff', actor_name: req.user.name, via: '櫃檯' });
   db.prepare('DELETE FROM appointments WHERE id = ?').run(a.id);
   audit('staff', req.user.id, req.user.name, '刪除預約', String(a.id));
   const opening = a.date >= today()

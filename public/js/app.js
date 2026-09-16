@@ -50,6 +50,40 @@ const App = {
   isCounselor() { return App.me && ['counselor', 'supervisor', 'admin'].includes(App.me.role); },
   // 心理師自己的 LINE 綁定：只加好友而沒綁定的話，官方帳號會把他當成一般民眾回覆預約說明，
   // 也收不到自己的隔日行程推播。這張卡片讓本人兩步完成綁定。
+  // 預約異動清單：「王小美 於 09-17 08:47 預約 09-22（一）19:00」。
+  // 個案自己在專區、線上表單或 LINE 做的異動特別標出來 —— 那是心理師最容易不知道的。
+  apptEventsCard(ev) {
+    const rows = (ev && ev.rows) || [];
+    const KIND = {
+      booked: ['預約', 'ok'], request: ['送出預約申請', 'primary'], rescheduled: ['改期', 'warn'],
+      cancelled: ['取消', 'danger'], cancel_requested: ['申請取消', 'danger'], no_show: ['標記未到', 'danger'],
+      withdrawn: ['撤回預約申請', ''], deleted: ['刪除預約', 'danger']
+    };
+    const when = (d, t) => (d ? `${d.slice(5)}（${UI.weekdayName(d)}）${t || ''}` : '');
+    const line = e => {
+      const [label, tone] = KIND[e.kind] || [e.kind, ''];
+      const target = e.kind === 'rescheduled'
+        ? `由 ${when(e.from_date, e.from_time)} 改到 <strong>${when(e.date, e.start_time)}</strong>`
+        : `<strong>${when(e.date, e.start_time)}</strong>`;
+      const who = e.actor_type === 'client'
+        ? UI.tag(`個案本人・${e.via || ''}`, 'warn')
+        : `<span style="color:var(--muted)">${UI.esc(e.actor_name || '')}（${UI.esc(e.via || '所方')}）</span>`;
+      return `<tr>
+        <td style="white-space:nowrap;font-size:12.5px;color:var(--muted)">${UI.esc(e.created_at.slice(5, 16))}</td>
+        <td class="wrap"><a href="#client/${e.client_id}">${UI.esc(e.client_name)}</a>
+          ${e.done_count ? UI.tag('複診', '') : UI.tag('初次', 'primary')}</td>
+        <td class="wrap">${UI.tag(label, tone)} ${target}
+          ${e.counselor_name ? `<span style="font-size:12.5px;color:var(--muted)">　${UI.esc(e.counselor_name)}</span>` : ''}
+          ${e.note ? `<div style="font-size:12.5px;color:var(--muted)">${UI.esc(e.note)}</div>` : ''}</td>
+        <td class="wrap">${who}</td></tr>`;
+    };
+    return `<div class="card"><h3>預約異動
+        <span style="font-size:13px;font-weight:400;color:var(--muted)">
+          近 ${(ev && ev.days) || 14} 天${App.me.role === 'counselor' ? '・我的個案' : '・全所'}</span></h3>
+      ${UI.table(['異動時間', '個案', '內容', '由誰'], rows.map(line), `近 ${(ev && ev.days) || 14} 天沒有預約異動`)}
+      </div>`;
+  },
+
   myLineCard(d) {
     if (!d || !d.enabled) return '';
     const name = UI.esc(d.official_name || 'LINE 官方帳號');
@@ -131,7 +165,7 @@ const App = {
   },
 
   navGroups: [
-    { label: '每日作業', keys: ['dashboard', 'my', 'schedule', 'room-board', 'bookings', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review'] },
+    { label: '每日作業', keys: ['dashboard', 'my', 'schedule', 'shift', 'bookings', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review'] },
     { label: '個案服務', keys: ['intake', 'intake-forms', 'clients', 'groups', 'assessments', 'risk', 'safety', 'follow-ups', 'consents'] },
     { label: '專業與營運', keys: ['supervision', 'hr', 'payouts', 'my-payout', 'documents', 'billing', 'receipts', 'certificates', 'overdue', 'packages', 'partners', 'plan-board', 'income', 'annual', 'announcements', 'reports'] },
     { label: '系統', keys: ['users', 'plans', 'line', 'gform', 'settings', 'imports', 'retention', 'audit'] }
@@ -375,11 +409,13 @@ App.page('my', {
   sub: '個人服務量、待辦與專業資格進度',
   help: [
     '你個人的服務量、待辦與專業資格進度（繼續教育積分、督導時數）。',
+    '「預約異動」列出近 14 天的預約、預約申請、改期與取消，並標明是個案本人（個案專區／線上表單／LINE）還是所方做的。心理師只看得到自己個案的異動，管理者看得到全所。',
     '進度條顯示距離執照更新所需時數還差多少；待辦指的是你自己要補的紀錄與報告。',
   ],
   visible: () => App.isCounselor(),
   async render(el) {
-    const [d, myLine] = await Promise.all([GET('/my-dashboard'), GET('/my/line').catch(() => null)]);
+    const [d, myLine, ev] = await Promise.all([GET('/my-dashboard'), GET('/my/line').catch(() => null),
+      GET('/my/appointment-events').catch(() => ({ rows: [] }))]);
     const bar = (now, need, label) => {
       const pct = need > 0 ? Math.min(100, Math.round(now / need * 100)) : 100;
       const done = now >= need;
@@ -410,6 +446,7 @@ App.page('my', {
       </div>
 
       ${App.myLineCard(myLine)}
+      ${App.apptEventsCard(ev)}
       ${d.open_risk_events.length && !App.hidden('risk') ? `<div class="card"><h3>追蹤中的危機事件</h3>
         ${UI.table(['日期', '個案', '類型', '嚴重度', '通報'], d.open_risk_events.map(e => `<tr>
           <td>${e.date}</td>
