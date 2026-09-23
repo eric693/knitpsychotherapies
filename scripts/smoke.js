@@ -2542,6 +2542,39 @@ function startServer() {
     equal(after.extra_item, '年終獎金', '沒送名稱就沿用原本的');
     await admin.ok('DELETE', `/api/payouts/${made.id}`).catch(() => {});
   });
+  // 獎金也要能跟著拆單分次給付：總額拆到每筆都在門檻下，
+  // 但鐘點與獎金各自的總額不能因為拆單而跑掉
+  await test('拆單可帶獎金：先發鐘點、發完才動獎金，兩邊總額不變', async () => {
+    const r = await admin.ok('GET', '/api/payouts/split-preview'
+      + '?base_amount=30000&extra_amount=10000&extra_item=年終獎金&income_type=9A&max=19999');
+    equal(r.total_gross, 40000, '合計應為鐘點＋獎金');
+    assert(r.parts.length >= 3, '40000 以 19999 為上限應拆成 3 筆以上');
+    assert(r.parts.every(p => p.gross <= r.cap), '每筆都不得超過上限');
+    assert(r.parts.every(p => p.base_amount + p.extra_amount === p.gross), '每筆的拆解要等於該筆金額');
+    equal(r.parts.reduce((a, p) => a + p.base_amount, 0), 30000, '鐘點總額不變');
+    equal(r.parts.reduce((a, p) => a + p.extra_amount, 0), 10000, '獎金總額不變');
+    // 先發鐘點：第一筆應該是純鐘點，獎金落在後面
+    equal(r.parts[0].extra_amount, 0, '第一筆應為純鐘點');
+    assert(r.parts[r.parts.length - 1].extra_amount > 0, '最後一筆應含獎金');
+    equal(r.total_withholding, 0, '拆到門檻下就不代扣');
+
+    const month = ymd(new Date()).slice(0, 7);
+    const made = await admin.ok('POST', '/api/payouts/split', {
+      user_id: 2, month, item: '晤談鐘點', sessions: 12,
+      base_amount: 30000, extra_amount: 10000, extra_item: '年終獎金',
+      income_type: '9A', max: 19999, start_date: month + '-05'
+    });
+    const rows = (await admin.ok('GET', `/api/payouts?month=${month}`)).rows
+      .filter(x => x.batch_id === made.batch_id);
+    equal(rows.length, made.ids.length, '應建立整批');
+    equal(rows.reduce((a, x) => a + x.base_amount, 0), 30000, '寫進資料庫的鐘點總額');
+    equal(rows.reduce((a, x) => a + x.extra_amount, 0), 10000, '寫進資料庫的獎金總額');
+    assert(rows.some(x => x.extra_item === '年終獎金'), '含獎金的那筆要留著項目名稱');
+    assert(rows.filter(x => !x.extra_amount).every(x => x.extra_item === ''), '純鐘點的不該掛項目名稱');
+    const slip = await admin.get(`/api/payouts/slip?batch=${made.batch_id}`);
+    assert(slip.text.includes('年終獎金'), '整批報酬單應列出獎金');
+    await admin.ok('DELETE', `/api/payouts/batch/${made.batch_id}`).catch(() => {});
+  });
   // 這個月只結好了其中幾位時，不必等全部結完才送
   await test('月結可只送出指定心理師', async () => {
     const month = ymd(new Date()).slice(0, 7);

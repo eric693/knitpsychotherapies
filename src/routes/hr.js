@@ -374,25 +374,39 @@ function splitAmounts(gross, cap) {
 function splitPlan(b) {
   const cap = splitCap(b.max);
   const incomeType = b.income_type || '9B';
-  const amounts = splitAmounts(b.gross, cap);
+  const a = amountsOf(b);
+  const amounts = splitAmounts(a.gross, cap);
   const start = String(b.start_date || '');
   const step = Math.max(0, Math.floor(Number(b.interval_days === undefined || b.interval_days === ''
     ? getSetting('payout_split_interval_days', '0') : b.interval_days) || 0));
+  // 有獎金時，每一筆先扣鐘點、鐘點發完才動到獎金（不按比例攤）。
+  // 這樣大部分的單子是純鐘點、只有交界那一筆是混的，對帳時看得出錢是怎麼走的；
+  // 按比例攤則每一筆都是零頭，反而難核。兩種拆法的鐘點與獎金總額都一樣。
+  let baseLeft = a.base_amount;
   const parts = amounts.map((amount, i) => {
     const payDate = start ? addDays(start, step * i) : '';
+    const basePart = Math.min(baseLeft, amount);
+    baseLeft -= basePart;
+    const extraPart = amount - basePart;
     return {
       seq: i + 1,
       pay_date: payDate,
       month: payDate ? payDate.slice(0, 7) : String(b.month || today().slice(0, 7)),
       gross: amount,
+      base_amount: basePart,
+      extra_amount: extraPart,
+      extra_item: extraPart ? a.extra_item : '',
       ...calcDeduction(amount, incomeType)
     };
   });
-  const sum = k => parts.reduce((a, r) => a + r[k], 0);
+  const sum = k => parts.reduce((a2, r) => a2 + r[k], 0);
   return {
     cap,
     income_type: incomeType,
     parts,
+    base_amount: a.base_amount,
+    extra_amount: a.extra_amount,
+    extra_item: a.extra_item,
     total_gross: sum('gross'),
     total_withholding: sum('withholding'),
     total_nhi: sum('nhi_supplement'),
@@ -408,7 +422,7 @@ router.post('/payouts/split', requireStaff('payouts'), (req, res) => {
   const b = req.body || {};
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(b.user_id) || 0);
   if (!u) return res.status(400).json({ error: '請選擇心理師' });
-  if (!Number(b.gross)) return res.status(400).json({ error: '請填寫給付總額' });
+  if (!amountsOf(b).gross) return res.status(400).json({ error: '請填寫鐘點給付或其他項目金額' });
   if (!b.month && !b.start_date) return res.status(400).json({ error: '請選擇給付月份或起始支領日' });
   const plan = splitPlan(b);
   if (!plan.parts.length) return res.status(400).json({ error: '給付總額須大於 0' });
@@ -416,13 +430,13 @@ router.post('/payouts/split', requireStaff('payouts'), (req, res) => {
   const batchId = `PB${Date.now().toString(36).toUpperCase()}${u.id}`;
   const item = b.item || '晤談鐘點';
   const sessions = Number(b.sessions) || 0;
-  // 拆單拆的是「一次給付多少」，每一筆都是鐘點；獎金要分列時請開單張報酬單，不要走拆單
   const ins = db.prepare(`INSERT INTO payouts
-    (user_id, month, item, sessions, gross, base_amount, income_type,
+    (user_id, month, item, sessions, gross, base_amount, extra_item, extra_amount, income_type,
      withholding, nhi_supplement, net, note, pay_date, batch_id, batch_seq, batch_total)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const ids = db.transaction(() => plan.parts.map(p => ins.run(
-    u.id, p.month, item, p.seq === 1 ? sessions : 0, p.gross, p.gross, plan.income_type,
+    u.id, p.month, item, p.seq === 1 ? sessions : 0, p.gross,
+    p.base_amount, p.extra_item, p.extra_amount, plan.income_type,
     p.withholding, p.nhi_supplement, p.net, String(b.note || ''),
     p.pay_date, batchId, p.seq, plan.parts.length).lastInsertRowid))();
 

@@ -418,7 +418,10 @@ function payoutSplitDialog(seed, month, onDone) {
         ${UI.input('month', '給付月份', { type: 'month', value: d.month || month })}
         ${UI.input('item', '項目', { value: d.item || '晤談鐘點' })}
         ${UI.input('sessions', '節數／場次', { type: 'number', value: d.sessions || '' })}
-        ${UI.input('gross', '給付總額', { type: 'number', value: d.gross || '' })}
+        ${UI.input('base_amount', '鐘點給付', { type: 'number',
+    value: d.base_amount !== undefined ? d.base_amount : (d.gross || '') })}
+        ${UI.input('extra_item', '其他項目名稱', { value: d.extra_item || '', placeholder: '如 年終獎金' })}
+        ${UI.input('extra_amount', '其他項目金額', { type: 'number', value: d.extra_amount || '' })}
         ${UI.select('income_type', '所得類別', INCOME_TYPES, { value: d.income_type || '9B' })}
         ${UI.input('max', '每筆上限', { type: 'number', value: 19999 })}
         ${UI.input('start_date', '起始支領日', { type: 'date', value: UI.today() })}
@@ -430,19 +433,29 @@ function payoutSplitDialog(seed, month, onDone) {
       const preview = async () => {
         const f = UI.formData(el);
         const box = el.querySelector('#split');
-        if (!Number(f.gross)) { box.innerHTML = ''; return; }
+        if (!Number(f.base_amount) && !Number(f.extra_amount)) { box.innerHTML = ''; return; }
         const q = new URLSearchParams({
-          gross: f.gross, income_type: f.income_type, max: f.max,
+          base_amount: f.base_amount || 0, extra_amount: f.extra_amount || 0,
+          extra_item: f.extra_item || '', income_type: f.income_type, max: f.max,
           start_date: f.start_date || '', interval_days: f.interval_days || 0, month: f.month || ''
         });
         const r = await GET('/payouts/split-preview?' + q);
-        box.innerHTML = `${UI.table(['#', '支領日期', '給付月份', '支領金額', '代扣所得稅', '補充保費', '支領淨額'],
+        const hasExtra = r.parts.some(p => p.extra_amount);
+        box.innerHTML = `${UI.table(
+          ['#', '支領日期', '給付月份', '支領金額', ...(hasExtra ? ['其中鐘點', '其中' + (r.extra_item || '其他')] : []),
+            '代扣所得稅', '補充保費', '支領淨額'],
           r.parts.map(p => `<tr><td>${p.seq}</td><td>${p.pay_date || '-'}</td><td>${p.month}</td>
-            <td>${UI.fmtMoney(p.gross)}</td><td>${UI.fmtMoney(p.withholding)}</td>
+            <td>${UI.fmtMoney(p.gross)}</td>
+            ${hasExtra ? `<td>${UI.fmtMoney(p.base_amount)}</td>
+              <td>${p.extra_amount ? UI.fmtMoney(p.extra_amount) : '－'}</td>` : ''}
+            <td>${UI.fmtMoney(p.withholding)}</td>
             <td>${UI.fmtMoney(p.nhi_supplement)}</td><td><strong>${UI.fmtMoney(p.net)}</strong></td></tr>`))}
           <div class="notice">拆成 <strong>${r.parts.length}</strong> 筆，每筆上限 ${UI.fmtMoney(r.cap)}；
             合計給付 ${UI.fmtMoney(r.total_gross)}　實付 ${UI.fmtMoney(r.total_net)}。
-            拆單只是把給付分次，年度所得仍以全年累計申報。</div>`;
+            拆單只是把給付分次，年度所得仍以全年累計申報。
+            ${hasExtra ? `<br>每一筆先發鐘點，鐘點發完才動到${UI.esc(r.extra_item || '其他項目')}，
+              所以只有交界那一筆是混的；鐘點與${UI.esc(r.extra_item || '其他項目')}的總額不變
+              （鐘點 ${UI.fmtMoney(r.base_amount)}、${UI.esc(r.extra_item || '其他')} ${UI.fmtMoney(r.extra_amount)}）。` : ''}</div>`;
       };
       el.querySelectorAll('input,select').forEach(i => {
         i.oninput = () => { clearTimeout(el._t); el._t = setTimeout(preview, 250); };
@@ -452,7 +465,12 @@ function payoutSplitDialog(seed, month, onDone) {
     },
     onSubmit: async el => {
       const f = UI.formData(el);
-      if (!Number(f.gross)) throw new Error('請填寫給付總額');
+      if (!Number(f.base_amount) && !Number(f.extra_amount)) {
+        throw new Error('請填寫鐘點給付或其他項目金額');
+      }
+      if (Number(f.extra_amount) && !String(f.extra_item || '').trim()) {
+        throw new Error('請填寫其他項目的名稱（如 年終獎金）');
+      }
       const r = await POST('/payouts/split', f);
       UI.toast(`已建立 ${r.ids.length} 筆`);
       onDone && onDone();
