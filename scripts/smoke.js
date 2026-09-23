@@ -1600,6 +1600,42 @@ function startServer() {
       await admin.del(`/api/appointments/${appt.id}`).catch(() => {});
     }
   });
+  // 補助方案的錢分兩半：跟單位請的是「方案給付」那一半。
+  // 拿個案自付去加總的話，青壯方案這種自付 0 元的會算出 0 元請款單。
+  await test('未設議定價時，請款金額以方案給付計，不是個案自付', async () => {
+    const pt = await admin.ok('POST', '/api/partners', { name: '測試請款金額單位', type: '政府委託' });
+    // 總額 1800＝方案給付 1600＋個案自付 200
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '測試給付拆分方案', kind: 'partner', fee: 1800, subsidy_amount: 1600,
+      session_minutes: 40, partner_id: pt.id, portal_visible: 0
+    });
+    const lins = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    const clients = await admin.ok('GET', '/api/clients');
+    const date = nextWeekday(5, 197);
+    const month = date.slice(0, 7);
+    const appt = await admin.ok('POST', '/api/appointments', {
+      client_id: clients[0].id, counselor_id: lins.id, date, start_time: '07:00',
+      plan_id: plan.id, override: true
+    });
+    await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'done' });
+    try {
+      const st = await admin.ok('POST', '/api/settlements', { partner_id: pt.id, month });
+      equal(st.sessions, 1, '應抓到一場');
+      equal(st.amount, 1600, '請款金額應為方案給付 1600，而非個案自付 200');
+      const detail = await admin.ok('GET', `/api/settlements/${st.id}`);
+      equal(detail.items[0].fee, 1600, '對帳單明細也該列方案給付');
+      assert(!detail.mismatch, '剛開立的請款單不該顯示金額有差異');
+      await admin.ok('DELETE', `/api/settlements/${st.id}`).catch(() => {});
+      // 有設議定價時以議定價為準
+      await admin.ok('PUT', `/api/partners/${pt.id}`, { rate: 1500 });
+      const st2 = await admin.ok('POST', '/api/settlements', { partner_id: pt.id, month });
+      equal(st2.amount, 1500, '設了議定價就以議定價 × 場次計');
+      await admin.ok('DELETE', `/api/settlements/${st2.id}`).catch(() => {});
+    } finally {
+      await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'cancelled' }).catch(() => {});
+      await admin.del(`/api/appointments/${appt.id}`).catch(() => {});
+    }
+  });
   // 個案屬 A 單位、方案卻指向 B 單位時，這一場只能算一家 ——
   // 兩家都算就是同一場跟兩個單位各請一次款
   await test('個案與方案指向不同合作單位時，一場只算個案掛的那一家', async () => {

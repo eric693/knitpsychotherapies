@@ -63,6 +63,15 @@ router.get('/partners/:id', requireStaff('partners'), (req, res) => {
   });
 });
 
+// 一場晤談要跟這家單位請多少錢。
+//
+// 補助／委辦方案的錢分兩半：方案給付由單位出，個案自付由個案出。
+// 要跟單位請的是「方案給付」那一半 —— 拿個案自付去加總，請款金額會少一大截
+// （青壯方案個案自付 0 元，加總就是 0）。沒有方案給付的（學校認輔那種整案委託、
+// 費用全由單位負擔）才回頭用個案費用。
+// 單位有設議定價時一律以議定價為準，那是契約上談定的數字。
+const APPT_CLAIM = "CASE WHEN a.subsidy_amount > 0 THEN a.subsidy_amount ELSE a.fee END";
+
 // 哪些晤談算這家單位的：個案掛在該單位底下，或這場用的方案指定了該單位。
 // 後者是為了「合作單位新增了青壯方案」這種情形 —— 方案名稱與單位同名，系統本來看不出是同一件事，
 // 要在方案設定填「對應的合作單位」才接得起來。
@@ -84,10 +93,10 @@ router.post('/settlements', requireStaff('partners'), (req, res) => {
   if (db.prepare('SELECT 1 FROM settlements WHERE partner_id = ? AND month = ?').get(partnerId, month)) {
     return res.status(400).json({ error: '該月請款單已存在' });
   }
-  const rows = db.prepare(`SELECT a.id, a.fee ${PARTNER_APPTS}`).all(partnerId, month);
+  const rows = db.prepare(`SELECT a.id, ${APPT_CLAIM} AS claim ${PARTNER_APPTS}`).all(partnerId, month);
   if (!rows.length) return res.status(400).json({ error: '該月無可請款的晤談紀錄' });
   const rate = p.rate || 0;
-  const amount = rate ? rows.length * rate : rows.reduce((s, r) => s + r.fee, 0);
+  const amount = rate ? rows.length * rate : rows.reduce((s, r) => s + r.claim, 0);
   const info = db.prepare(`INSERT INTO settlements (partner_id, month, sessions, amount, created_by)
     VALUES (?,?,?,?,?)`).run(partnerId, month, rows.length, amount, req.user.id);
   audit('staff', req.user.id, req.user.name, '產生請款單', p.name, { month, sessions: rows.length, amount });
@@ -110,7 +119,7 @@ router.get('/settlements/:id', requireStaff('partners'), (req, res) => {
   const s = db.prepare(`SELECT s.*, p.name AS partner_name, p.tax_id, p.contact, p.address, p.rate
     FROM settlements s JOIN partners p ON p.id = s.partner_id WHERE s.id = ?`).get(req.params.id);
   if (!s) return res.status(404).json({ error: '找不到此請款單' });
-  const items = db.prepare(`SELECT a.date, a.start_time, a.type, a.fee, c.code AS client_code,
+  const items = db.prepare(`SELECT a.date, a.start_time, a.type, ${APPT_CLAIM} AS fee, c.code AS client_code,
       sp.name AS plan_name,
       (SELECT name FROM users WHERE id = a.counselor_id) AS counselor_name
     ${PARTNER_APPTS}
@@ -137,8 +146,8 @@ router.post('/settlements/:id/recalculate', requireStaff('partners'), (req, res)
     .get(req.params.id);
   if (!s) return res.status(404).json({ error: '找不到此請款單' });
   if (s.status !== 'draft') return res.status(400).json({ error: '已送出或已入帳的請款單不可重新計算' });
-  const rows = db.prepare(`SELECT a.fee ${PARTNER_APPTS}`).all(s.partner_id, s.month);
-  const amount = s.rate ? rows.length * s.rate : rows.reduce((t, r) => t + r.fee, 0);
+  const rows = db.prepare(`SELECT ${APPT_CLAIM} AS claim ${PARTNER_APPTS}`).all(s.partner_id, s.month);
+  const amount = s.rate ? rows.length * s.rate : rows.reduce((t, r) => t + r.claim, 0);
   db.prepare('UPDATE settlements SET sessions = ?, amount = ? WHERE id = ?').run(rows.length, amount, s.id);
   audit('staff', req.user.id, req.user.name, '重算請款單', String(s.id),
     { before: { sessions: s.sessions, amount: s.amount }, after: { sessions: rows.length, amount } });
