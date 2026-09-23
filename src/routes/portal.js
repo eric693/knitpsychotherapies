@@ -86,14 +86,36 @@ function ownedAppointment(req, apptId) {
     .get(apptId, ...ids) || null;
 }
 
+// 手機號碼只留數字再比對。櫃檯常在號碼後面補記「孩子母親」「案姑姑」「分機 105」，
+// 也有人填成 04-2213-3300 或國際碼格式；這些都是同一支電話，不該因為格式不同就登不進來。
+const digitsOf = s => String(s || '').replace(/\D/g, '');
+
+// 哪些個案的專區可以用這支手機登入。
+//
+// 兒青個案的手機常常只填在「法定代理人電話」，本人欄位是空的 —— 家長拿自己的手機來登入
+// 本來就該通。所以本人手機與家長手機都算數，本人優先。
+// 一支手機對到好幾位（兄弟姊妹共用家長手機）時全部回傳，交給密碼決定是哪一位；
+// 密碼也一樣時取先建檔的那位，其餘家人由櫃檯在個案頁設「授權家人代訂」後一併看得到。
+function portalCandidates(input) {
+  const key = digitsOf(input);
+  if (key.length < 6) return [];
+  const rows = db.prepare(`SELECT * FROM clients WHERE active = 1 AND portal_enabled = 1
+    AND (phone != '' OR guardian_phone != '')`).all();
+  const rank = r => (digitsOf(r.phone) === key ? 0 : 1) + (r.password_hash ? 0 : 0.5);
+  return rows
+    .filter(r => digitsOf(r.phone) === key || digitsOf(r.guardian_phone) === key)
+    .sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+}
+
 // 個案端只提供行政功能（預約、量表、費用、同意書），不提供任何晤談紀錄內容
 router.post('/login', loginRateLimit, (req, res) => {
   const { phone = '', password = '' } = req.body || {};
-  const lockKey = `client:${phone}`;
+  const lockKey = `client:${digitsOf(phone)}`;
   const locked = loginLockedMinutes(lockKey);
   if (locked) return res.status(429).json({ error: `登入失敗次數過多，請 ${locked} 分鐘後再試` });
-  const c = db.prepare('SELECT * FROM clients WHERE phone = ? AND active = 1 AND portal_enabled = 1').get(phone);
-  if (!c || !c.password_hash || !bcrypt.compareSync(password, c.password_hash)) {
+  // 密碼對得起來的那一筆才是本人；兄弟姊妹共用家長手機時，這一步也順便選出是哪一位
+  const c = portalCandidates(phone).find(r => r.password_hash && bcrypt.compareSync(password, r.password_hash));
+  if (!c) {
     loginFailed(lockKey);
     return res.status(401).json({ error: '手機號碼或密碼錯誤' });
   }

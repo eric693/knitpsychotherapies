@@ -133,11 +133,20 @@ App.page('my-payout', {
     '所方結算完會把當月明細送過來，這裡列出每一筆的日期、項目、金額與代扣，最下方是實付合計。',
     '核對無誤請在簽名欄手寫簽名再按「確認無誤」；<strong>確認後所方才會撥款</strong>，簽名會直接印在勞務報酬單上，不必再簽紙本。',
     '金額有問題請按「有疑義」並寫清楚哪裡不對，行政查完會重新送一份給你確認。',
+    '下方「本月服務收支」與「服務明細」是系統依你這個月的晤談與方案拆帳算出來的，'
+      + '可以跟上方報酬單的金額互相對照；有落差就按「有疑義」。',
+    '機構案要等對方撥款，所方才會把那幾場的報酬併入付款。明細的「撥款」欄看得出每一場的錢到了沒有，'
+      + '未撥款的場次會另外標出金額，不是漏算。',
     '上方可切換月份，看得到過去已確認的紀錄。',
   ],
   async render(el, arg) {
     const q = /^\d{4}-\d{2}$/.test(arg || '') ? `?month=${arg}` : '';
     const d = await GET('/my/payout-months' + q);
+    // 服務收支是系統即時算的，報酬單是行政開的，兩者分開取：對不上時心理師才看得出來要問什麼。
+    // 取不到時要講出來，不能安靜地少兩張卡 —— 那會讓人以為功能沒做，實際上是這支 API 出錯了
+    // （例如剛改版、前端已更新但服務還沒重啟的那幾秒）。
+    let inc = null, incErr = '';
+    try { inc = await GET('/my/income?month=' + d.month); } catch (e) { incErr = e.message; }
     const money = v => UI.fmtMoney(v);
     const state = { sent: UI.tag('待你確認', 'warn'), confirmed: UI.tag('已確認', 'ok'),
       disputed: UI.tag('已回報疑義', 'danger') }[d.confirm_status] || UI.tag('尚未送出', 'warn');
@@ -149,13 +158,73 @@ App.page('my-payout', {
 
       <div class="card"><h3>${d.month} 報酬明細</h3>
         ${UI.table(['日期', '項目', '人次', '給付總額', '代扣所得稅', '二代健保', '實付'],
-    d.rows.map(r => `<tr><td>${UI.esc(r.pay_date || '－')}</td><td>${UI.esc(r.item || '')}</td>
-          <td>${r.sessions || '－'}</td><td>${money(r.gross)}</td><td>${money(r.withholding)}</td>
+    d.rows.map(r => `<tr><td>${UI.esc(r.pay_date || '－')}</td>
+          <td>${UI.esc(r.item || '')}${r.extra_amount
+    ? `<br><span style="font-size:12px;color:var(--muted)">＋${UI.esc(r.extra_item || '獎金')}</span>` : ''}</td>
+          <td>${r.sessions || '－'}</td>
+          <td>${money(r.gross)}${r.extra_amount
+    // 獎金與鐘點分列，心理師看得出這筆錢的組成；代扣是以合計去算的
+    ? `<br><span style="font-size:12px;color:var(--muted)">鐘點 ${money(r.base_amount)}
+        ／${UI.esc(r.extra_item || '獎金')} ${money(r.extra_amount)}</span>` : ''}</td>
+          <td>${money(r.withholding)}</td>
           <td>${money(r.nhi_supplement)}</td><td><strong>${money(r.net)}</strong></td></tr>`), '這個月沒有報酬單')}
         ${d.count ? `<div style="text-align:right;margin-top:10px;font-size:15px">
           給付總額 ${money(d.gross)}　代扣 ${money(d.withholding + d.nhi_supplement)}　
           <strong style="font-size:18px">實付合計 ${money(d.net)}</strong></div>` : ''}
       </div>
+
+      ${incErr ? `<div class="card"><h3>${d.month} 本月服務收支</h3>
+        <div class="notice">這一區暫時載入不出來：${UI.esc(incErr)}<br>
+          請先重新整理頁面；若剛好遇到系統改版，等一下再進來就會正常。
+          上方的報酬明細不受影響。</div></div>` : ''}
+      ${inc ? `<div class="card"><h3>${d.month} 本月服務收支
+          <span style="font-size:13px;font-weight:400;color:var(--muted)">
+            系統依你的晤談與方案拆帳即時計算，用來對照上方報酬單</span></h3>
+        ${UI.table(['方案', '完成', '未到', '服務總額', '方案給付', '個案自付', '場地費', '我的報酬'],
+    inc.plans.map(p => `<tr><td>${UI.esc(p.plan_name)}</td>
+          <td>${p.sessions}</td><td>${p.no_shows || '－'}</td>
+          <td>${money(p.gross)}</td><td>${money(p.subsidy)}</td><td>${money(p.self_pay)}</td>
+          <td>${money(p.venue)}</td><td><strong>${money(p.share)}</strong></td></tr>`),
+    '這個月沒有已完成的晤談')}
+        ${inc.total.sessions || inc.total.no_shows ? `<div style="text-align:right;margin-top:10px;font-size:15px">
+          完成 ${inc.total.sessions} 場${inc.total.no_shows ? `（未到 ${inc.total.no_shows} 場）` : ''}　
+          服務總額 ${money(inc.total.gross)}　
+          <strong style="font-size:18px">我的報酬合計 ${money(inc.total.share)}</strong></div>
+        ${inc.total.unsettled_share ? `<div class="notice" style="margin-top:10px">
+          其中 <strong>${inc.total.unsettled_sessions} 場尚未撥款</strong>，
+          對應報酬 <strong>${money(inc.total.unsettled_share)}</strong>（機構案等對方入帳、自費案等收款）。
+          這部分通常不列入本月付款，會在錢進來的月份併入結算 ——
+          已可付的部分為 ${money(inc.total.settled_share)}。</div>` : ''}
+        ${d.count ? `<div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          上方報酬單給付總額 ${money(d.gross)}　系統試算我的報酬 ${money(inc.total.share)}
+          ${d.gross !== inc.total.share
+    ? `　<span style="color:var(--warn)">差額 ${money(Math.abs(d.gross - inc.total.share))}</span>
+             —— 若所方是先扣掉未撥款的場次，或另有加減項，兩個數字本來就會不同；看不出原因請按「有疑義」。`
+    : '　兩者一致。'}</div>` : ''}` : ''}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
+          報酬以「服務總額 − 場地費」為基數，依方案設定的比例或鐘點費計算，
+          並在晤談按下「完成」當下鎖定；事後改方案設定不會回頭變動已結算的月份。</div>
+      </div>
+
+      <div class="card"><h3>${d.month} 服務明細
+          <span style="font-size:13px;font-weight:400;color:var(--muted)">逐筆核對哪幾場、每場多少</span></h3>
+        <div style="overflow-x:auto">
+        ${UI.table(['日期', '時間', '個案', '方案／主題', '狀態', '個案自付', '方案給付', '我的報酬', '撥款'],
+    inc.rows.map(r => {
+      const label = r.funding_channel === 'partner'
+        ? (r.funding_status === 'none' ? '未開請款單' : (TW.settle_status[r.funding_status] || r.funding_status))
+        : (r.funding_status === 'none' ? '未開收費單' : (TW.inv_status[r.funding_status] || r.funding_status));
+      return `<tr><td>${r.date}</td><td>${(r.start_time || '').slice(0, 5)}</td>
+          <td>${UI.esc(r.client_code || '')} ${UI.esc(r.client_name || '')}</td>
+          <td>${UI.esc(r.plan_name || '－')}${r.topic_name ? '／' + UI.esc(r.topic_name) : ''}
+            ${r.partner_name ? `<br><span style="font-size:12px;color:var(--muted)">${UI.esc(r.partner_name)}</span>` : ''}</td>
+          <td>${TW.appt_status[r.status] || r.status}</td>
+          <td>${money(r.self_pay)}</td><td>${money(r.subsidy)}</td>
+          <td><strong>${money(r.share)}</strong></td>
+          <td>${r.settled ? UI.tag(label, 'ok') : UI.tag(label, 'warn')}</td></tr>`;
+    }), '這個月沒有已完成的晤談')}
+        </div>
+      </div>` : ''}
 
       ${d.handled_note ? `<div class="notice" style="margin-bottom:12px">
         行政已處理你先前回報的疑義：${UI.esc(d.handled_note)}<br>請重新核對後確認。</div>` : ''}

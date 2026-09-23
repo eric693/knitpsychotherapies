@@ -641,7 +641,9 @@ App.page('client', {
               <td>${f.can_book && f.member_active ? UI.tag('可代訂', 'ok') : UI.tag('已停用', 'warn')}</td>
               <td><button class="btn tiny danger" data-fx="${f.id}">取消授權</button></td></tr>`),
     '尚未授權任何人')}
-            <div style="margin-top:10px"><button class="btn small secondary" id="fam-add">授權家人代訂</button></div>
+            <div style="margin-top:10px">
+              <button class="btn small secondary" id="fam-add">授權家人代訂</button>
+              <button class="btn small secondary" id="fam-suggest">找同手機的家人</button></div>
             ${(c.family_of || []).length ? `<div class="notice" style="margin-top:12px;font-size:13px">
               ${c.family_of.map(x => `${UI.esc(x.name)}（${UI.esc(x.code)}）`).join('、')}
               可在專區替這位個案預約。</div>` : ''}`;
@@ -655,6 +657,39 @@ App.page('client', {
               } catch (e) { UI.err(e); }
             };
           });
+          // 一個家長帶兩三個孩子來時，逐一授權很費事，漏掉的話家長在專區只看得到其中一個孩子，
+          // LINE 提醒也只綁得到一個人。這裡把同手機的個案列出來讓櫃檯勾選，一次授權完。
+          box.querySelector('#fam-suggest').onclick = async () => {
+            const sg = await GET(`/clients/${c.id}/family/suggest`);
+            if (!sg.phone) return UI.toast('這位個案沒有留存手機或法定代理人電話', true);
+            if (!sg.rows.length) return UI.toast(`沒有其他個案使用 ${sg.phone}`);
+            UI.modal({
+              title: '找同手機的家人',
+              submitText: '授權勾選的家人',
+              body: `<div style="font-size:13.5px;margin-bottom:10px">
+                  以下個案與${UI.esc(c.name)}使用同一支電話 <strong>${UI.esc(sg.phone)}</strong>，
+                  多半是手足或親子。勾選後，${UI.esc(c.name)}在專區就看得到他們的時段，
+                  LINE 綁定也會一組碼一起綁，提醒卡片會寫明是誰的晤談。</div>
+                ${UI.table(['', '個案', '出生日期', ''], sg.rows.map(r => `<tr>
+                  <td><input type="checkbox" class="fs" value="${r.id}" checked></td>
+                  <td>${UI.esc(r.code)} ${UI.esc(r.name)}${r.is_minor ? ' ' + UI.tag('未成年', 'warn') : ''}</td>
+                  <td>${UI.esc(r.birth_date || '－')}</td>
+                  <td>${r.same_surname ? '' : UI.tag('姓氏不同，請確認', 'warn')}</td></tr>`))}
+                <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+                  授權等於讓一位家人看得到另一位的時段，所以系統不會自動建立 ——
+                  號碼有可能是打錯的，尤其姓氏不同的那幾筆請先確認。</div>`,
+              onSubmit: async form => {
+                const picks = [...form.querySelectorAll('.fs')].filter(x => x.checked).map(x => Number(x.value));
+                if (!picks.length) throw new Error('請至少勾選一位');
+                let last = null;
+                for (const id of picks) {
+                  last = await POST(`/clients/${c.id}/family`, { member_id: id, relationship: '家人' });
+                }
+                UI.toast(`已授權 ${picks.length} 位`);
+                drawFam(last.family);
+              }
+            });
+          };
           box.querySelector('#fam-add').onclick = async () => {
             const opts = await GET('/clients/options');
             UI.modal({

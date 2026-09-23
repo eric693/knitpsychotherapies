@@ -4,7 +4,8 @@ const express = require('express');
 const { db, audit, today, getSetting, nowStamp } = require('../db');
 const { requireStaff } = require('../auth');
 const {
-  resolveFee, clientUsage, clientUsageAll, counselorLoad, nextWeekHint, checkBooking, parseOptions, noShowCharge
+  resolveFee, clientUsage, clientUsageAll, counselorLoad, nextWeekHint, checkBooking, parseOptions, noShowCharge,
+  counselorMonthSessions, sumByPlan, sumTotals
 } = require('../plans');
 
 const router = express.Router();
@@ -18,7 +19,9 @@ const PLAN_FIELDS = ['name', 'kind', 'appt_type', 'fee_mode', 'fee', 'fee_option
   // 年報表用：類別代碼（如 0 指定／1 派案／3 機構／30 機構指定／31 機構派案）與個案編碼標記（如「青壯」「國軍」）
   'report_code', 'code_prefix',
   // 方案的外部作業網址（如國軍方案的個案註冊與晤談簽到）
-  'register_url', 'signin_url'];
+  'register_url', 'signin_url',
+  // 對應的合作單位：填了之後，這個方案的晤談就併入該單位的月結請款單
+  'partner_id'];
 
 function normalizePlan(b, base = {}) {
   const d = { ...base };
@@ -497,6 +500,25 @@ router.get('/plan-income/:counselorId/detail', requireStaff('reports'), (req, re
     total_gross: detail.reduce((a, b) => a + (b.fee || 0) + (b.subsidy_amount || 0), 0),
     total_share: detail.reduce((a, b) => a + (b.counselor_share || 0), 0),
     center_name: getSetting('center_name')
+  });
+});
+
+// 心理師本人的當月收支與服務明細。
+//
+// 「我的報酬確認」原本只顯示所方開好的報酬單金額，心理師無從核對那個數字怎麼來的。
+// 這裡把同一個月的逐筆晤談、方案別彙總與撥款狀態一起給他本人，簽名前對得起來：
+// 哪幾場、每場多少、機構案的錢所方到帳了沒有。
+//
+// 只回本人資料（不吃 counselor_id 參數），因此不需要 reports 權限；
+// 要看全所的仍是「心理師收支」頁。
+router.get('/my/income', requireStaff(), (req, res) => {
+  const month = String(req.query.month || today().slice(0, 7));
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: '月份格式應為 YYYY-MM' });
+  const rows = counselorMonthSessions(req.user.id, month);
+  res.json({
+    month, rows, plans: sumByPlan(rows), total: sumTotals(rows),
+    center_name: getSetting('center_name'),
+    counselor: { id: req.user.id, name: req.user.name, title: req.user.title || '' }
   });
 });
 

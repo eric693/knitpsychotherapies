@@ -522,6 +522,83 @@ function startServer() {
     const r = await portal.ok('POST', '/api/portal/login', { phone: '0900000001', password: rp.password });
     assert(r.ok, '登入失敗');
   });
+  // 兒青個案的手機常常只填在「法定代理人電話」（家人共用一支手機時系統本來就要櫃檯這樣填），
+  // 家長拿自己的手機來登入本來就該通 —— 這裡是實際卡住整批小朋友家長的那條路。
+  await test('小朋友沒留手機時，家長用法定代理人電話就登得進專區', async () => {
+    const kid = await admin.ok('POST', '/api/clients', {
+      name: '測試童一', phone: '', guardian_name: '測試家長',
+      guardian_phone: '0961234567', birth_date: '2016-05-05', portal_enabled: 1
+    });
+    const c = await admin.ok('GET', `/api/clients/${kid.id}`);
+    equal(c.phone || '', '', '本人手機應為空');
+    // 建檔當下就配好預設密碼（來源是法代電話末 6 碼），不必再按一次重設
+    const s1 = session();
+    const r = await s1.ok('POST', '/api/portal/login', { phone: '0961234567', password: '234567' });
+    assert(r.ok, '家長應可用自己的手機登入');
+    assert(r.must_change_password, '首次登入應強制改密碼');
+    const me = await s1.ok('GET', '/api/portal/me');
+    equal(me.id, kid.id, '登入的應是那位小朋友的專區');
+    // 號碼夾雜註記或分機也是同一支電話，不該因為格式對不上就擋人
+    const s2 = session();
+    assert((await s2.ok('POST', '/api/portal/login',
+      { phone: '096-123-4567', password: '234567' })).ok, '有分隔符號的號碼也該通');
+    await admin.ok('DELETE', `/api/clients/${kid.id}`).catch(() => {});
+  });
+  await test('建檔時沒留號碼，事後補上就自動補發專區密碼', async () => {
+    const kid = await admin.ok('POST', '/api/clients',
+      { name: '測試童二', phone: '', birth_date: '2015-03-03', portal_enabled: 1 });
+    // 沒有號碼 → 沒有密碼 → 這時當然登不進去
+    await session().fails('POST', '/api/portal/login', { phone: '0962345678', password: '345678' }, '錯誤');
+    await admin.ok('PUT', `/api/clients/${kid.id}`, { guardian_phone: '0962345678' });
+    const r = await session().ok('POST', '/api/portal/login', { phone: '0962345678', password: '345678' });
+    assert(r.ok, '補上家長電話後應自動有密碼可登入');
+    await admin.ok('DELETE', `/api/clients/${kid.id}`).catch(() => {});
+  });
+  await test('兄弟姊妹共用家長手機：登入到有密碼的那位，不會互相看到對方', async () => {
+    const a = await admin.ok('POST', '/api/clients',
+      { name: '測試童兄', phone: '', guardian_phone: '0963456789', birth_date: '2014-01-01', portal_enabled: 1 });
+    const b = await admin.ok('POST', '/api/clients',
+      { name: '測試童妹', phone: '', guardian_phone: '0963456789', birth_date: '2017-02-02', portal_enabled: 1 });
+    const s1 = session();
+    const r = await s1.ok('POST', '/api/portal/login', { phone: '0963456789', password: '456789' });
+    assert(r.ok, '共用手機應登得進來');
+    const me = await s1.ok('GET', '/api/portal/me');
+    assert([a.id, b.id].includes(me.id), '應登入其中一位');
+    equal(me.id, a.id, '同分時取先建檔的那位');
+    // 沒有櫃檯授權（client_family）之前，看不到另一位家人
+    assert(!(me.family || []).some(m => m.id === b.id), '未授權不該看得到手足');
+    await admin.ok('DELETE', `/api/clients/${a.id}`).catch(() => {});
+    await admin.ok('DELETE', `/api/clients/${b.id}`).catch(() => {});
+  });
+  // 一支手機提醒多位手足：家長綁一次 LINE，A、B、C 的上課提醒都到同一個 LINE，
+  // 前提是櫃檯先把手足授權成一家人（不自動建立，號碼可能打錯）
+  await test('同手機的手足可一次授權成一家人，LINE 一組碼全綁', async () => {
+    const mk = n => admin.ok('POST', '/api/clients',
+      { name: n, phone: '', guardian_phone: '0911111111', birth_date: '2015-06-06', portal_enabled: 1 });
+    const A = await mk('測試手足甲'), B = await mk('測試手足乙'), C = await mk('測試手足丙');
+    try {
+      const sg = await admin.ok('GET', `/api/clients/${A.id}/family/suggest`);
+      equal(sg.phone, '0911111111', '應認得共用的號碼');
+      const ids = sg.rows.map(r => r.id);
+      assert(ids.includes(B.id) && ids.includes(C.id), '應找出另外兩位手足');
+      assert(!ids.includes(A.id), '不該把自己列進來');
+      for (const id of [B.id, C.id]) {
+        await admin.ok('POST', `/api/clients/${A.id}/family`, { member_id: id, relationship: '手足' });
+      }
+      // 授權後建議清單就不再重複列出已授權的
+      const again = await admin.ok('GET', `/api/clients/${A.id}/family/suggest`);
+      equal(again.rows.length, 0, '已授權的不該再出現在建議清單');
+      // 家長登入專區：看得到兩位手足，LINE 綁定碼會一起帶上他們
+      const s1 = session();
+      await s1.ok('POST', '/api/portal/login', { phone: '0911111111', password: '111111' });
+      const me = await s1.ok('GET', '/api/portal/me');
+      equal(me.family.length, 2, '專區應看得到兩位手足');
+      const ln = await s1.ok('GET', '/api/portal/line');
+      equal(ln.family_unbound.length, 2, '綁定碼應一併綁兩位手足');
+    } finally {
+      for (const x of [A, B, C]) await admin.ok('DELETE', `/api/clients/${x.id}`).catch(() => {});
+    }
+  });
   await test('個案端自行預約', async () => {
     const target = addDays(monday, 14);
     const slots = await portal.ok('GET', `/api/portal/slots?date=${target}`);
@@ -1436,6 +1513,93 @@ function startServer() {
       assert(detail.counselor, '應可取得明細');
     }
   });
+  // 心理師本人在「我的報酬確認」核對得到自己的收支與逐筆明細，
+  // 並且看得出哪幾場的錢還沒進來 —— 機構案未撥款時所方通常不先付這部分。
+  await test('心理師看得到自己的當月收支與服務明細，錢沒進來的場次會標出來', async () => {
+    const lins = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    const clients = await admin.ok('GET', '/api/clients');
+    const date = nextWeekday(3, 176);
+    const month = date.slice(0, 7);
+    const made = await admin.ok('POST', '/api/appointments', {
+      client_id: clients[0].id, counselor_id: lins.id, date, start_time: '07:00',
+      fee: 2000, override: true
+    });
+    await admin.ok('POST', `/api/appointments/${made.id}/status`, { status: 'done' });
+    try {
+      const mine = await lin.ok('GET', `/api/my/income?month=${month}`);
+      const row = mine.rows.find(r => r.id === made.id);
+      assert(row, '心理師應看得到自己這一場');
+      assert(mine.rows.every(r => r.date.startsWith(month)), '只該回當月的場次');
+      equal(mine.total.share, mine.rows.reduce((a, b) => a + b.share, 0), '報酬合計應等於逐筆加總');
+      equal(mine.total.share, mine.plans.reduce((a, b) => a + b.share, 0), '方案別彙總應與逐筆一致');
+      // 收費單還沒收款 → 判為未撥款，金額另計，不混進「已可付」
+      equal(row.settled, false, '還沒收款不該算已撥款');
+      assert(mine.total.unsettled_share >= row.share, '未撥款報酬應含這一場');
+      // 報酬帶入時可排除未撥款的場次
+      const all = (await admin.ok(`GET`, `/api/payouts/suggest?month=${month}`))
+        .find(r => r.user_id === lins.id);
+      const settledOnly = (await admin.ok('GET', `/api/payouts/suggest?month=${month}&only_settled=1`))
+        .find(r => r.user_id === lins.id);
+      assert(all.unsettled_sessions >= 1, '應回報有未撥款的場次');
+      assert(!settledOnly || settledOnly.sessions < all.sessions, '只計已撥款時場次應變少');
+      // 收款之後同一場就算撥款到位，可以併入付款
+      const inv = (await admin.ok('GET', '/api/invoices')).rows.find(i => i.appointment_id === made.id);
+      await admin.ok('POST', `/api/invoices/${inv.id}/pay`, { method: '現金' });
+      const after = await lin.ok('GET', `/api/my/income?month=${month}`);
+      equal(after.rows.find(r => r.id === made.id).settled, true, '收款後應算已撥款');
+      const afterSuggest = (await admin.ok('GET', `/api/payouts/suggest?month=${month}&only_settled=1`))
+        .find(r => r.user_id === lins.id);
+      assert(afterSuggest.sessions >= 1, '收款後應列入可付場次');
+      // 別人的收支不會從這支 API 漏出去
+      const other = await chen.ok('GET', `/api/my/income?month=${month}`);
+      assert(!other.rows.some(r => r.id === made.id), '不該看到別的心理師的場次');
+    } finally {
+      await admin.ok('POST', `/api/appointments/${made.id}/status`, { status: 'cancelled' });
+      await admin.del(`/api/appointments/${made.id}`);
+    }
+  });
+  // 合作單位底下新增的方案，要讓系統知道跟那家單位是同一件事 ——
+  // 否則名稱相同也各算各的，請款單漏掉這些場次，撥款判斷也會走錯路
+  await test('方案指定合作單位後，該方案的晤談併入該單位的請款單', async () => {
+    const pt = await admin.ok('POST', '/api/partners', { name: '測試合作單位（青壯）', type: '政府委託' });
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '測試青壯方案', kind: 'partner', fee: 0, subsidy_amount: 1800,
+      session_minutes: 40, partner_id: pt.id, portal_visible: 0
+    });
+    const lins = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    const clients = await admin.ok('GET', '/api/clients');
+    const date = nextWeekday(4, 183);
+    const month = date.slice(0, 7);
+    // 個案沒有掛在這家單位底下，只有「方案」指向它
+    const appt = await admin.ok('POST', '/api/appointments', {
+      client_id: clients[0].id, counselor_id: lins.id, date, start_time: '07:00',
+      plan_id: plan.id, override: true
+    });
+    await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'done' });
+    try {
+      const st = await admin.ok('POST', '/api/settlements', { partner_id: pt.id, month });
+      assert(st.sessions >= 1, '請款單應撈到方案帶進來的場次');
+      const detail = await admin.ok('GET', `/api/settlements/${st.id}`);
+      assert(detail.items.some(i => i.date === date), '對帳單明細應列出該場');
+      // 請款單還沒入帳 → 這場算未撥款，報酬帶入時排得掉
+      const before = (await admin.ok('GET', `/api/payouts/suggest?month=${month}&only_settled=1`))
+        .find(r => r.user_id === lins.id);
+      const all = (await admin.ok('GET', `/api/payouts/suggest?month=${month}`))
+        .find(r => r.user_id === lins.id);
+      assert(all.unsettled_sessions >= 1, '未入帳應算未撥款');
+      assert(!before || before.sessions < all.sessions, '只計已撥款時應排除它');
+      // 請款單入帳後就算撥款到位
+      await admin.ok('POST', `/api/settlements/${st.id}/status`, { status: 'paid' });
+      const mine = await lin.ok('GET', `/api/my/income?month=${month}`);
+      const row = mine.rows.find(r => r.id === appt.id);
+      equal(row.funding_channel, 'partner', '應走合作單位請款那條路');
+      equal(row.settled, true, '請款單已入帳應算已撥款');
+      await admin.ok('DELETE', `/api/settlements/${st.id}`).catch(() => {});
+    } finally {
+      await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'cancelled' }).catch(() => {});
+      await admin.del(`/api/appointments/${appt.id}`).catch(() => {});
+    }
+  });
   await test('補助方案：抽成以扣掉場地費後的金額計，場地費歸所方', async () => {
     const lins = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
     const clients = await admin.ok('GET', '/api/clients');
@@ -2341,6 +2505,53 @@ function startServer() {
     const slip = await admin.get(`/api/payouts/slip?ids=${p1.id}`);
     assert(slip.text.includes('線上簽名確認'), '報酬單應帶出線上簽名');
     assert(!slip.text.includes('______________________（簽名）'), '不該還留著手簽空格');
+  });
+  // 獎金與鐘點分列在同一張報酬單，但代扣要按合計算 ——
+  // 拆成兩張單會讓兩筆都低於起扣點而漏扣，那是報稅會出事的地方
+  await test('報酬單可加自訂項目（獎金），分列但合併計稅', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    // 鐘點 15000 與獎金 8000 各自都低於起扣點 20010，合計 23000 就要扣
+    const solo = await admin.ok('GET', '/api/payouts/preview?base_amount=15000&income_type=9A');
+    equal(solo.withholding, 0, '單獨 15000 未達起扣點不該扣');
+    const both = await admin.ok('GET',
+      '/api/payouts/preview?base_amount=15000&extra_amount=8000&income_type=9A');
+    equal(both.gross, 23000, '給付總額＝鐘點＋獎金');
+    equal(both.withholding, 2300, '合計達起扣點應扣 10%');
+    const made = await admin.ok('POST', '/api/payouts', {
+      user_id: 2, month, item: '晤談鐘點', sessions: 5,
+      base_amount: 15000, extra_item: '年終獎金', extra_amount: 8000, income_type: '9A'
+    });
+    const row = (await admin.ok('GET', `/api/payouts?month=${month}`)).rows.find(r => r.id === made.id);
+    equal(row.gross, 23000, '存下來的給付總額');
+    equal(row.base_amount, 15000, '鐘點應分開存');
+    equal(row.extra_amount, 8000, '獎金應分開存');
+    equal(row.extra_item, '年終獎金', '項目名稱應留著');
+    equal(row.net, 23000 - row.withholding - row.nhi_supplement, '實付＝合計－代扣');
+    // 報酬單上要看得到組成
+    const slip = await admin.get(`/api/payouts/slip?ids=${made.id}`);
+    assert(slip.text.includes('年終獎金'), '報酬單應列出獎金項目');
+    assert(slip.text.includes('23,000'), '報酬單應以合計列帳');
+    // 心理師本人在「我的報酬確認」也看得到拆解
+    const mine = await lin.ok('GET', `/api/my/payout-months?month=${month}`);
+    const m = mine.rows.find(r => r.id === made.id);
+    equal(m.extra_amount, 8000, '心理師端應看得到獎金');
+    // 只填獎金不填名稱會被擋（不然報酬單上會出現一筆沒名目的錢）
+    await admin.ok('PUT', `/api/payouts/${made.id}`, { extra_amount: 5000 });
+    const after = (await admin.ok('GET', `/api/payouts?month=${month}`)).rows.find(r => r.id === made.id);
+    equal(after.gross, 20000, '改獎金後合計要跟著變');
+    equal(after.extra_item, '年終獎金', '沒送名稱就沿用原本的');
+    await admin.ok('DELETE', `/api/payouts/${made.id}`).catch(() => {});
+  });
+  // 這個月只結好了其中幾位時，不必等全部結完才送
+  await test('月結可只送出指定心理師', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    const one = await admin.ok('POST', '/api/payouts',
+      { user_id: 3, month, item: '晤談鐘點', sessions: 1, base_amount: 3000, income_type: '9B' });
+    const r = await admin.ok('POST', '/api/payout-months/send', { month, user_ids: [3] });
+    equal(r.count, 1, '應只送出一位');
+    const board = await admin.ok('GET', `/api/payout-months?month=${month}`);
+    equal(board.rows.find(x => x.user_id === 3).confirm_status, 'sent', '指定的那位應為待確認');
+    await admin.ok('DELETE', `/api/payouts/${one.id}`).catch(() => {});
   });
   await test('未經本人確認不得撥款，除非明確放行', async () => {
     const month = ymd(new Date()).slice(0, 7);

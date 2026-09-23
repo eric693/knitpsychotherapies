@@ -340,7 +340,10 @@ function payoutDialog(p, month, onDone) {
         ${UI.input('pay_date', '支領日期', { type: 'date', value: d.pay_date || '' })}
         ${UI.input('item', '項目', { value: d.item || '' })}
         ${UI.input('sessions', '節數／場次', { type: 'number', value: d.sessions || '' })}
-        ${UI.input('gross', '給付總額', { type: 'number', value: d.gross || '' })}
+        ${UI.input('base_amount', '鐘點給付', { type: 'number',
+    value: d.base_amount !== undefined ? d.base_amount : (d.gross || '') })}
+        ${UI.input('extra_item', '其他項目名稱', { value: d.extra_item || '', placeholder: '如 年終獎金、值班津貼' })}
+        ${UI.input('extra_amount', '其他項目金額', { type: 'number', value: d.extra_amount || '' })}
         ${UI.select('income_type', '所得類別', INCOME_TYPES, { value: d.income_type })}
         ${UI.input('withholding', '代扣所得稅', { type: 'number', value: isNew ? '' : d.withholding })}
         ${UI.input('nhi_supplement', '二代健保補充保費', { type: 'number', value: isNew ? '' : d.nhi_supplement })}
@@ -348,36 +351,53 @@ function payoutDialog(p, month, onDone) {
       </div>
       <div class="notice" id="calc" style="margin-top:10px"></div>`,
     onOpen: el => {
-      const gross = el.querySelector('[name=gross]');
+      const base = el.querySelector('[name=base_amount]');
+      const extra = el.querySelector('[name=extra_amount]');
+      const extraItem = el.querySelector('[name=extra_item]');
       const type = el.querySelector('[name=income_type]');
       const wh = el.querySelector('[name=withholding]');
       const nhi = el.querySelector('[name=nhi_supplement]');
       const box = el.querySelector('#calc');
       let touched = !isNew;
       [wh, nhi].forEach(i => { i.oninput = () => { touched = true; show(); }; });
+      const grossOf = () => (Number(base.value) || 0) + (Number(extra.value) || 0);
       const show = () => {
-        const g = Number(gross.value) || 0;
+        const g = grossOf();
+        const e = Number(extra.value) || 0;
         const w = Number(wh.value) || 0, n = Number(nhi.value) || 0;
-        box.innerHTML = `給付總額 ${UI.fmtMoney(g)}　－代扣所得稅 ${UI.fmtMoney(w)}　－補充保費 ${UI.fmtMoney(n)}
-          　＝ <strong>實付 ${UI.fmtMoney(g - w - n)}</strong>`;
+        box.innerHTML = `${e ? `鐘點 ${UI.fmtMoney(Number(base.value) || 0)}　＋`
+          + `${UI.esc(extraItem.value || '其他')} ${UI.fmtMoney(e)}　＝ ` : ''}`
+          + `給付總額 ${UI.fmtMoney(g)}　－代扣所得稅 ${UI.fmtMoney(w)}　－補充保費 ${UI.fmtMoney(n)}
+          　＝ <strong>實付 ${UI.fmtMoney(g - w - n)}</strong>`
+          + (e ? `<div style="font-size:12.5px;color:var(--muted);margin-top:6px">
+            獎金與鐘點在報酬單上分開列，但<strong>併為同一次給付計稅</strong>——
+            代扣門檻看的是單次給付金額，拆成兩張單會讓兩筆都低於門檻而漏扣。</div>` : '');
       };
       // 未手動改過扣繳金額時，跟著給付總額即時重算
       const recalc = async () => {
-        const g = Number(gross.value) || 0;
         if (!touched) {
-          const r = await GET(`/payouts/preview?gross=${g}&income_type=${type.value}`);
+          const r = await GET(`/payouts/preview?base_amount=${Number(base.value) || 0}`
+            + `&extra_amount=${Number(extra.value) || 0}&income_type=${type.value}`);
           wh.value = r.withholding;
           nhi.value = r.nhi_supplement;
         }
         show();
       };
-      gross.oninput = () => { clearTimeout(el._t); el._t = setTimeout(recalc, 250); };
+      [base, extra].forEach(i => {
+        i.oninput = () => { clearTimeout(el._t); el._t = setTimeout(recalc, 250); };
+      });
+      extraItem.oninput = show;
       type.onchange = recalc;
       show();
     },
     onSubmit: async el => {
       const data = UI.formData(el);
-      if (!Number(data.gross)) throw new Error('請填寫給付總額');
+      if (!Number(data.base_amount) && !Number(data.extra_amount)) {
+        throw new Error('請填寫鐘點給付或其他項目金額');
+      }
+      if (Number(data.extra_amount) && !String(data.extra_item || '').trim()) {
+        throw new Error('請填寫其他項目的名稱（如 年終獎金）');
+      }
       if (isNew) await POST('/payouts', data); else await PUT(`/payouts/${d.id}`, data);
       UI.toast('已儲存');
       onDone && onDone();
@@ -471,11 +491,27 @@ App.page('payouts', {
           <td>${CONFIRM[r.confirm_status] || UI.tag('尚未送出', 'warn')}
             ${r.reply_note ? `<br><span style="font-size:12.5px;color:var(--danger)">${UI.esc(r.reply_note)}</span>` : ''}</td>
           <td style="font-size:12.5px">${UI.esc((r.confirmed_at || r.sent_at || '').slice(0, 16))}</td>
-          <td>${r.confirm_status === 'disputed' || r.confirm_status === 'confirmed'
-    ? `<button class="btn tiny secondary" data-reopen="${r.user_id}">重送確認</button>` : ''}</td></tr>`))}
-        <div class="toolbar" style="margin-top:10px"><div class="spacer"></div>
-          <button class="btn secondary" id="send-confirm">送出本月結算給心理師確認</button></div>
+          <td style="white-space:nowrap">${r.confirm_status === 'disputed' || r.confirm_status === 'confirmed'
+    ? `<button class="btn tiny secondary" data-reopen="${r.user_id}">重送確認</button>`
+    : `<button class="btn tiny" data-send="${r.user_id}">送出</button>`}</td></tr>`))}
+        <div class="toolbar" style="margin-top:10px">
+          <span style="font-size:12.5px;color:var(--muted)">
+            某一位的金額先結好了就按那一列的「送出」，不必等整個月全部結完</span>
+          <div class="spacer"></div>
+          <button class="btn secondary" id="send-confirm">整月一次送出</button></div>
       </div>` : '';
+      // 逐位送出：常見情形是這個月只結好了其中幾位，整月送出會把還沒結完的也送過去
+      el.querySelectorAll('[data-send]').forEach(b => {
+        b.onclick = async () => {
+          const row = cm.rows.find(r => r.user_id === Number(b.dataset.send));
+          if (!await UI.confirm(`把 ${month} 的結算送給${row.user_name}確認？`
+            + `實付合計 ${UI.fmtMoney(row.net)}，共 ${row.count} 筆。`)) return;
+          try {
+            await POST('/payout-months/send', { month, user_ids: [row.user_id] });
+            UI.toast(`已送出給${row.user_name}`); draw();
+          } catch (e) { UI.err(e); }
+        };
+      });
       el.querySelectorAll('[data-reopen]').forEach(b => {
         b.onclick = () => UI.modal({
           title: '重送月結供確認',
@@ -492,7 +528,7 @@ App.page('payouts', {
       });
       const sc = el.querySelector('#send-confirm');
       if (sc) sc.onclick = async () => {
-        if (!await UI.confirm(`把 ${month} 的結算送給心理師確認？已確認過的不受影響。`)) return;
+        if (!await UI.confirm(`把 ${month} 的結算送給當月有報酬單的全部心理師確認？已確認過的不受影響。`)) return;
         try {
           const r = await POST('/payout-months/send', { month });
           UI.toast(`已送出給 ${r.count} 位心理師`); draw();
@@ -509,8 +545,14 @@ App.page('payouts', {
           d.rows.map(p => `<tr>
             <td>${p.month}${p.batch_id ? ` <span class="tag">拆單 ${p.batch_seq}/${p.batch_total}</span>` : ''}</td>
             <td>${p.pay_date || '-'}</td>
-            <td>${UI.esc(p.user_name)}</td><td>${UI.esc(p.item)}</td>
-            <td>${p.sessions || '-'}</td><td>${UI.fmtMoney(p.gross)}</td><td>${p.income_type}</td>
+            <td>${UI.esc(p.user_name)}</td>
+            <td>${UI.esc(p.item)}${p.extra_amount
+    ? `<br><span style="font-size:12px;color:var(--muted)">＋${UI.esc(p.extra_item || '獎金')}</span>` : ''}</td>
+            <td>${p.sessions || '-'}</td>
+            <td>${UI.fmtMoney(p.gross)}${p.extra_amount
+    ? `<br><span style="font-size:12px;color:var(--muted)">鐘點 ${UI.fmtMoney(p.base_amount)}
+        ／${UI.esc(p.extra_item || '獎金')} ${UI.fmtMoney(p.extra_amount)}</span>` : ''}</td>
+            <td>${p.income_type}</td>
             <td>${UI.fmtMoney(p.withholding)}</td><td>${UI.fmtMoney(p.nhi_supplement)}</td>
             <td><strong>${UI.fmtMoney(p.net)}</strong></td>
             <td>${p.status === 'paid' ? UI.tag('已付 ' + p.paid_at, 'ok') : UI.tag('待付款', 'warn')}</td>
@@ -586,23 +628,52 @@ App.page('payouts', {
     el.querySelector('#add').onclick = () => payoutDialog(null, el.querySelector('#m').value, draw);
     el.querySelector('#split').onclick = () => payoutSplitDialog(null, el.querySelector('#m').value, draw);
 
-    // 依當月已完成晤談自動帶出鐘點，省去人工加總；金額與扣繳仍可逐筆調整
+    // 依當月已完成晤談自動帶出鐘點，省去人工加總；金額與扣繳仍可逐筆調整。
+    // 機構案常常是「服務做完了、對方還沒撥款」，此時不該先付給心理師 ——
+    // 勾「只計已撥款」就把那幾場排除，未撥款的金額仍列出來，才知道自己少付了什麼。
     el.querySelector('#gen').onclick = async () => {
       const month = el.querySelector('#m').value;
-      const rows = await GET('/payouts/suggest?month=' + month);
-      if (!rows.length) return UI.toast('當月沒有已完成的晤談');
+      const load = async onlySettled => {
+        const rows = await GET(`/payouts/suggest?month=${month}${onlySettled ? '&only_settled=1' : ''}`);
+        return rows;
+      };
+      const first = await load(false);
+      if (!first.length) return UI.toast('當月沒有已完成的晤談');
+      const table = rows => `${UI.table(['', '心理師', '完成節數', '晤談收費合計', '系統試算報酬', '尚未撥款', '給付總額'],
+        rows.map((r, i) => `<tr>
+            <td><input type="checkbox" class="pk" data-i="${i}"${r.sessions ? ' checked' : ''}></td>
+            <td>${UI.esc(r.user_name)}</td>
+            <td>${r.sessions}${r.all_sessions !== r.sessions
+    ? ` <span style="color:var(--muted)">／共 ${r.all_sessions}</span>` : ''}</td>
+            <td>${UI.fmtMoney(r.fee_total)}</td>
+            <td>${UI.fmtMoney(r.share_total)}</td>
+            <td>${r.unsettled_sessions
+    ? `<span style="color:var(--warn)">${r.unsettled_sessions} 場　${UI.fmtMoney(r.unsettled_share)}</span>`
+    : '－'}</td>
+            <td><input class="gross" data-i="${i}" type="number" value="${r.share_total || r.fee_total}"
+              style="width:120px"></td></tr>`))}`;
+      let rows = first;
       UI.modal({
         title: `${month} 依晤談量帶入報酬單`,
         wide: true,
         submitText: '建立勾選項目',
-        body: `${UI.table(['', '心理師', '完成節數', '晤談收費合計', '給付總額'], rows.map((r, i) => `<tr>
-            <td><input type="checkbox" class="pk" data-i="${i}" checked></td>
-            <td>${UI.esc(r.user_name)}</td><td>${r.sessions}</td><td>${UI.fmtMoney(r.fee_total)}</td>
-            <td><input class="gross" data-i="${i}" type="number" value="${r.fee_total}" style="width:120px"></td></tr>`))}
+        body: `<label style="display:block;margin-bottom:10px">
+            <input type="checkbox" id="onlysettled"> 只計已撥款的場次（機構案請款單已入帳、自費案已收款）</label>
+          <div id="gen-rows">${table(rows)}</div>
           <label style="display:block;margin-top:10px">
             <input type="checkbox" id="autosplit" checked> 給付總額超過每筆上限（19,999）時自動拆成多筆</label>
           <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
-            預設帶入當月晤談收費合計，請依實際拆帳比例調整給付總額；扣繳金額於建立時自動試算。</div>`,
+            給付總額預設帶入系統依方案拆帳試算的報酬，可依實際情形改；扣繳金額於建立時自動試算。<br>
+            「尚未撥款」是機構案請款單還沒入帳、或收費單還沒收款的場次 ——
+            勾上方選項就不計入這次付款，等錢進來的月份再結算。</div>`,
+        onOpen: e2 => {
+          e2.querySelector('#onlysettled').onchange = async ev => {
+            try {
+              rows = await load(ev.target.checked);
+              e2.querySelector('#gen-rows').innerHTML = table(rows);
+            } catch (err) { UI.err(err); }
+          };
+        },
         onSubmit: async e2 => {
           const picks = [...e2.querySelectorAll('.pk')].filter(c => c.checked).map(c => Number(c.dataset.i));
           if (!picks.length) throw new Error('請至少勾選一位');

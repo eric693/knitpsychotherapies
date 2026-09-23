@@ -2,7 +2,7 @@
 
 const PLAN_KIND = { self: '自費', subsidy: '補助方案', partner: '合作單位' };
 
-function planDialog(p, onDone) {
+function planDialog(p, onDone, partners = []) {
   const isNew = !p;
   const d = p || {
     kind: 'self', appt_type: 'individual', fee_mode: 'fixed', fee: App.meta.default_fee || 2000,
@@ -14,6 +14,8 @@ function planDialog(p, onDone) {
     body: `<div class="form-grid">
       ${UI.input('name', '方案名稱', { value: d.name || '', required: true, full: true })}
       ${UI.select('kind', '性質', Object.entries(PLAN_KIND), { value: d.kind })}
+      ${UI.select('partner_id', '對應的合作單位',
+    [['', '（不對應，走個案收費單）'], ...partners.map(x => [x.id, x.name])], { value: d.partner_id || '' })}
       ${UI.select('appt_type', '晤談類型', App.enumOptions('appt_type'), { value: d.appt_type })}
       ${UI.select('fee_mode', '收費方式', [['fixed', '固定金額'], ['choice', '預約時挑選金額']], { value: d.fee_mode })}
       ${UI.input('fee', '金額（預設）', { type: 'number', value: d.fee || 0 })}
@@ -133,6 +135,8 @@ App.page('plans', {
   module: 'settings',
   async render(el) {
     const plans = await GET('/service-plans');
+    // 方案可指定對應的合作單位；沒有 partners 權限的人拿不到清單，就維持原本不對應的樣子
+    const partners = await GET('/partners').then(r => (r.rows || r) || []).catch(() => []);
     // 一層設定在「指定案／派案」下各是什麼數字。派案沒另訂就寫「同指定案」，
     // 免得畫面上兩個一樣的數字讓人以為設錯了。
     const oneShare = (mode, pct, fixed) => (mode === 'fixed'
@@ -241,9 +245,9 @@ App.page('plans', {
       help.style.display = open ? '' : 'none';
       ht.textContent = open ? '收合說明' : '展開說明';
     };
-    el.querySelector('#add').onclick = () => planDialog(null, reload);
+    el.querySelector('#add').onclick = () => planDialog(null, reload, partners);
     const find = id => plans.find(p => p.id === Number(id));
-    el.querySelectorAll('[data-ep]').forEach(b => { b.onclick = () => planDialog(find(b.dataset.ep), reload); });
+    el.querySelectorAll('[data-ep]').forEach(b => { b.onclick = () => planDialog(find(b.dataset.ep), reload, partners); });
     el.querySelectorAll('[data-at]').forEach(b => { b.onclick = () => topicDialog(Number(b.dataset.at), null, reload); });
     el.querySelectorAll('[data-ar]').forEach(b => { b.onclick = () => rateDialog(find(b.dataset.ar), null, reload); });
     el.querySelectorAll('[data-dp]').forEach(b => {

@@ -1,6 +1,7 @@
 const express = require('express');
 const { db, audit, today, addDays, getSetting, listSetting } = require('../db');
 const { requireStaff } = require('../auth');
+const { counselorMonthSessions } = require('../plans');
 
 const router = express.Router();
 
@@ -153,6 +154,25 @@ router.get('/ce-summary', requireStaff('hr'), (req, res) => {
 // 外聘心理師、督導的鐘點多屬執行業務所得（9A／9B），所方為扣繳義務人，
 // 須代扣所得稅並於達門檻時扣繳二代健保補充保費。所得稅率、起扣點皆可於系統設定調整。
 
+// 一張報酬單的金額：鐘點（base）與自訂項目（獎金、津貼…）分開存，合計才是課稅基礎。
+// 代扣門檻看的是「這一次給付多少」，所以獎金另開一張單會讓兩筆都低於門檻而不扣，
+// 與實際給付情形不符；分列同一張單、合併計稅才對得上。
+function amountsOf(b, base = {}) {
+  const num = (v, d) => (v === undefined || v === '' ? d : Math.round(Number(v) || 0));
+  // 舊介面只送 gross，視為全部都是鐘點
+  const baseAmount = b.base_amount !== undefined || b.extra_amount !== undefined
+    ? num(b.base_amount, base.base_amount || 0)
+    : num(b.gross, base.base_amount || 0);
+  const extraAmount = num(b.extra_amount, base.extra_amount || 0);
+  const extraItem = String(b.extra_item === undefined ? (base.extra_item || '') : b.extra_item).slice(0, 40);
+  return {
+    base_amount: Math.max(0, baseAmount),
+    extra_amount: Math.max(0, extraAmount),
+    extra_item: extraAmount ? (extraItem || '獎金') : '',
+    gross: Math.max(0, baseAmount) + Math.max(0, extraAmount)
+  };
+}
+
 // 依給付總額與所得類別算出應扣金額。薪資所得（50）走薪資扣繳表，
 // 非本系統試算範圍，故僅計補充保費，所得稅留給人工填。
 function calcDeduction(gross, incomeType) {
@@ -167,8 +187,8 @@ function calcDeduction(gross, incomeType) {
 
 // 試算：前端輸入金額時即時顯示，不寫入資料
 router.get('/payouts/preview', requireStaff('payouts'), (req, res) => {
-  const gross = Number(req.query.gross) || 0;
-  res.json({ gross, ...calcDeduction(gross, req.query.income_type || '9B') });
+  const a = amountsOf(req.query);
+  res.json({ ...a, ...calcDeduction(a.gross, req.query.income_type || '9B') });
 });
 
 router.get('/payouts', requireStaff('payouts'), (req, res) => {
@@ -195,15 +215,35 @@ router.get('/payouts', requireStaff('payouts'), (req, res) => {
   });
 });
 
-// 依當月已完成晤談自動帶出鐘點：省去人工逐筆加總，金額仍可手改
+// 依當月已完成晤談自動帶出鐘點：省去人工逐筆加總，金額仍可手改。
+//
+// 除了原本的晤談收費合計，一併帶出系統依方案拆帳算出的「心理師報酬」，
+// 以及其中有多少還沒收到錢（機構案請款單未入帳、或收費單還沒收款）。
+// 帶 only_settled=1 時金額只計已撥款的場次，未撥款的那幾場留到錢進來的月份再付 ——
+// 不論勾不勾，未撥款的數字都會回傳，行政看得到自己少付了什麼。
 router.get('/payouts/suggest', requireStaff('payouts'), (req, res) => {
-  const month = req.query.month || today().slice(0, 7);
-  const from = month + '-01', to = month + '-31';
-  res.json(db.prepare(`SELECT u.id AS user_id, u.name AS user_name, u.license_type,
-      COUNT(*) AS sessions, COALESCE(SUM(a.fee), 0) AS fee_total
+  const month = String(req.query.month || today().slice(0, 7));
+  const onlySettled = ['1', 'true', 'yes'].includes(String(req.query.only_settled || ''));
+  const users = db.prepare(`SELECT DISTINCT u.id AS user_id, u.name AS user_name, u.license_type
     FROM appointments a JOIN users u ON u.id = a.counselor_id
-    WHERE a.status = 'done' AND a.date BETWEEN ? AND ?
-    GROUP BY u.id ORDER BY u.name`).all(from, to));
+    WHERE a.status = 'done' AND substr(a.date,1,7) = ? ORDER BY u.name`).all(month);
+  res.json(users.map(u => {
+    const all = counselorMonthSessions(u.user_id, month).filter(r => r.status === 'done');
+    const settled = all.filter(r => r.settled);
+    const unsettled = all.filter(r => !r.settled);
+    const use = onlySettled ? settled : all;
+    const sum = (list, k) => list.reduce((a, b) => a + (b[k] || 0), 0);
+    return {
+      ...u,
+      sessions: use.length,
+      fee_total: sum(use, 'self_pay'),
+      share_total: sum(use, 'share'),
+      all_sessions: all.length,
+      unsettled_sessions: unsettled.length,
+      unsettled_share: sum(unsettled, 'share'),
+      unsettled_fee: sum(unsettled, 'self_pay')
+    };
+  }));
 });
 
 router.post('/payouts', requireStaff('payouts'), (req, res) => {
@@ -211,15 +251,18 @@ router.post('/payouts', requireStaff('payouts'), (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(b.user_id) || 0);
   if (!u) return res.status(400).json({ error: '請選擇心理師' });
   if (!b.month) return res.status(400).json({ error: '請選擇給付月份' });
-  const gross = Number(b.gross) || 0;
+  const a = amountsOf(b);
+  const gross = a.gross;
   const auto = calcDeduction(gross, b.income_type || '9B');
   // 允許人工覆寫試算結果（例如已另行申報或適用免扣繳）
   const withholding = b.withholding === undefined || b.withholding === '' ? auto.withholding : Number(b.withholding) || 0;
   const nhi = b.nhi_supplement === undefined || b.nhi_supplement === '' ? auto.nhi_supplement : Number(b.nhi_supplement) || 0;
   const info = db.prepare(`INSERT INTO payouts
-    (user_id, month, item, sessions, gross, income_type, withholding, nhi_supplement, net, note, pay_date)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
-    u.id, b.month, b.item || '晤談鐘點', Number(b.sessions) || 0, gross, b.income_type || '9B',
+    (user_id, month, item, sessions, gross, base_amount, extra_item, extra_amount,
+     income_type, withholding, nhi_supplement, net, note, pay_date)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    u.id, b.month, b.item || '晤談鐘點', Number(b.sessions) || 0, gross,
+    a.base_amount, a.extra_item, a.extra_amount, b.income_type || '9B',
     withholding, nhi, gross - withholding - nhi, b.note || '', String(b.pay_date || ''));
   audit('staff', req.user.id, req.user.name, '新增報酬單', u.name, { month: b.month, gross });
   res.json({ id: info.lastInsertRowid });
@@ -230,12 +273,15 @@ router.put('/payouts/:id', requireStaff('payouts'), (req, res) => {
   if (!p) return res.status(404).json({ error: '找不到此報酬單' });
   if (p.status === 'paid') return res.status(400).json({ error: '已付款的報酬單不可修改，請先取消付款' });
   const b = { ...p, ...req.body };
-  const gross = Number(b.gross) || 0;
+  const a = amountsOf(req.body || {}, p);
+  const gross = a.gross;
   const withholding = Number(b.withholding) || 0;
   const nhi = Number(b.nhi_supplement) || 0;
-  db.prepare(`UPDATE payouts SET month = ?, item = ?, sessions = ?, gross = ?, income_type = ?,
+  db.prepare(`UPDATE payouts SET month = ?, item = ?, sessions = ?, gross = ?,
+      base_amount = ?, extra_item = ?, extra_amount = ?, income_type = ?,
       withholding = ?, nhi_supplement = ?, net = ?, note = ?, pay_date = ? WHERE id = ?`).run(
-    b.month, b.item || '', Number(b.sessions) || 0, gross, b.income_type,
+    b.month, b.item || '', Number(b.sessions) || 0, gross,
+    a.base_amount, a.extra_item, a.extra_amount, b.income_type,
     withholding, nhi, gross - withholding - nhi, b.note || '', String(b.pay_date || ''), p.id);
   audit('staff', req.user.id, req.user.name, '修改報酬單', String(p.user_id), { id: p.id });
   res.json({ ok: true });
@@ -370,12 +416,13 @@ router.post('/payouts/split', requireStaff('payouts'), (req, res) => {
   const batchId = `PB${Date.now().toString(36).toUpperCase()}${u.id}`;
   const item = b.item || '晤談鐘點';
   const sessions = Number(b.sessions) || 0;
+  // 拆單拆的是「一次給付多少」，每一筆都是鐘點；獎金要分列時請開單張報酬單，不要走拆單
   const ins = db.prepare(`INSERT INTO payouts
-    (user_id, month, item, sessions, gross, income_type, withholding, nhi_supplement, net, note,
-     pay_date, batch_id, batch_seq, batch_total)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    (user_id, month, item, sessions, gross, base_amount, income_type,
+     withholding, nhi_supplement, net, note, pay_date, batch_id, batch_seq, batch_total)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const ids = db.transaction(() => plan.parts.map(p => ins.run(
-    u.id, p.month, item, p.seq === 1 ? sessions : 0, p.gross, plan.income_type,
+    u.id, p.month, item, p.seq === 1 ? sessions : 0, p.gross, p.gross, plan.income_type,
     p.withholding, p.nhi_supplement, p.net, String(b.note || ''),
     p.pay_date, batchId, p.seq, plan.parts.length).lastInsertRowid))();
 
@@ -466,7 +513,11 @@ function slipHtml(u, rows, opts) {
   <tr><th>領款金額</th><th>日期</th><th>支領金額</th><th>代扣所得稅</th><th>二代健保</th><th>支領淨額</th></tr>
   ${rows.map((r, i) => `<tr>
     <td class="amt">${i + 1}</td><td>${dateCell(r)}</td>
-    <td class="amt">${money(r.gross)} 元</td><td class="amt">${money(r.withholding)}</td>
+    <td class="amt">${money(r.gross)} 元${r.extra_amount
+    // 獎金、津貼與鐘點分列，領款人看得出這筆錢的組成；計稅仍以合計為準
+    ? `<div style="font-size:11px;color:#667">鐘點 ${money(r.base_amount)}`
+      + `　${esc(r.extra_item || '獎金')} ${money(r.extra_amount)}</div>` : ''}</td>
+    <td class="amt">${money(r.withholding)}</td>
     <td class="amt">${money(r.nhi_supplement)}</td><td class="amt">${money(r.net)} 元</td></tr>`).join('')}
   <tr><td colspan="2"><strong>合計</strong></td>
     <td class="amt"><strong>${money(sum('gross'))} 元</strong></td>

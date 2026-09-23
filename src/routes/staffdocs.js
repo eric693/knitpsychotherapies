@@ -160,8 +160,8 @@ router.get('/staff-documents/:id/download', requireStaff(), (req, res) => {
 // ---- 當月薪資的月結確認 -----------------------------------------------------
 
 function monthRows(userId, month) {
-  return db.prepare(`SELECT id, month, item, sessions, gross, income_type, withholding,
-      nhi_supplement, net, status, pay_date, paid_at, note
+  return db.prepare(`SELECT id, month, item, sessions, gross, base_amount, extra_item, extra_amount,
+      income_type, withholding, nhi_supplement, net, status, pay_date, paid_at, note
     FROM payouts WHERE user_id = ? AND month = ? ORDER BY pay_date, id`).all(Number(userId) || 0, month);
 }
 function monthTotals(rows) {

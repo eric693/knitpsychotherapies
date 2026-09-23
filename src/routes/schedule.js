@@ -106,7 +106,13 @@ router.get('/schedule/week', requireStaff('schedule'), (req, res) => {
       FROM group_sessions s JOIN groups g ON g.id = s.group_id
       LEFT JOIN users u ON u.id = g.counselor_id LEFT JOIN rooms r ON r.id = s.room_id
       WHERE s.date BETWEEN ? AND ? AND s.status != 'cancelled' ORDER BY s.date, s.start_time`).all(start, end),
-    appointments: db.prepare(`${LIST_SQL} WHERE a.date BETWEEN ? AND ? ORDER BY a.date, a.start_time`).all(start, end)
+    appointments: db.prepare(`${LIST_SQL} WHERE a.date BETWEEN ? AND ? ORDER BY a.date, a.start_time`).all(start, end),
+    // 週檢視左側的時間刻度沿用排班表的格線設定，各所作息不同（與諮商室使用表同一組）
+    grid: {
+      start: getSetting('shift_start', '09:00'),
+      end: getSetting('shift_end', '21:00'),
+      step: Number(getSetting('shift_step', '30'))
+    }
   });
 });
 

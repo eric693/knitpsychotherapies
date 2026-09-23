@@ -192,6 +192,17 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
 
 // 個案專區以手機號碼當帳號，兩位個案填同一支號碼會登入到別人的資料，
 // 因此建檔與修改時都擋下重複（家人共用號碼的情形請留空，改由櫃檯代為操作）。
+// 專區登入與預設密碼要用的號碼：本人手機優先，沒有就用法定代理人電話。
+// 只留數字，因為櫃檯常在號碼後面補記「孩子母親」「分機 105」這類文字。
+// 回傳空字串代表這位個案沒有可用的號碼，開不了專區。
+function portalPhone(c) {
+  for (const v of [c.phone, c.guardian_phone]) {
+    const d = String(v || '').replace(/\D/g, '');
+    if (d.length >= 6) return d;
+  }
+  return '';
+}
+
 function phoneTaken(phone, excludeId) {
   const p = String(phone || '').trim();
   if (!p) return null;
@@ -205,7 +216,8 @@ router.post('/clients', requireStaff('clients'), (req, res) => {
   const dup = phoneTaken(data.phone);
   if (dup) {
     return res.status(400).json({ error: `手機 ${data.phone} 已是「${dup.name}（${dup.code}）」的號碼；`
-      + '個案專區以手機登入，重複會登入到別人的資料。如為家人共用，請將此欄留空。' });
+      + '家人共用同一支手機時，請把號碼填在「法定代理人電話」而不是這裡'
+      + '——個案專區同樣認得家長手機，家長仍登得進來。' });
   }
   data.code = req.body.code || nextClientCode();
   if (db.prepare('SELECT 1 FROM clients WHERE code = ?').get(data.code)) {
@@ -214,9 +226,10 @@ router.post('/clients', requireStaff('clients'), (req, res) => {
   if (!data.intake_date) data.intake_date = today();
   applyMinor(data);
   const warn = idNoWarning(data.id_no);
-  // 個案端預設密碼為手機末 6 碼（首次登入強制更換）
-  const phone = (data.phone || '').replace(/\D/g, '');
-  data.password_hash = phone.length >= 6 ? bcrypt.hashSync(phone.slice(-6), 10) : '';
+  // 個案端預設密碼為手機末 6 碼（首次登入強制更換）。
+  // 兒青個案的號碼通常只填在法定代理人電話，沒有這個備援就永遠開不了專區。
+  const phone = portalPhone(data);
+  data.password_hash = phone ? bcrypt.hashSync(phone.slice(-6), 10) : '';
   const cols = Object.keys(data);
   const info = db.prepare(`INSERT INTO clients (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`)
     .run(...cols.map(k => data[k]));
@@ -237,7 +250,8 @@ router.put('/clients/:id', requireStaff('clients'), (req, res) => {
     const dup = phoneTaken(data.phone, c.id);
     if (dup) {
       return res.status(400).json({ error: `手機 ${data.phone} 已是「${dup.name}（${dup.code}）」的號碼；`
-        + '個案專區以手機登入，重複會登入到別人的資料。如為家人共用，請將此欄留空。' });
+        + '家人共用同一支手機時，請把號碼填在「法定代理人電話」而不是這裡'
+        + '——個案專區同樣認得家長手機，家長仍登得進來。' });
     }
   }
   if (data.status === 'closed' && !data.close_date) data.close_date = today();
@@ -246,6 +260,16 @@ router.put('/clients/:id', requireStaff('clients'), (req, res) => {
   db.prepare(`UPDATE clients SET ${Object.keys(data).map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
     .run(...Object.values(data), c.id);
   audit('staff', req.user.id, req.user.name, '修改個案資料', c.code);
+  // 建檔當下沒留號碼的（兒青個案很常是事後才補家長電話），密碼在那時是空的，
+  // 專區等於開了卻進不去。補上號碼就順手把預設密碼補出來，不必再記得去按「重設密碼」。
+  if (!c.password_hash && (data.phone !== undefined || data.guardian_phone !== undefined)) {
+    const phone = portalPhone({ ...c, ...data });
+    if (phone) {
+      db.prepare('UPDATE clients SET password_hash = ?, must_change_password = 1 WHERE id = ?')
+        .run(bcrypt.hashSync(phone.slice(-6), 10), c.id);
+      audit('staff', req.user.id, req.user.name, '補發個案端預設密碼', c.code);
+    }
+  }
   // 由未結案轉為結案時，依系統設定自動建立結案後的關懷追蹤點
   let followUps = 0;
   if (data.status === 'closed' && c.status !== 'closed') {
@@ -314,8 +338,10 @@ router.delete('/clients/:id', requireStaff('clients'), (req, res) => {
 router.post('/clients/:id/reset-password', requireStaff('clients'), (req, res) => {
   const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: '找不到此個案' });
-  const phone = (c.phone || '').replace(/\D/g, '');
-  if (phone.length < 6) return res.status(400).json({ error: '個案未留存有效手機號碼，無法重設' });
+  const phone = portalPhone(c);
+  if (!phone) {
+    return res.status(400).json({ error: '個案與法定代理人都沒有留存有效手機號碼，無法重設' });
+  }
   db.prepare('UPDATE clients SET password_hash = ?, must_change_password = 1 WHERE id = ?')
     .run(bcrypt.hashSync(phone.slice(-6), 10), c.id);
   audit('staff', req.user.id, req.user.name, '重設個案端密碼', c.code);
@@ -358,6 +384,28 @@ function familyOf(clientId) {
     FROM client_family f JOIN clients c ON c.id = f.member_id
     WHERE f.client_id = ? ORDER BY c.name`).all(Number(clientId) || 0);
 }
+// 同一支手機底下的其他個案 —— 幾乎都是手足或親子。
+//
+// 兒青個案的號碼常常只填在法定代理人電話，一個家長帶兩三個孩子來，
+// 櫃檯要一個一個開「授權家人代訂」很費事，漏掉的話家長在專區只看得到其中一個孩子，
+// LINE 也只綁得到一個人的提醒。這支列出候選，由櫃檯確認後一次授權 —— 不自動建立，
+// 因為手機號碼可能打錯，授權等於讓一位家人看得到另一位的排程。
+router.get('/clients/:id/family/suggest', requireStaff('clients'), (req, res) => {
+  const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!c) return res.status(404).json({ error: '找不到此個案' });
+  const key = portalPhone(c);
+  if (!key) return res.json({ phone: '', rows: [] });
+  const already = new Set(familyOf(c.id).map(f => f.member_id));
+  const rows = db.prepare('SELECT * FROM clients WHERE active = 1 AND id != ?').all(c.id)
+    .filter(x => portalPhone(x) === key && !already.has(x.id))
+    .map(x => ({
+      id: x.id, code: x.code, name: x.name, birth_date: x.birth_date, is_minor: !!x.is_minor,
+      // 姓不同時特別標出來：可能是重組家庭，也可能是號碼打錯，請櫃檯看過再授權
+      same_surname: String(x.name || '').slice(0, 1) === String(c.name || '').slice(0, 1)
+    }));
+  res.json({ phone: key, rows });
+});
+
 router.post('/clients/:id/family', requireStaff('clients'), (req, res) => {
   const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: '找不到此個案' });

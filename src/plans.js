@@ -380,9 +380,98 @@ function pickRoom({ date, start_time, end_time, exclude_appointment_id }) {
   return free ? free.id : null;
 }
 
+// ---- 這場晤談的錢進來了沒有 ----
+//
+// 兩條路都要認：個案綁了合作單位的，錢走「合作單位與請款」的月結請款單，
+// 以請款單「已入帳」為準；其餘（含補助方案）走收費單，以收費單「已收款」為準。
+// 機構案在撥款前只要不按「收款」，這裡就會判為未撥款 —— 報酬帶入時可據此排除。
+//
+// 報酬要不要列入當月付款、明細上顯示什麼狀態，都只用這一個判斷，不要各處各寫一套。
+function fundingState(r) {
+  // 個案掛在合作單位底下，或這場用的方案指定了合作單位，都算機構案
+  const partnerId = r.partner_id || r.plan_partner_id || 0;
+  if (partnerId && r.settlement_status) {
+    return { channel: 'partner', status: r.settlement_status, settled: r.settlement_status === 'paid' };
+  }
+  if (partnerId) return { channel: 'partner', status: 'none', settled: false };
+  const s = r.invoice_status || '';
+  return { channel: 'invoice', status: s || 'none', settled: s === 'paid' };
+}
+
+// 一位心理師某個月的每一場晤談，連同金額拆解與撥款狀態。
+// 「我的報酬確認」與「報酬帶入時排除未撥款」共用同一份資料，兩邊的數字才不會打架。
+function counselorMonthSessions(counselorId, month) {
+  const rows = db.prepare(`SELECT a.id, a.date, a.start_time, a.end_time, a.status, a.fee, a.subsidy_amount,
+      a.counselor_share, a.plan_id, a.topic_id, a.client_id,
+      c.code AS client_code, c.name AS client_name, c.partner_id,
+      p.partner_id AS plan_partner_id,
+      COALESCE(pt.name, pp.name) AS partner_name,
+      p.name AS plan_name, p.kind AS plan_kind, t.name AS topic_name,
+      (SELECT i.status FROM invoices i WHERE i.appointment_id = a.id AND i.status != 'void' LIMIT 1) AS invoice_status,
+      (SELECT s.status FROM settlements s
+        WHERE s.partner_id = COALESCE(c.partner_id, p.partner_id)
+        AND s.month = substr(a.date,1,7) LIMIT 1) AS settlement_status
+    FROM appointments a
+    LEFT JOIN clients c ON c.id = a.client_id
+    LEFT JOIN service_plans p2 ON p2.id = a.plan_id
+    LEFT JOIN partners pt ON pt.id = c.partner_id
+    LEFT JOIN partners pp ON pp.id = p2.partner_id
+    LEFT JOIN service_plans p ON p.id = a.plan_id
+    LEFT JOIN plan_topics t ON t.id = a.topic_id
+    WHERE a.counselor_id = ? AND substr(a.date,1,7) = ? AND a.status IN ('done','no_show')
+    ORDER BY a.date, a.start_time`).all(Number(counselorId) || 0, month);
+
+  return rows.map(r => {
+    const q = resolveFee({ plan_id: r.plan_id, topic_id: r.topic_id, counselor_id: Number(counselorId) || 0,
+      fee_override: r.fee, client_id: r.client_id });
+    // 未到只收部分費用：自付、方案給付、場地費與報酬都按同一比例縮放，各項才一致
+    const rate = r.status === 'no_show' ? noShowCharge(r.fee).rate : 1;
+    const self_pay = Math.round((r.fee || 0) * rate);
+    const subsidy = Math.round((r.subsidy_amount || 0) * rate);
+    const venue = Math.round((q.venue_fee || 0) * rate);
+    const share = Math.round((r.counselor_share || q.counselor_share) * rate);
+    const f = fundingState(r);
+    return { ...r, self_pay, subsidy, venue, share, gross: self_pay + subsidy,
+      funding_channel: f.channel, funding_status: f.status, settled: f.settled };
+  });
+}
+
+// 方案別彙總（心理師本人看的版本：重點在自己的報酬，所方淨收仍列出以便對帳）
+function sumByPlan(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.plan_id || 0;
+    if (!map.has(key)) {
+      map.set(key, { plan_id: r.plan_id, plan_name: r.plan_name || '未指定方案', plan_kind: r.plan_kind || '',
+        sessions: 0, no_shows: 0, gross: 0, subsidy: 0, self_pay: 0, venue: 0, share: 0,
+        settled_share: 0, unsettled_share: 0 });
+    }
+    const p = map.get(key);
+    if (r.status === 'no_show') p.no_shows++; else p.sessions++;
+    p.gross += r.gross; p.subsidy += r.subsidy; p.self_pay += r.self_pay;
+    p.venue += r.venue; p.share += r.share;
+    if (r.settled) p.settled_share += r.share; else p.unsettled_share += r.share;
+  }
+  return [...map.values()].sort((a, b) => b.share - a.share);
+}
+
+function sumTotals(rows) {
+  const t = { sessions: 0, no_shows: 0, gross: 0, subsidy: 0, self_pay: 0, venue: 0, share: 0,
+    settled_share: 0, unsettled_share: 0, unsettled_sessions: 0 };
+  for (const r of rows) {
+    if (r.status === 'no_show') t.no_shows++; else t.sessions++;
+    t.gross += r.gross; t.subsidy += r.subsidy; t.self_pay += r.self_pay;
+    t.venue += r.venue; t.share += r.share;
+    if (r.settled) t.settled_share += r.share;
+    else { t.unsettled_share += r.share; t.unsettled_sessions++; }
+  }
+  return t;
+}
+
 module.exports = {
   defaultSessionMinutes, sessionMinutes, endTime,
   COUNTED_STATUSES, getPlan, getTopic, getRate, parseOptions, resolveFee, resolveAssignType, shareOf,
   clientUsage, clientUsageAll, counselorLoad, nextWeekHint, weekRange, checkBooking, pickRoom, noShowCharge,
-  earliestBookableDate, bookingCutoffReason
+  earliestBookableDate, bookingCutoffReason,
+  fundingState, counselorMonthSessions, sumByPlan, sumTotals
 };

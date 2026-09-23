@@ -211,6 +211,8 @@ App.page('schedule', {
   sub: '週檢視：同一心理師或諮商室時段衝突會即時擋下；下方為諮商室使用表',
   help: [
     '<strong>週檢視</strong>：點任一張預約卡可看明細，並做「狀態異動／修改／刪除」。卡片顏色＝預約狀態，對照表在表格上方。',
+    '左欄是時間刻度（起訖與每格分鐘數在「系統設定 → 排班表格線」調整），'
+      + '點任一個空格就直接用那天那個時間開新預約；排在設定範圍外的時段，格線會自動往外延伸蓋住它。',
     '右上「新增預約」排新的一筆；同一心理師或同一諮商室撞時段會直接擋下。',
     '下方是「諮商室使用表」，看各間諮商室的使用狀況；點有人的格子可改那筆預約，點空格可在那個時段新增。',
     '每週可預約時段與請假已移到選單的「心理師排班／請假」。',
@@ -228,30 +230,63 @@ App.page('schedule', {
     const days = Array.from({ length: 7 }, (_, i) => UI.addDays(start, i));
     const filterC = localStorage.getItem('mc-week-counselor') || '';
 
-    const cell = date => {
-      const match = cid => !filterC || String(cid) === filterC;
-      const offs = (data.time_off || []).filter(o => date >= o.start_date && date <= o.end_date && match(o.counselor_id));
+    const match = cid => !filterC || String(cid) === filterC;
+    const mins = t => { const [h, m] = String(t || '0:0').split(':').map(Number); return h * 60 + (m || 0); };
+    const hhmm = n => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+
+    // 一週的東西先依日期＋開始時間攤平，之後才好塞進時間格線
+    const chipsOf = date => {
+      const offs = (data.time_off || [])
+        .filter(o => date >= o.start_date && date <= o.end_date && match(o.counselor_id));
       const groups = (data.group_sessions || []).filter(g => g.date === date && match(g.counselor_id));
-      const list = data.appointments
-        .filter(a => a.date === date && match(a.counselor_id))
-        .sort((x, y) => x.start_time.localeCompare(y.start_time));
-      const offHtml = offs.map(o => `<div class="appt-chip off">請假：${UI.esc(o.counselor_name)}
-        <span style="font-size:11.5px">${o.all_day ? '全天' : o.start_time + '-' + o.end_time}
-        ${o.reason ? '／' + UI.esc(o.reason) : ''}</span></div>`).join('');
-      const groupHtml = groups.map(g => `<div class="appt-chip group" data-gs="${g.group_id}">
-        <strong>${g.start_time}</strong> ${UI.esc(g.group_name)}<br>
-        <span style="font-size:11.5px">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}
-        ${g.room_name ? '／' + UI.esc(g.room_name) : ''}</span></div>`).join('');
-      // 個案與心理師分行並各自加標籤，避免兩個名字擠在一起看不出誰是誰
-      const apptHtml = list.map(a => `<div class="appt-chip ${a.status}" data-appt="${a.id}">
-        <strong>${a.start_time}</strong>
-        <span class="who who-client">個案</span> ${UI.esc(a.client_name)}
-        ${a.risk_level === 'high' ? '⚠' : ''}${a.confirmed_at ? '　✅已確認' : ''}${a.cancel_requested_at ? '　🕓申請取消' : ''}<br>
-        <span style="font-size:11.5px"><span class="who who-staff">心理師</span> ${UI.esc(a.counselor_name)}
-        ${a.mode === 'online' ? '／視訊' : a.room_name ? '／' + UI.esc(a.room_name) : ''}</span></div>`).join('');
-      const all = offHtml + groupHtml + apptHtml;
-      return all || '<div style="color:var(--muted);font-size:12.5px">—</div>';
+      const appts = data.appointments.filter(a => a.date === date && match(a.counselor_id));
+      return [
+        ...offs.map(o => ({
+          time: o.all_day ? null : o.start_time,
+          html: `<div class="appt-chip off">請假：${UI.esc(o.counselor_name)}
+            <span style="font-size:11.5px">${o.all_day ? '全天' : o.start_time + '-' + o.end_time}
+            ${o.reason ? '／' + UI.esc(o.reason) : ''}</span></div>`
+        })),
+        ...groups.map(g => ({
+          time: g.start_time,
+          html: `<div class="appt-chip group" data-gs="${g.group_id}">
+            <strong>${g.start_time}</strong> ${UI.esc(g.group_name)}<br>
+            <span style="font-size:11.5px">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}
+            ${g.room_name ? '／' + UI.esc(g.room_name) : ''}</span></div>`
+        })),
+        // 個案與心理師分行並各自加標籤，避免兩個名字擠在一起看不出誰是誰
+        ...appts.map(a => ({
+          time: a.start_time,
+          html: `<div class="appt-chip ${a.status}" data-appt="${a.id}">
+            <strong>${a.start_time}</strong>
+            <span class="who who-client">個案</span> ${UI.esc(a.client_name)}
+            ${a.risk_level === 'high' ? '⚠' : ''}${a.confirmed_at ? '　✅已確認' : ''}${a.cancel_requested_at ? '　🕓申請取消' : ''}<br>
+            <span style="font-size:11.5px"><span class="who who-staff">心理師</span> ${UI.esc(a.counselor_name)}
+            ${a.mode === 'online' ? '／視訊' : a.room_name ? '／' + UI.esc(a.room_name) : ''}</span></div>`
+        }))
+      ];
     };
+    const byDay = Object.fromEntries(days.map(dt => [dt, chipsOf(dt)]));
+
+    // 格線沿用排班表的設定；但若有排在設定範圍外的時段（臨時早上 08:00 加診之類），
+    // 就把格線往外延伸到蓋得住它，不然那筆會無處可放，等於在表上消失。
+    const grid = data.grid || { start: '09:00', end: '21:00', step: 30 };
+    const step = Math.max(10, Number(grid.step) || 30);
+    const timed = days.flatMap(dt => byDay[dt].filter(c => c.time !== null).map(c => mins(c.time)));
+    let from = Math.min(mins(grid.start), ...(timed.length ? timed : [mins(grid.start)]));
+    let to = Math.max(mins(grid.end), ...(timed.length ? [Math.max(...timed) + step] : [mins(grid.end)]));
+    from = Math.floor(from / step) * step;
+    to = Math.max(to, from + step);
+    const slots = [];
+    for (let m = from; m < to; m += step) slots.push(m);
+
+    // 全天請假沒有時間可排，另立一列放在格線最上方
+    const allDay = Object.fromEntries(days.map(dt =>
+      [dt, byDay[dt].filter(c => c.time === null).map(c => c.html).join('')]));
+    const hasAllDay = days.some(dt => allDay[dt]);
+    const slotCell = (dt, m) => byDay[dt]
+      .filter(c => c.time !== null && mins(c.time) >= m && mins(c.time) < m + step)
+      .sort((a, b) => mins(a.time) - mins(b.time)).map(c => c.html).join('');
 
     el.innerHTML = `
       <div class="toolbar">
@@ -275,9 +310,23 @@ App.page('schedule', {
         <span class="appt-chip off">請假</span>
       </div>
       <div class="table-wrap"><table class="list week-table"><thead><tr>
+        <th class="time-col">時間</th>
         ${days.map(dt => `<th>${dt.slice(5)}（${UI.weekdayName(dt)}）${dt === UI.today() ? ' ●' : ''}</th>`).join('')}
-      </tr></thead><tbody><tr>${days.map(dt => `<td class="week-day" data-day="${dt}"
-        style="vertical-align:top;min-width:150px;cursor:pointer" title="點空白處可在這天新增預約">${cell(dt)}</td>`).join('')}</tr></tbody></table></div>
+      </tr></thead><tbody>
+        ${hasAllDay ? `<tr class="allday-row"><td class="time-col">全天</td>
+          ${days.map(dt => `<td>${allDay[dt] || ''}</td>`).join('')}</tr>` : ''}
+        ${slots.map(m => {
+    const isHour = m % 60 === 0;
+    return `<tr class="${isHour ? 'hour-line' : ''}">
+          <td class="time-col ${isHour ? 'hour' : ''}">${hhmm(m)}</td>
+          ${days.map(dt => {
+    const html = slotCell(dt, m);
+    return `<td class="slot${html ? '' : ' is-empty'}" data-day="${dt}" data-time="${hhmm(m)}"
+              title="點一下在 ${dt.slice(5)} ${hhmm(m)} 新增預約">${html}</td>`;
+  }).join('')}
+        </tr>`;
+  }).join('')}
+      </tbody></table></div>
       <h3 style="margin:18px 0 8px">諮商室使用表</h3>
       <div id="room-panel"><div class="empty">載入中...</div></div>`;
 
@@ -286,12 +335,12 @@ App.page('schedule', {
     el.querySelector('#this').onclick = () => App.go('schedule/' + UI.today());
     el.querySelector('#fc').onchange = e => { localStorage.setItem('mc-week-counselor', e.target.value); App.go('schedule/' + start); };
     el.querySelector('#add').onclick = () => apptDialog(null, () => App.go('schedule/' + start));
-    // 點某一天的空白處就在那天開新預約（點在既有的預約上則走下方的明細）
-    el.querySelectorAll('.week-day').forEach(td => {
+    // 點格子的空白處就在那個日期與時間開新預約（點在既有的預約上則走下方的明細）
+    el.querySelectorAll('td.slot').forEach(td => {
       td.addEventListener('click', e => {
         if (e.target.closest('[data-appt], [data-gs]')) return;
         apptDialog(null, () => App.go('schedule/' + start), {
-          date: td.dataset.day, start_time: '14:00',
+          date: td.dataset.day, start_time: td.dataset.time,
           counselor_id: Number(filterC) || App.me.id
         });
       });

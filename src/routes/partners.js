@@ -63,6 +63,14 @@ router.get('/partners/:id', requireStaff('partners'), (req, res) => {
   });
 });
 
+// 哪些晤談算這家單位的：個案掛在該單位底下，或這場用的方案指定了該單位。
+// 後者是為了「合作單位新增了青壯方案」這種情形 —— 方案名稱與單位同名，系統本來看不出是同一件事，
+// 要在方案設定填「對應的合作單位」才接得起來。兩條路取聯集，個案與方案各自掛哪邊都認。
+const PARTNER_APPTS = `FROM appointments a
+  LEFT JOIN clients c ON c.id = a.client_id
+  LEFT JOIN service_plans sp ON sp.id = a.plan_id
+  WHERE (c.partner_id = ? OR sp.partner_id = ?) AND a.status = 'done' AND substr(a.date,1,7) = ?`;
+
 // 產生某月請款單：彙整該單位個案當月已完成的晤談，依議定價計費
 router.post('/settlements', requireStaff('partners'), (req, res) => {
   const partnerId = Number(req.body && req.body.partner_id) || 0;
@@ -72,8 +80,7 @@ router.post('/settlements', requireStaff('partners'), (req, res) => {
   if (db.prepare('SELECT 1 FROM settlements WHERE partner_id = ? AND month = ?').get(partnerId, month)) {
     return res.status(400).json({ error: '該月請款單已存在' });
   }
-  const rows = db.prepare(`SELECT a.id, a.fee FROM appointments a JOIN clients c ON c.id = a.client_id
-    WHERE c.partner_id = ? AND a.status = 'done' AND substr(a.date,1,7) = ?`).all(partnerId, month);
+  const rows = db.prepare(`SELECT a.id, a.fee ${PARTNER_APPTS}`).all(partnerId, partnerId, month);
   if (!rows.length) return res.status(400).json({ error: '該月無可請款的晤談紀錄' });
   const rate = p.rate || 0;
   const amount = rate ? rows.length * rate : rows.reduce((s, r) => s + r.fee, 0);
@@ -100,11 +107,10 @@ router.get('/settlements/:id', requireStaff('partners'), (req, res) => {
     FROM settlements s JOIN partners p ON p.id = s.partner_id WHERE s.id = ?`).get(req.params.id);
   if (!s) return res.status(404).json({ error: '找不到此請款單' });
   const items = db.prepare(`SELECT a.date, a.start_time, a.type, a.fee, c.code AS client_code,
-      u.name AS counselor_name
-    FROM appointments a JOIN clients c ON c.id = a.client_id
-    LEFT JOIN users u ON u.id = a.counselor_id
-    WHERE c.partner_id = ? AND a.status = 'done' AND substr(a.date,1,7) = ?
-    ORDER BY a.date, a.start_time`).all(s.partner_id, s.month);
+      sp.name AS plan_name,
+      (SELECT name FROM users WHERE id = a.counselor_id) AS counselor_name
+    ${PARTNER_APPTS}
+    ORDER BY a.date, a.start_time`).all(s.partner_id, s.partner_id, s.month);
 
   // 明細是即時查詢，總額卻是建立當下的快照。若期間有晤談補登或狀態異動，兩者會對不起來。
   // 這裡只回報差異、不自動改寫金額——請款單是對外文件，數字要由人決定何時更新。
@@ -127,8 +133,7 @@ router.post('/settlements/:id/recalculate', requireStaff('partners'), (req, res)
     .get(req.params.id);
   if (!s) return res.status(404).json({ error: '找不到此請款單' });
   if (s.status !== 'draft') return res.status(400).json({ error: '已送出或已入帳的請款單不可重新計算' });
-  const rows = db.prepare(`SELECT a.fee FROM appointments a JOIN clients c ON c.id = a.client_id
-    WHERE c.partner_id = ? AND a.status = 'done' AND substr(a.date,1,7) = ?`).all(s.partner_id, s.month);
+  const rows = db.prepare(`SELECT a.fee ${PARTNER_APPTS}`).all(s.partner_id, s.partner_id, s.month);
   const amount = s.rate ? rows.length * s.rate : rows.reduce((t, r) => t + r.fee, 0);
   db.prepare('UPDATE settlements SET sessions = ?, amount = ? WHERE id = ?').run(rows.length, amount, s.id);
   audit('staff', req.user.id, req.user.name, '重算請款單', String(s.id),
@@ -190,8 +195,7 @@ function billingRows(month) {
   return partners.map(p => {
     const s = settle.find(x => x.partner_id === p.id) || null;
     // 這個月這家單位有多少可核銷的晤談，櫃檯才知道要不要開請款單
-    const sessions = db.prepare(`SELECT COUNT(*) n FROM appointments a JOIN clients c ON c.id = a.client_id
-      WHERE c.partner_id = ? AND a.status = 'done' AND substr(a.date,1,7) = ?`).get(p.id, month).n;
+    const sessions = db.prepare(`SELECT COUNT(*) n ${PARTNER_APPTS}`).get(p.id, p.id, month).n;
     return {
       id: p.id,
       name: p.name,

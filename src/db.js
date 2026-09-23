@@ -253,8 +253,15 @@ ensureColumns('payouts', {
   pay_date: "TEXT NOT NULL DEFAULT ''",              // 支領日期（列印勞務報酬單用）
   batch_id: "TEXT NOT NULL DEFAULT ''",              // 同批拆單共用的識別碼
   batch_seq: 'INTEGER NOT NULL DEFAULT 0',           // 該批中的第幾筆（1 起）
-  batch_total: 'INTEGER NOT NULL DEFAULT 0'          // 該批共幾筆
+  batch_total: 'INTEGER NOT NULL DEFAULT 0',         // 該批共幾筆
+  // 獎金、津貼這類鐘點以外的給付：與鐘點分開列在報酬單上，但併入同一張單計稅
+  // （代扣門檻是看「這一次給付多少」，分兩張單會把同一筆錢拆成兩次，門檻就判錯了）
+  base_amount: 'INTEGER NOT NULL DEFAULT 0',         // 鐘點給付（gross 扣掉獎金的部分）
+  extra_item: "TEXT NOT NULL DEFAULT ''",            // 自行輸入的項目名稱，如「年終獎金」
+  extra_amount: 'INTEGER NOT NULL DEFAULT 0'         // 該項目的金額
 });
+// 既有資料的 gross 全是鐘點，補寫回 base_amount，之後兩者才對得起來
+db.exec('UPDATE payouts SET base_amount = gross WHERE base_amount = 0 AND extra_amount = 0');
 db.exec('CREATE INDEX IF NOT EXISTS idx_payout_batch ON payouts(batch_id)');
 
 // 心理衡鑑報告書（WAIS、MMPI、魏氏、投射測驗等）：屬晤談內容層級的高敏感資料，
@@ -1189,6 +1196,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS line_binding_members (
   PRIMARY KEY (binding_id, client_id)
 );`);
 
+// 方案對應的合作單位：方案名稱與單位名稱同名（如「青壯方案」）系統也不會自己看出是同一件事，
+// 這一欄就是那條線 —— 排到該方案的晤談會自動算進這家單位的月結請款單，
+// 撥款與否也改看那張請款單，而不是個案自己的收費單。
+ensureColumns('service_plans', {
+  partner_id: 'INTEGER REFERENCES partners(id)'
+});
 ensureColumns('service_plans', {
   // 通訊（視訊）諮商這類方案預設就是線上，排約時直接帶入，不必每次改
   default_mode: "TEXT NOT NULL DEFAULT 'onsite'",
