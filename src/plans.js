@@ -413,10 +413,9 @@ function counselorMonthSessions(counselorId, month) {
         AND s.month = substr(a.date,1,7) LIMIT 1) AS settlement_status
     FROM appointments a
     LEFT JOIN clients c ON c.id = a.client_id
-    LEFT JOIN service_plans p2 ON p2.id = a.plan_id
-    LEFT JOIN partners pt ON pt.id = c.partner_id
-    LEFT JOIN partners pp ON pp.id = p2.partner_id
     LEFT JOIN service_plans p ON p.id = a.plan_id
+    LEFT JOIN partners pt ON pt.id = c.partner_id
+    LEFT JOIN partners pp ON pp.id = p.partner_id
     LEFT JOIN plan_topics t ON t.id = a.topic_id
     WHERE a.counselor_id = ? AND substr(a.date,1,7) = ? AND a.status IN ('done','no_show')
     ORDER BY a.date, a.start_time`).all(Number(counselorId) || 0, month);

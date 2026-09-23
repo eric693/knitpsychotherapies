@@ -231,7 +231,14 @@ App.page('schedule', {
     const filterC = localStorage.getItem('mc-week-counselor') || '';
 
     const match = cid => !filterC || String(cid) === filterC;
-    const mins = t => { const [h, m] = String(t || '0:0').split(':').map(Number); return h * 60 + (m || 0); };
+    // 只認得出 HH:MM 才排進時間格線；認不出來的（資料髒掉、匯入殘缺）回傳 null，
+    // 當成「沒有時間」放到全天列 —— 否則它會被算成 00:00，把整張表的格線一路拉到半夜。
+    const mins = t => {
+      const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+      if (!m) return null;
+      const v = Number(m[1]) * 60 + Number(m[2]);
+      return v >= 0 && v < 24 * 60 ? v : null;
+    };
     const hhmm = n => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
 
     // 一週的東西先依日期＋開始時間攤平，之後才好塞進時間格線
@@ -242,13 +249,13 @@ App.page('schedule', {
       const appts = data.appointments.filter(a => a.date === date && match(a.counselor_id));
       return [
         ...offs.map(o => ({
-          time: o.all_day ? null : o.start_time,
+          time: o.all_day || mins(o.start_time) === null ? null : o.start_time,
           html: `<div class="appt-chip off">請假：${UI.esc(o.counselor_name)}
             <span style="font-size:11.5px">${o.all_day ? '全天' : o.start_time + '-' + o.end_time}
             ${o.reason ? '／' + UI.esc(o.reason) : ''}</span></div>`
         })),
         ...groups.map(g => ({
-          time: g.start_time,
+          time: mins(g.start_time) === null ? null : g.start_time,
           html: `<div class="appt-chip group" data-gs="${g.group_id}">
             <strong>${g.start_time}</strong> ${UI.esc(g.group_name)}<br>
             <span style="font-size:11.5px">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}
@@ -256,7 +263,7 @@ App.page('schedule', {
         })),
         // 個案與心理師分行並各自加標籤，避免兩個名字擠在一起看不出誰是誰
         ...appts.map(a => ({
-          time: a.start_time,
+          time: mins(a.start_time) === null ? null : a.start_time,
           html: `<div class="appt-chip ${a.status}" data-appt="${a.id}">
             <strong>${a.start_time}</strong>
             <span class="who who-client">個案</span> ${UI.esc(a.client_name)}
@@ -272,9 +279,12 @@ App.page('schedule', {
     // 就把格線往外延伸到蓋得住它，不然那筆會無處可放，等於在表上消失。
     const grid = data.grid || { start: '09:00', end: '21:00', step: 30 };
     const step = Math.max(10, Number(grid.step) || 30);
+    // 設定值本身也可能被填成「9」或空白，認不出來就退回預設的 09:00–21:00
+    const gridStart = mins(grid.start) === null ? 9 * 60 : mins(grid.start);
+    const gridEnd = mins(grid.end) === null ? 21 * 60 : mins(grid.end);
     const timed = days.flatMap(dt => byDay[dt].filter(c => c.time !== null).map(c => mins(c.time)));
-    let from = Math.min(mins(grid.start), ...(timed.length ? timed : [mins(grid.start)]));
-    let to = Math.max(mins(grid.end), ...(timed.length ? [Math.max(...timed) + step] : [mins(grid.end)]));
+    let from = Math.min(gridStart, ...(timed.length ? timed : [gridStart]));
+    let to = Math.max(gridEnd, ...(timed.length ? [Math.max(...timed) + step] : [gridEnd]));
     from = Math.floor(from / step) * step;
     to = Math.max(to, from + step);
     const slots = [];
@@ -313,7 +323,7 @@ App.page('schedule', {
         <th class="time-col">時間</th>
         ${days.map(dt => `<th>${dt.slice(5)}（${UI.weekdayName(dt)}）${dt === UI.today() ? ' ●' : ''}</th>`).join('')}
       </tr></thead><tbody>
-        ${hasAllDay ? `<tr class="allday-row"><td class="time-col">全天</td>
+        ${hasAllDay ? `<tr class="allday-row"><td class="time-col">全天／未定時間</td>
           ${days.map(dt => `<td>${allDay[dt] || ''}</td>`).join('')}</tr>` : ''}
         ${slots.map(m => {
     const isHour = m % 60 === 0;

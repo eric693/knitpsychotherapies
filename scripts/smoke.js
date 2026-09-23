@@ -1600,6 +1600,38 @@ function startServer() {
       await admin.del(`/api/appointments/${appt.id}`).catch(() => {});
     }
   });
+  // 個案屬 A 單位、方案卻指向 B 單位時，這一場只能算一家 ——
+  // 兩家都算就是同一場跟兩個單位各請一次款
+  await test('個案與方案指向不同合作單位時，一場只算個案掛的那一家', async () => {
+    const A = await admin.ok('POST', '/api/partners', { name: '測試單位A', type: '學校' });
+    const B = await admin.ok('POST', '/api/partners', { name: '測試單位B', type: '企業' });
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '測試雙單位方案', kind: 'partner', fee: 1000, session_minutes: 50,
+      partner_id: B.id, portal_visible: 0
+    });
+    const lins = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    const clients = await admin.ok('GET', '/api/clients');
+    await admin.ok('PUT', `/api/clients/${clients[0].id}`, { partner_id: A.id });
+    const date = nextWeekday(1, 190);
+    const month = date.slice(0, 7);
+    const appt = await admin.ok('POST', '/api/appointments', {
+      client_id: clients[0].id, counselor_id: lins.id, date, start_time: '07:00',
+      plan_id: plan.id, override: true
+    });
+    await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'done' });
+    try {
+      const stA = await admin.ok('POST', '/api/settlements', { partner_id: A.id, month });
+      assert(stA.sessions >= 1, '應算進個案掛的 A 單位');
+      // B 單位不該看到同一場
+      const toB = await admin.post('/api/settlements', { partner_id: B.id, month });
+      equal(toB.status, 400, 'B 單位不該有可請款的場次');
+      await admin.ok('DELETE', `/api/settlements/${stA.id}`).catch(() => {});
+    } finally {
+      await admin.ok('PUT', `/api/clients/${clients[0].id}`, { partner_id: null }).catch(() => {});
+      await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'cancelled' }).catch(() => {});
+      await admin.del(`/api/appointments/${appt.id}`).catch(() => {});
+    }
+  });
   await test('補助方案：抽成以扣掉場地費後的金額計，場地費歸所方', async () => {
     const lins = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
     const clients = await admin.ok('GET', '/api/clients');

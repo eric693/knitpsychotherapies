@@ -159,17 +159,24 @@ router.get('/ce-summary', requireStaff('hr'), (req, res) => {
 // 與實際給付情形不符；分列同一張單、合併計稅才對得上。
 function amountsOf(b, base = {}) {
   const num = (v, d) => (v === undefined || v === '' ? d : Math.round(Number(v) || 0));
-  // 舊介面只送 gross，視為全部都是鐘點
-  const baseAmount = b.base_amount !== undefined || b.extra_amount !== undefined
-    ? num(b.base_amount, base.base_amount || 0)
-    : num(b.gross, base.base_amount || 0);
-  const extraAmount = num(b.extra_amount, base.extra_amount || 0);
+  const extraAmount = Math.max(0, num(b.extra_amount, base.extra_amount || 0));
   const extraItem = String(b.extra_item === undefined ? (base.extra_item || '') : b.extra_item).slice(0, 40);
+  let baseAmount;
+  if (b.base_amount !== undefined && b.base_amount !== '') {
+    baseAmount = num(b.base_amount, 0);
+  } else if (b.gross !== undefined && b.gross !== '') {
+    // 只送 gross 的舊呼叫端（批次帶入，或改版當下還開著舊畫面的人）視 gross 為「給付總額」，
+    // 鐘點＝總額扣掉既有的獎金 —— 若直接當成鐘點再加上獎金，這張單的金額會憑空多一筆。
+    baseAmount = num(b.gross, 0) - extraAmount;
+  } else {
+    baseAmount = base.base_amount || 0;
+  }
+  baseAmount = Math.max(0, baseAmount);
   return {
-    base_amount: Math.max(0, baseAmount),
-    extra_amount: Math.max(0, extraAmount),
+    base_amount: baseAmount,
+    extra_amount: extraAmount,
     extra_item: extraAmount ? (extraItem || '獎金') : '',
-    gross: Math.max(0, baseAmount) + Math.max(0, extraAmount)
+    gross: baseAmount + extraAmount
   };
 }
 
