@@ -30,9 +30,12 @@ const publicWrite = rateLimit({ windowMs: 10 * 60 * 1000, prefix: 'bookwrite:',
 function planPublic(p) {
   const topics = db.prepare('SELECT id, name, fee, fee_options FROM plan_topics WHERE plan_id = ? AND active = 1 ORDER BY sort, id')
     .all(p.id);
-  // 有設定專屬費率且開放預約的心理師優先；完全沒設定費率的方案則開放給所有在職心理師
-  const rates = db.prepare(`SELECT pc.counselor_id, pc.bookable FROM plan_counselors pc
-    WHERE pc.plan_id = ? AND pc.active = 1 AND (pc.topic_id IS NULL OR pc.topic_id = 0)`).all(p.id);
+  // 方案開了「限定心理師」才篩名單（兒青方案只讓兒童心理師接那種）；沒開就全所都列。
+  // 判斷與個案專區的 planAllowsCounselor 相同，兩邊不能各判一套。
+  const rates = p.restrict_counselors
+    ? db.prepare(`SELECT pc.counselor_id, pc.bookable FROM plan_counselors pc
+        WHERE pc.plan_id = ? AND pc.active = 1 AND (pc.topic_id IS NULL OR pc.topic_id = 0)`).all(p.id)
+    : [];
   const all = db.prepare(`SELECT id, name, title, license_type, specialty, online_only, intro FROM users
     WHERE active = 1 AND portal_bookable = 1 AND role IN ('counselor','supervisor','admin')
     ORDER BY id`).all();

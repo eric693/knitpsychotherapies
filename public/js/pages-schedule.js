@@ -23,8 +23,8 @@ async function apptDialog(appt, onDone, defaults) {
       ${UI.select('type', '晤談類型', App.enumOptions('appt_type'), { value: a.type })}
       ${UI.select('mode', '形式', App.enumOptions('appt_mode'), { value: a.mode })}
       ${UI.select('room_id', '諮商室',
-    [['', '自動指派'], ['none', '不到所（線上視訊）']].concat((App.meta.rooms || []).map(r => [r.id, r.name])),
-    { value: a.mode === 'online' ? 'none' : (a.room_id || '') })}
+    [['', '自動指派'], ['none', '不佔用空間']].concat((App.meta.rooms || []).map(r => [r.id, r.name])),
+    { value: a.mode === 'online' && !a.room_id ? 'none' : (a.room_id || '') })}
       ${UI.input('fee', '個案應付金額', { type: 'number', value: a.fee !== undefined ? a.fee : (App.meta.default_fee || 2000) })}
       <div class="form-row full" id="quota-hint" style="display:none"></div>
       ${UI.select('package_id', '扣抵方案', [['', '不扣抵（單次收費）']].concat(packages.map(p => [p.id, `${p.name}（剩 ${p.remaining} 次）`])), { value: a.package_id || '' })}
@@ -114,12 +114,27 @@ async function apptDialog(appt, onDone, defaults) {
         sel.innerHTML = ['<option value="">不扣抵（單次收費）</option>']
           .concat(list.map(p => `<option value="${p.id}">${UI.esc(p.name)}（剩 ${p.remaining} 次）</option>`)).join('');
       };
-      // 視訊不在所內進行：諮商室固定為「不到所」並鎖住，避免實體個案的空間被排到視訊上；
-      // 改回到所時放開，並回到「自動指派」由系統挑一間空的。
+      // 視訊預設不佔空間，但心理師常常是在所內的某一間做視訊 —— 那間真的被占用了，
+      // 所以欄位不鎖住，櫃檯可以挑。改回到所時回到「自動指派」由系統挑一間空的。
       const roomSel = el.querySelector('[name=room_id]');
+      const roomHint = () => {
+        const online = el.querySelector('[name=mode]').value === 'online';
+        let hint = roomSel.parentElement.querySelector('.room-hint');
+        if (!hint) {
+          hint = document.createElement('div');
+          hint.className = 'room-hint';
+          hint.style.cssText = 'font-size:12px;color:var(--muted);margin-top:4px';
+          roomSel.parentElement.appendChild(hint);
+        }
+        hint.textContent = online
+          ? '視訊若在所內某一間進行，請直接選那一間，該時段才會被占用。'
+          : '';
+      };
       const syncRoom = mode => {
-        if (mode === 'online') { roomSel.value = 'none'; roomSel.disabled = true; }
-        else { if (roomSel.value === 'none') roomSel.value = ''; roomSel.disabled = false; }
+        roomSel.disabled = false;
+        if (mode === 'online') { if (!roomSel.value) roomSel.value = 'none'; }
+        else if (roomSel.value === 'none') roomSel.value = '';
+        roomHint();
       };
       syncRoom(el.querySelector('[name=mode]').value);
       el.querySelector('[name=mode]').onchange = e => {
@@ -133,8 +148,8 @@ async function apptDialog(appt, onDone, defaults) {
     },
     onSubmit: async el => {
       const data = UI.formData(el);
-      // 選「不到所」＝不佔任何空間；欄位被鎖住時 formData 收不到，這裡依形式補回來
-      if (data.mode === 'online' || data.room_id === 'none') { data.mode = data.mode || 'online'; data.room_id = ''; }
+      // 選「不佔用空間」＝不指派任何諮商室（視訊在家或個案端連線的情形）
+      if (data.room_id === 'none') data.room_id = '';
       const save = () => (isNew ? POST('/appointments', data) : PUT(`/appointments/${a.id}`, data));
       try {
         await save();
@@ -210,9 +225,15 @@ App.page('schedule', {
   title: '預約排程',
   sub: '週檢視：同一心理師或諮商室時段衝突會即時擋下；下方為諮商室使用表',
   help: [
-    '<strong>週檢視</strong>：點任一張預約卡可看明細，並做「狀態異動／修改／刪除」。卡片顏色＝預約狀態，對照表在表格上方。',
-    '左欄是時間刻度（起訖與每格分鐘數在「系統設定 → 排班表格線」調整），'
-      + '點任一個空格就直接用那天那個時間開新預約；排在設定範圍外的時段，格線會自動往外延伸蓋住它。',
+    '<strong>週檢視</strong>：點任一張預約卡可看明細，並做「狀態異動／修改／刪除」。'
+      + '卡片顏色＝預約狀態：<span class="appt-chip booked">已預約</span>'
+      + '<span class="appt-chip arrived">已報到</span><span class="appt-chip done">已完成</span>'
+      + '<span class="appt-chip no_show">未到</span><span class="appt-chip cancelled">已取消</span>'
+      + '<span class="appt-chip group">團體</span><span class="appt-chip off">請假</span>',
+    '左欄是時間刻度（起訖與每格分鐘數在「系統設定 → 排班表格線」調整）。'
+      + '預設<strong>只顯示有排程的時段</strong>，整週一頁看得完；要在空時段開新預約，'
+      + '按「展開完整時段」把格線全部攤開，點任一空格就用那天那個時間開新預約。',
+    '下方「諮商室使用表」預設收合，點標題展開；展開或收合會記住，下次進來維持一樣。',
     '右上「新增預約」排新的一筆；同一心理師或同一諮商室撞時段會直接擋下。',
     '下方是「諮商室使用表」，看各間諮商室的使用狀況；點有人的格子可改那筆預約，點空格可在那個時段新增。',
     '每週可預約時段與請假已移到選單的「心理師排班／請假」。',
@@ -241,6 +262,11 @@ App.page('schedule', {
     };
     const hhmm = n => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
 
+    // 精簡：只留有排程的時段列，卡片也壓成一行。整週 09:00–21:00 每半小時就是 24 列、
+    // 每張卡兩行，一頁絕對看不完；實際上一天只用到幾個時段，收起來就能一眼看完整週。
+    // 要看完整資訊或在空時段開新預約，按「展開完整時段」。
+    const compact = localStorage.getItem('mc-week-compact') !== '0';
+
     // 一週的東西先依日期＋開始時間攤平，之後才好塞進時間格線
     const chipsOf = date => {
       const offs = (data.time_off || [])
@@ -256,21 +282,37 @@ App.page('schedule', {
         })),
         ...groups.map(g => ({
           time: mins(g.start_time) === null ? null : g.start_time,
-          html: `<div class="appt-chip group" data-gs="${g.group_id}">
-            <strong>${g.start_time}</strong> ${UI.esc(g.group_name)}<br>
-            <span style="font-size:11.5px">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}
-            ${g.room_name ? '／' + UI.esc(g.room_name) : ''}</span></div>`
+          html: compact
+            ? `<div class="appt-chip one group" data-gs="${g.group_id}">
+                <strong>${g.start_time}</strong> ${UI.esc(g.group_name)}
+                <span class="sub">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}</span></div>`
+            : `<div class="appt-chip group" data-gs="${g.group_id}">
+                <strong>${g.start_time}</strong> ${UI.esc(g.group_name)}<br>
+                <span style="font-size:11.5px">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}
+                ${g.room_name ? '／' + UI.esc(g.room_name) : ''}</span></div>`
         })),
         // 個案與心理師分行並各自加標籤，避免兩個名字擠在一起看不出誰是誰
-        ...appts.map(a => ({
-          time: mins(a.start_time) === null ? null : a.start_time,
-          html: `<div class="appt-chip ${a.status}" data-appt="${a.id}">
-            <strong>${a.start_time}</strong>
-            <span class="who who-client">個案</span> ${UI.esc(a.client_name)}
-            ${a.risk_level === 'high' ? '⚠' : ''}${a.confirmed_at ? '　✅已確認' : ''}${a.cancel_requested_at ? '　🕓申請取消' : ''}<br>
-            <span style="font-size:11.5px"><span class="who who-staff">心理師</span> ${UI.esc(a.counselor_name)}
-            ${a.mode === 'online' ? '／視訊' : a.room_name ? '／' + UI.esc(a.room_name) : ''}</span></div>`
-        }))
+        ...appts.map(a => {
+          const where = a.mode === 'online'
+            ? (a.room_name ? '視訊＠' + UI.esc(a.room_name) : '視訊')
+            : (a.room_name ? UI.esc(a.room_name) : '');
+          const flags = `${a.risk_level === 'high' ? '⚠' : ''}`
+            + `${a.confirmed_at ? '✅' : ''}${a.cancel_requested_at ? '🕓' : ''}`;
+          return {
+            time: mins(a.start_time) === null ? null : a.start_time,
+            // 精簡時擠成一行：個案用正常字重、心理師與空間用淡色，還是分得出誰是誰
+            html: compact
+              ? `<div class="appt-chip one ${a.status}" data-appt="${a.id}">
+                  <strong>${a.start_time}</strong> ${UI.esc(a.client_name)}${flags}
+                  <span class="sub">${UI.esc(a.counselor_name)}${where ? '／' + where : ''}</span></div>`
+              : `<div class="appt-chip ${a.status}" data-appt="${a.id}">
+                  <strong>${a.start_time}</strong>
+                  <span class="who who-client">個案</span> ${UI.esc(a.client_name)}
+                  ${a.risk_level === 'high' ? '⚠' : ''}${a.confirmed_at ? '　✅已確認' : ''}${a.cancel_requested_at ? '　🕓申請取消' : ''}<br>
+                  <span style="font-size:11.5px"><span class="who who-staff">心理師</span> ${UI.esc(a.counselor_name)}
+                  ${where ? '／' + where : ''}</span></div>`
+          };
+        })
       ];
     };
     const byDay = Object.fromEntries(days.map(dt => [dt, chipsOf(dt)]));
@@ -287,8 +329,8 @@ App.page('schedule', {
     let to = Math.max(gridEnd, ...(timed.length ? [Math.max(...timed) + step] : [gridEnd]));
     from = Math.floor(from / step) * step;
     to = Math.max(to, from + step);
-    const slots = [];
-    for (let m = from; m < to; m += step) slots.push(m);
+    const allSlots = [];
+    for (let m = from; m < to; m += step) allSlots.push(m);
 
     // 全天請假沒有時間可排，另立一列放在格線最上方
     const allDay = Object.fromEntries(days.map(dt =>
@@ -298,6 +340,9 @@ App.page('schedule', {
       .filter(c => c.time !== null && mins(c.time) >= m && mins(c.time) < m + step)
       .sort((a, b) => mins(a.time) - mins(b.time)).map(c => c.html).join('');
 
+    const slots = compact ? allSlots.filter(m => days.some(dt => slotCell(dt, m))) : allSlots;
+    const hiddenCount = allSlots.length - slots.length;
+
     el.innerHTML = `
       <div class="toolbar">
         <button class="btn secondary small" id="prev">上一週</button>
@@ -306,18 +351,9 @@ App.page('schedule', {
         <strong style="margin-left:6px">${start} ~ ${UI.addDays(start, 6)}</strong>
         <select id="fc">${App.counselorOptions(true).map(o =>
       `<option value="${o[0]}"${String(o[0]) === filterC ? ' selected' : ''}>${UI.esc(o[1])}</option>`).join('')}</select>
+        <button class="btn secondary small" id="dense">${compact ? '展開完整時段' : '收合空白時段'}</button>
         <div class="spacer"></div>
         <button class="btn" id="add">新增預約</button>
-      </div>
-      <div class="chip-legend">
-        顏色＝預約狀態：
-        <span class="appt-chip booked">已預約</span>
-        <span class="appt-chip arrived">已報到</span>
-        <span class="appt-chip done">已完成</span>
-        <span class="appt-chip no_show">未到</span>
-        <span class="appt-chip cancelled">已取消</span>
-        <span class="appt-chip group">團體</span>
-        <span class="appt-chip off">請假</span>
       </div>
       <div class="table-wrap"><table class="list week-table"><thead><tr>
         <th class="time-col">時間</th>
@@ -336,14 +372,26 @@ App.page('schedule', {
   }).join('')}
         </tr>`;
   }).join('')}
-      </tbody></table></div>
-      <h3 style="margin:18px 0 8px">諮商室使用表</h3>
-      <div id="room-panel"><div class="empty">載入中...</div></div>`;
+      </tbody></table>
+      ${compact && hiddenCount ? `<div style="font-size:12.5px;color:var(--muted);padding:6px 2px">
+        已收合 ${hiddenCount} 個沒有排程的時段。要在空時段開新預約，請按上方「展開完整時段」。</div>` : ''}
+      ${!slots.length ? '<div class="empty">本週沒有任何排程</div>' : ''}</div>
+      <details id="roombox"${localStorage.getItem('mc-week-rooms') === '1' ? ' open' : ''}>
+        <summary style="cursor:pointer;margin:16px 0 8px;font-size:15px;font-weight:600">諮商室使用表</summary>
+        <div id="room-panel"><div class="empty">載入中...</div></div>
+      </details>`;
 
     el.querySelector('#prev').onclick = () => App.go('schedule/' + UI.addDays(start, -7));
     el.querySelector('#next').onclick = () => App.go('schedule/' + UI.addDays(start, 7));
     el.querySelector('#this').onclick = () => App.go('schedule/' + UI.today());
     el.querySelector('#fc').onchange = e => { localStorage.setItem('mc-week-counselor', e.target.value); App.go('schedule/' + start); };
+    el.querySelector('#dense').onclick = () => {
+      localStorage.setItem('mc-week-compact', compact ? '0' : '1');
+      App.go('schedule/' + start);
+    };
+    el.querySelector('#roombox').addEventListener('toggle', e => {
+      localStorage.setItem('mc-week-rooms', e.target.open ? '1' : '0');
+    });
     el.querySelector('#add').onclick = () => apptDialog(null, () => App.go('schedule/' + start));
     // 點格子的空白處就在那個日期與時間開新預約（點在既有的預約上則走下方的明細）
     el.querySelectorAll('td.slot').forEach(td => {

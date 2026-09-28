@@ -90,6 +90,50 @@ function topicDialog(planId, t, onDone) {
   });
 }
 
+// 可接此方案的心理師：兒青方案只讓兒童心理師接、成人方案只讓成人心理師接。
+// 名單存在 plan_counselors，跟費率同一張表，但這裡只動「開不開放」，不碰談好的條件。
+function counselorScopeDialog(plan, onDone) {
+  const listed = (plan.rates || []).filter(r => !r.topic_id);
+  const openIds = listed.filter(r => r.bookable && r.active).map(r => r.counselor_id);
+  const restrict = !!plan.restrict_counselors;
+  const opts = App.counselorOptions();
+  UI.modal({
+    title: `可接此方案的心理師：${plan.name}`,
+    submitText: '儲存',
+    body: `<div style="font-size:14px;line-height:1.8;margin-bottom:12px">
+        民眾在線上預約表單與個案專區選這個方案時，只會看到這裡開放的心理師。</div>
+      <label style="display:block;margin-bottom:6px">
+        <input type="radio" name="scope" value="all"${restrict ? '' : ' checked'}> 全所心理師都能接</label>
+      <label style="display:block;margin-bottom:10px">
+        <input type="radio" name="scope" value="some"${restrict ? ' checked' : ''}> 只有勾選的心理師能接</label>
+      <div id="picks" style="border:1px solid var(--border);border-radius:8px;padding:10px;
+        max-height:240px;overflow:auto">
+        ${opts.map(([id, name]) => `<label style="display:block;padding:3px 0">
+          <input type="checkbox" class="cs" value="${id}"${openIds.includes(Number(id)) ? ' checked' : ''}>
+          ${UI.esc(name)}</label>`).join('')}
+      </div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+        取消勾選只是不再開放預約，<strong>原本談好的費率與人次上限會留著</strong>，日後重新勾選就直接沿用。</div>`,
+    onOpen: el => {
+      const sync = () => {
+        const some = el.querySelector('[name=scope][value=some]').checked;
+        el.querySelector('#picks').style.opacity = some ? '1' : '.45';
+        el.querySelectorAll('.cs').forEach(c => { c.disabled = !some; });
+      };
+      el.querySelectorAll('[name=scope]').forEach(r => { r.onchange = sync; });
+      sync();
+    },
+    onSubmit: async el => {
+      const some = el.querySelector('[name=scope][value=some]').checked;
+      const ids = [...el.querySelectorAll('.cs')].filter(c => c.checked).map(c => Number(c.value));
+      if (some && !ids.length) throw new Error('請至少勾選一位心理師，否則這個方案沒有人能接');
+      await PUT(`/service-plans/${plan.id}/counselors`, { restrict: some, counselor_ids: ids });
+      UI.toast('已儲存');
+      onDone && onDone();
+    }
+  });
+}
+
 function rateDialog(plan, r, onDone) {
   const d = r || { share_mode: '', share_percent: 0, week_limit: '', month_limit: '', bookable: 1, active: 1 };
   UI.modal({
@@ -127,6 +171,8 @@ App.page('plans', {
   help: [
     '一個「方案」＝一組收費規則：晤談時長、價格、資格限制、次數上限、心理師報酬怎麼算。排約選了方案，結束時間與費用就照它算。',
     '方案底下可再加「主題」（不同主題不同價）與「心理師費率」（同方案不同心理師抽成不同）。',
+    '要讓民眾只看得到特定專業的心理師（兒青方案只列兒童心理師、成人方案只列成人心理師），'
+      + '按方案上的「可接此方案的心理師」勾選即可；取消勾選只是不再開放預約，談好的費率會留著。',
     '指定案與所內派案可以設不同抽成：方案與費率各有兩組欄位，派案那組留空就沿用指定案的數字。判斷依據是個案資料裡的「案件來源」。',
     '「開放線上預約表單與個案專區顯示」與「需櫃檯確認才成立」這兩個勾，對外表單與個案專區共用一套：勾了需確認，舊個案在專區送出的也只是申請，要到「預約申請」頁確認才成立。',
     '方案的晤談時長會決定個案端看到的時段長度（例如 90 分鐘的伴侶諮商，專區就只出得起 90 分鐘的空檔），年齡、年度次數與心理師人次上限也會在個案送出前先擋下來。',
@@ -208,6 +254,7 @@ App.page('plans', {
         <div class="toolbar" style="margin-bottom:6px">
           <button class="btn tiny secondary" data-ep="${p.id}">編輯方案</button>
           <button class="btn tiny secondary" data-at="${p.id}">新增主題</button>
+          <button class="btn tiny secondary" data-cs="${p.id}">可接此方案的心理師</button>
           <button class="btn tiny secondary" data-ar="${p.id}">新增心理師費率</button>
           <div class="spacer"></div>
           <button class="btn tiny danger" data-dp="${p.id}">刪除／停用</button>
@@ -221,7 +268,10 @@ App.page('plans', {
     : '<span style="color:var(--muted);font-size:13px">尚未設定主題</span>'}
           </div>
           <div style="flex:1;min-width:300px">
-            <div style="font-size:13px;font-weight:600;margin-bottom:4px">心理師費率</div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:4px">心理師
+              ${p.restrict_counselors
+    ? UI.tag('限定 ' + (p.rates || []).filter(r => !r.topic_id && r.bookable && r.active).length + ' 位', 'warn')
+    : UI.tag('全所都能接', 'ok')}</div>
             ${p.rates.length ? UI.table(['心理師', '金額', '報酬', '週／月人次', ''], p.rates.map(r => `<tr>
                 <td>${UI.esc(r.counselor_name)}${r.topic_id ? '（限主題）' : ''}</td>
                 <td>${r.fee ? UI.fmtMoney(r.fee) : '沿用'}</td>
@@ -250,6 +300,7 @@ App.page('plans', {
     el.querySelectorAll('[data-ep]').forEach(b => { b.onclick = () => planDialog(find(b.dataset.ep), reload, partners); });
     el.querySelectorAll('[data-at]').forEach(b => { b.onclick = () => topicDialog(Number(b.dataset.at), null, reload); });
     el.querySelectorAll('[data-ar]').forEach(b => { b.onclick = () => rateDialog(find(b.dataset.ar), null, reload); });
+    el.querySelectorAll('[data-cs]').forEach(b => { b.onclick = () => counselorScopeDialog(find(b.dataset.cs), reload); });
     el.querySelectorAll('[data-dp]').forEach(b => {
       b.onclick = async () => {
         if (!await UI.confirm('確定要刪除此方案嗎？已有預約使用者會改為停用。')) return;

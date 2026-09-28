@@ -336,10 +336,20 @@ table.list tr:hover td { background: #f8fbfb; }
 }
 
 /* ---- 週檢視預約卡片 ---- */
-.week-table td { padding: 6px; }
+/* 週檢視要一頁看完整週：列高與卡片都壓緊一階 */
+.week-table td { padding: 3px 5px; }
+.week-table td.slot.is-empty { height: 22px; }
+.week-table .appt-chip { padding: 3px 6px; margin-bottom: 3px; font-size: 12px; line-height: 1.35; }
+/* 精簡模式：一張卡一行，整週才塞得進一頁。個案正常字重、心理師與空間淡色，仍分得出誰是誰 */
+.week-table .appt-chip.one {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding: 2px 6px; line-height: 1.55;
+}
+.week-table .appt-chip.one .sub { color: var(--muted); font-size: 11px; margin-left: 4px; }
+.week-table .appt-chip.one.cancelled .sub { color: inherit; }
 /* 週檢視左側的時間刻度：整點加深，半點淡一階，掃一眼就分得出鐘點 */
 .week-table th.time-col, .week-table td.time-col {
-  width: 62px; min-width: 62px; text-align: right; padding: 6px 8px;
+  width: 56px; min-width: 56px; text-align: right; padding: 3px 7px;
   font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted);
   background: var(--bg-soft, #f7f8f9); white-space: nowrap; vertical-align: top;
 }

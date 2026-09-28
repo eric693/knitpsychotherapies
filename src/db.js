@@ -1196,6 +1196,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS line_binding_members (
   PRIMARY KEY (binding_id, client_id)
 );`);
 
+// 限定哪些心理師能接這個方案（兒青方案只讓兒童心理師接、成人方案只讓成人心理師接）。
+// 名單本身沿用 plan_counselors，這一欄只是把「要不要限制」變成一個看得見的開關 ——
+// 原本靠「有沒有設過費率」來隱含判斷，櫃檯完全看不出方案被限制了。
+ensureColumns('service_plans', {
+  restrict_counselors: 'INTEGER NOT NULL DEFAULT 0'
+});
+// 既有資料：已經設過心理師名單的方案，本來就只有名單內的人能接，維持原行為
+db.exec(`UPDATE service_plans SET restrict_counselors = 1 WHERE restrict_counselors = 0 AND id IN (
+  SELECT DISTINCT plan_id FROM plan_counselors
+  WHERE active = 1 AND bookable = 1 AND (topic_id IS NULL OR topic_id = 0))`);
+
 // 方案對應的合作單位：方案名稱與單位名稱同名（如「青壯方案」）系統也不會自己看出是同一件事，
 // 這一欄就是那條線 —— 排到該方案的晤談會自動算進這家單位的月結請款單，
 // 撥款與否也改看那張請款單，而不是個案自己的收費單。

@@ -570,6 +570,79 @@ function startServer() {
     await admin.ok('DELETE', `/api/clients/${a.id}`).catch(() => {});
     await admin.ok('DELETE', `/api/clients/${b.id}`).catch(() => {});
   });
+  // 兒青方案只讓兒童心理師接、成人方案只讓成人心理師接
+  await test('方案可限定哪些心理師能接，民眾端只看得到名單內的人', async () => {
+    const users = await admin.ok('GET', '/api/users');
+    const lin = users.find(u => u.username === 'lin');
+    const chen = users.find(u => u.username === 'chen');
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '測試兒青限定方案', kind: 'self', fee: 2000, session_minutes: 50,
+      portal_visible: 1, require_review: 0
+    });
+    try {
+      // 預設不限定：表單上兩位都列得出來
+      let form = await session().ok('GET', '/api/public/booking-config');
+      let pp = form.plans.find(x => x.id === plan.id);
+      const ids0 = pp.counselors.map(c => c.id);
+      assert(ids0.includes(lin.id) && ids0.includes(chen.id), '未限定時應兩位都在');
+
+      // 限定只有 lin 能接
+      await admin.ok('PUT', `/api/service-plans/${plan.id}/counselors`,
+        { restrict: true, counselor_ids: [lin.id] });
+      form = await session().ok('GET', '/api/public/booking-config');
+      pp = form.plans.find(x => x.id === plan.id);
+      const ids1 = pp.counselors.map(c => c.id);
+      assert(ids1.includes(lin.id), '名單內的應該還在');
+      assert(!ids1.includes(chen.id), '名單外的不該出現在民眾端');
+
+      // 至少要留一位，不能把整個方案變成沒人能接
+      await admin.fails('PUT', `/api/service-plans/${plan.id}/counselors`,
+        { restrict: true, counselor_ids: [] }, '至少');
+
+      // 改回不限定：名單外的人又出現了，且原本的設定沒被刪掉
+      await admin.ok('PUT', `/api/service-plans/${plan.id}/counselors`,
+        { restrict: false, counselor_ids: [lin.id] });
+      form = await session().ok('GET', '/api/public/booking-config');
+      pp = form.plans.find(x => x.id === plan.id);
+      assert(pp.counselors.map(c => c.id).includes(chen.id), '取消限定後應全所都列');
+      const after = (await admin.ok('GET', '/api/service-plans')).find(x => x.id === plan.id);
+      equal(after.restrict_counselors, 0, '限定開關應為關');
+      assert(after.rates.some(r => r.counselor_id === lin.id), '原本談好的費率設定不該被刪掉');
+    } finally {
+      await admin.ok('DELETE', `/api/service-plans/${plan.id}`).catch(() => {});
+    }
+  });
+  // 視訊常常是在所內某一間做的，那一間就真的被占用了
+  await test('視訊晤談也能指定諮商室，沒指定就不佔空間', async () => {
+    const clients = await admin.ok('GET', '/api/clients');
+    const rooms = await admin.ok('GET', '/api/rooms');
+    const me = await admin.ok('GET', '/api/me');
+    const date = nextWeekday(2, 204);
+    const withRoom = await admin.ok('POST', '/api/appointments', {
+      client_id: clients[0].id, counselor_id: me.id, date, start_time: '07:00',
+      mode: 'online', room_id: rooms[0].id, fee: 2000, override: true
+    });
+    const noRoom = await admin.ok('POST', '/api/appointments', {
+      client_id: clients[0].id, counselor_id: me.id, date, start_time: '08:30',
+      mode: 'online', fee: 2000, override: true
+    });
+    try {
+      const list = await admin.ok('GET', `/api/appointments?client_id=${clients[0].id}`);
+      equal(list.find(a => a.id === withRoom.id).room_id, rooms[0].id, '指定的空間要留住');
+      equal(list.find(a => a.id === noRoom.id).room_id, null, '沒指定就不佔空間');
+      // 佔了空間就會擋下同一間同時段的實體晤談
+      const clash = await admin.post('/api/appointments', {
+        client_id: clients[1].id, counselor_id: me.id, date, start_time: '07:00',
+        mode: 'onsite', room_id: rooms[0].id, fee: 2000, override: true
+      });
+      equal(clash.status, 400, '同一間同時段應該擋下');
+    } finally {
+      for (const a of [withRoom, noRoom]) {
+        await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' }).catch(() => {});
+        await admin.del(`/api/appointments/${a.id}`).catch(() => {});
+      }
+    }
+  });
   // 一支手機提醒多位手足：家長綁一次 LINE，A、B、C 的上課提醒都到同一個 LINE，
   // 前提是櫃檯先把手足授權成一家人（不自動建立，號碼可能打錯）
   await test('同手機的手足可一次授權成一家人，LINE 一組碼全綁', async () => {

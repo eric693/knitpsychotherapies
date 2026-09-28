@@ -174,9 +174,10 @@ router.post('/appointments', requireStaff('schedule'), async (req, res) => {
   }
 
   // 諮商室：櫃檯可指定，未指定則自動挑一間空的（個案端不顯示空間配置）。
-  // 視訊晤談不在所內進行，一律不佔空間，否則諮商室使用表會被視訊塞滿看不出真正的空檔。
+  // 視訊晤談預設不佔空間（否則諮商室使用表會被視訊塞滿，看不出真正的空檔），
+  // 但心理師常常是在所內的某一間做視訊，那間就真的被占用了 —— 所以櫃檯明確指定時照樣排。
   const roomId = b.mode === 'online'
-    ? null
+    ? (Number(b.room_id) || null)
     : (Number(b.room_id) || plans.pickRoom({ date: b.date, start_time: b.start_time, end_time }));
 
   const info = db.prepare(`INSERT INTO appointments
@@ -266,9 +267,14 @@ router.put('/appointments/:id', requireStaff('schedule'), (req, res) => {
     return res.status(400).json({ error: check.errors.join('；'), errors: check.errors,
       next_week: check.next_week, can_override: true });
   }
-  // 改成視訊就把空間退掉，改回到所才重新指派
-  const roomId = b.mode === 'online' ? null : (Number(b.room_id)
-    || plans.pickRoom({ date: b.date, start_time: b.start_time, end_time: b.end_time, exclude_appointment_id: a.id }));
+  // 視訊照樣可以指定空間（在所內某一間做視訊），但要「這次有明確送 room_id」才算數：
+  // 只把形式改成視訊、沒動空間欄位時，原本自動指派的那一間要退掉，
+  // 否則諮商室使用表會被看不見的視訊卡住。
+  const askedRoom = req.body && req.body.room_id !== undefined ? (Number(req.body.room_id) || null) : undefined;
+  const roomId = b.mode === 'online'
+    ? (askedRoom === undefined ? null : askedRoom)
+    : ((askedRoom === undefined ? a.room_id : askedRoom)
+      || plans.pickRoom({ date: b.date, start_time: b.start_time, end_time: b.end_time, exclude_appointment_id: a.id }));
   db.prepare(`UPDATE appointments SET counselor_id = ?, room_id = ?, date = ?, start_time = ?, end_time = ?,
     type = ?, mode = ?, fee = ?, subsidy_amount = ?, plan_id = ?, topic_id = ?, counselor_share = ?,
     note = ?, meeting_url = ? WHERE id = ?`).run(

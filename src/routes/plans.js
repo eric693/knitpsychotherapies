@@ -21,7 +21,9 @@ const PLAN_FIELDS = ['name', 'kind', 'appt_type', 'fee_mode', 'fee', 'fee_option
   // 方案的外部作業網址（如國軍方案的個案註冊與晤談簽到）
   'register_url', 'signin_url',
   // 對應的合作單位：填了之後，這個方案的晤談就併入該單位的月結請款單
-  'partner_id'];
+  'partner_id',
+  // 是否限定只有名單內的心理師能接（兒青／成人分流）
+  'restrict_counselors'];
 
 function normalizePlan(b, base = {}) {
   const d = { ...base };
@@ -45,7 +47,7 @@ function normalizePlan(b, base = {}) {
     'counselor_week_limit', 'counselor_month_limit', 'share_fixed', 'sort']) {
     d[n] = Math.max(0, Math.round(Number(d[n]) || 0));
   }
-  for (const n of ['portal_visible', 'require_review', 'active']) d[n] = d[n] ? 1 : 0;
+  for (const n of ['portal_visible', 'require_review', 'active', 'restrict_counselors']) d[n] = d[n] ? 1 : 0;
   for (const s of ['subsidy_program', 'note', 'intro', 'report_code', 'code_prefix',
     'register_url', 'signin_url']) d[s] = String(d[s] || '').trim();
   d.appt_type = String(d.appt_type || 'individual');
@@ -376,6 +378,40 @@ router.put('/clients/:id/plan-usage', requireStaff('clients'), (req, res) => {
     .run(Number(req.params.id), planId, year, offset, String(b.note || ''), req.user.id, nowStamp());
   audit('staff', req.user.id, req.user.name, '調整方案已用次數', String(req.params.id), { planId, year, offset });
   res.json({ ok: true, usage: clientUsage(req.params.id, planId, year) });
+});
+
+// 一次設定「可接此方案的心理師」。
+//
+// 原本要一位一位開「心理師費率」才能限制誰能接，那個入口看起來像在談錢，
+// 櫃檯根本不會想到兒青／成人分流要去那裡設。這支把名單當成一件事處理：
+// 勾選的開放、沒勾的關閉，但**保留原本的費率設定**（改 bookable 而不是刪資料），
+// 日後重新開放不必再談一次條件。
+router.put('/service-plans/:id/counselors', requireStaff('settings'), (req, res) => {
+  const plan = db.prepare('SELECT * FROM service_plans WHERE id = ?').get(Number(req.params.id) || 0);
+  if (!plan) return res.status(404).json({ error: '找不到此方案' });
+  const b = req.body || {};
+  const restrict = b.restrict ? 1 : 0;
+  const ids = Array.isArray(b.counselor_ids) ? [...new Set(b.counselor_ids.map(Number).filter(Boolean))] : [];
+  if (restrict && !ids.length) {
+    return res.status(400).json({ error: '限定名單時至少要選一位心理師，否則這個方案沒有人能接' });
+  }
+  const base = db.prepare(`SELECT * FROM plan_counselors
+    WHERE plan_id = ? AND (topic_id IS NULL OR topic_id = 0)`).all(plan.id);
+  const ins = db.prepare(`INSERT INTO plan_counselors (plan_id, counselor_id, bookable, active)
+    VALUES (?,?,1,1)`);
+  const on = db.prepare('UPDATE plan_counselors SET bookable = 1, active = 1 WHERE id = ?');
+  const off = db.prepare('UPDATE plan_counselors SET bookable = 0 WHERE id = ?');
+  db.transaction(() => {
+    for (const id of ids) {
+      const row = base.find(r => r.counselor_id === id);
+      if (row) on.run(row.id); else ins.run(plan.id, id);
+    }
+    for (const row of base) if (!ids.includes(row.counselor_id)) off.run(row.id);
+    db.prepare('UPDATE service_plans SET restrict_counselors = ? WHERE id = ?').run(restrict, plan.id);
+  })();
+  audit('staff', req.user.id, req.user.name, '設定方案可接的心理師', plan.name,
+    { restrict, count: ids.length });
+  res.json({ ok: true });
 });
 
 // ---- 每位心理師每月收支 ----

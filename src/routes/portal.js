@@ -50,11 +50,14 @@ function portalPlanPublic(p) {
     subsidy_amount: p.subsidy_amount, venue_fee: p.venue_fee || 0
   };
 }
-// 方案若訂了專屬費率名單，就只有名單內且開放預約的心理師能接；沒訂就是全所都能接。
+// 方案開了「限定心理師」時，只有名單內且開放預約的心理師能接；沒開就是全所都能接。
 // 規則與對外表單的 planPublic 相同，兩邊不能各判一套。
 function planAllowsCounselor(planId, counselorId) {
+  const p = db.prepare('SELECT restrict_counselors FROM service_plans WHERE id = ?').get(Number(planId) || 0);
+  if (!p || !p.restrict_counselors) return true;
   const rates = db.prepare(`SELECT counselor_id, bookable FROM plan_counselors
     WHERE plan_id = ? AND active = 1 AND (topic_id IS NULL OR topic_id = 0)`).all(Number(planId) || 0);
+  // 開了限制卻沒列半個人時視同不限制 —— 否則這個方案會變成沒有任何人能接
   if (!rates.length) return true;
   return rates.some(r => r.counselor_id === Number(counselorId) && r.bookable);
 }
