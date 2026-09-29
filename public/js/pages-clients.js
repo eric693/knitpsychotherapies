@@ -638,7 +638,8 @@ App.page('client', {
               <td><a href="#/client/${f.member_id}">${UI.esc(f.member_name)}</a>
                 <span style="color:var(--muted);font-size:12px">${UI.esc(f.member_code)}</span></td>
               <td>${UI.esc(f.relationship || '')}</td>
-              <td>${f.can_book && f.member_active ? UI.tag('可代訂', 'ok') : UI.tag('已停用', 'warn')}</td>
+              <td>${f.can_book && f.member_active ? UI.tag('可代訂', 'ok') : UI.tag('已停用', 'warn')}
+                ${f.member_line ? UI.tag('LINE 已綁', 'ok') : UI.tag('LINE 未綁', 'warn')}</td>
               <td><button class="btn tiny danger" data-fx="${f.id}">取消授權</button></td></tr>`),
     '尚未授權任何人')}
             <div style="margin-top:10px">
@@ -682,10 +683,14 @@ App.page('client', {
                 const picks = [...form.querySelectorAll('.fs')].filter(x => x.checked).map(x => Number(x.value));
                 if (!picks.length) throw new Error('請至少勾選一位');
                 let last = null;
+                const lined = [];
                 for (const id of picks) {
                   last = await POST(`/clients/${c.id}/family`, { member_id: id, relationship: '家人' });
+                  if (last.line_inherited) lined.push(last.line_inherited);
                 }
-                UI.toast(`已授權 ${picks.length} 位`);
+                UI.toast(lined.length
+                  ? `已授權 ${picks.length} 位；${lined.join('、')}的提醒也會送到同一個 LINE`
+                  : `已授權 ${picks.length} 位`);
                 drawFam(last.family);
               }
             });
@@ -704,7 +709,9 @@ App.page('client', {
                   授權後，${UI.esc(c.name)}在個案專區就能替這位家人選方案、排時段與改期取消。</div>`,
               onSubmit: async form => {
                 const r = await POST(`/clients/${c.id}/family`, UI.formData(form));
-                UI.toast('已授權');
+                UI.toast(r.line_inherited
+                  ? `已授權，${r.line_inherited}的晤談提醒也會送到同一個 LINE`
+                  : '已授權');
                 drawFam(r.family);
               }
             });

@@ -643,6 +643,61 @@ function startServer() {
       }
     }
   });
+  // 沒留電話的個案＝專區登不進去、LINE 綁不了、提醒發不出去。
+  // 手足案最常這樣：第二個孩子手機重複被擋，櫃檯就留空，然後沒人知道他收不到提醒。
+  await test('建檔沒留任何電話會當場示警', async () => {
+    const c = await admin.ok('POST', '/api/clients', { name: '無電話測試', phone: '' });
+    try {
+      assert(/沒有留任何電話/.test(c.warning || ''), '新增時應示警：' + JSON.stringify(c.warning));
+      // 補上法定代理人電話後就不再示警
+      const u = await admin.ok('PUT', `/api/clients/${c.id}`, { guardian_phone: '0933222111' });
+      assert(!/沒有留任何電話/.test(u.warning || ''), '補上電話後不該再示警');
+    } finally {
+      await admin.ok('DELETE', `/api/clients/${c.id}`).catch(() => {});
+    }
+  });
+  // 先綁 LINE、後授權家人：這個順序原本會讓新授權的家人永遠收不到提醒 ——
+  // 家長那邊顯示「已綁定」，孩子的提醒就安靜地不發，畫面上看不出哪裡漏了。
+  // 手足案一多，每一組都會中。
+  await test('家長已綁 LINE 後才授權的家人，自動沿用同一個 LINE', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    const parent = await admin.ok('POST', '/api/clients',
+      { name: '後授權測試家長', phone: '0955666001', portal_enabled: 1 });
+    // 這個孩子連電話都沒留（手足共用手機被擋而留空的情形），所以綁定時的家庭建議找不到他
+    const kid = await admin.ok('POST', '/api/clients',
+      { name: '後授權測試孩子', phone: '', birth_date: '2016-01-01', counselor_id: 2, portal_enabled: 1 });
+    try {
+      // 家長先自己綁好 LINE，當下沒有帶上任何家人
+      const code = await admin.ok('POST', '/api/line/bind-code', { client_id: parent.id });
+      const body = JSON.stringify({ events: [{ type: 'message', replyToken: 'rlate',
+        source: { userId: 'Ulate001' }, message: { type: 'text', text: code.code } }] });
+      const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+      await fetch(BASE + '/api/line/webhook', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+      equal((await admin.ok('GET', `/api/clients/${parent.id}`)).line_user_id, 'Ulate001', '家長應已綁定');
+      equal((await admin.ok('GET', `/api/clients/${kid.id}`)).line_user_id, '', '孩子此時還沒綁');
+
+      // 之後櫃檯才把孩子授權進來 —— 這時就該自動沿用家長的 LINE
+      const r = await admin.ok('POST', `/api/clients/${parent.id}/family`,
+        { member_id: kid.id, relationship: '子女' });
+      equal(r.line_inherited, '後授權測試孩子', '應回報孩子沿用了家長的 LINE');
+      equal((await admin.ok('GET', `/api/clients/${kid.id}`)).line_user_id, 'Ulate001',
+        '孩子應綁到同一個 LINE，提醒才發得出去');
+      assert(r.family.some(f => f.member_id === kid.id && f.member_line), '家人清單應顯示已綁');
+
+      // 家長在專區解除綁定時，沿用同一個 LINE 的家人要一起解除，
+      // 否則孩子的提醒會繼續往一支已經說不要的 LINE 送
+      await admin.ok('POST', `/api/clients/${parent.id}/reset-password`, {});
+      const ps = session();
+      await ps.ok('POST', '/api/portal/login', { phone: '0955666001', password: '666001' });
+      const del = await ps.ok('DELETE', '/api/portal/line');
+      equal(del.released, 2, '應連同家人一起解除');
+      equal((await admin.ok('GET', `/api/clients/${kid.id}`)).line_user_id, '', '孩子的綁定也要解掉');
+    } finally {
+      for (const x of [parent, kid]) await admin.ok('DELETE', `/api/clients/${x.id}`).catch(() => {});
+    }
+  });
   // 一支手機提醒多位手足：家長綁一次 LINE，A、B、C 的上課提醒都到同一個 LINE，
   // 前提是櫃檯先把手足授權成一家人（不自動建立，號碼可能打錯）
   await test('同手機的手足可一次授權成一家人，LINE 一組碼全綁', async () => {

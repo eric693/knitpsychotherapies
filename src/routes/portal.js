@@ -619,13 +619,26 @@ router.get('/line', requireClient, (req, res) => {
   for (const m of familyUnbound) addMember.run(bindRow.id, m.id);
   res.json({ ...out, code: bind.code, expires_at: bind.expires_at, message_url: officialMessageUrl(bind.code) });
 });
-// 個案自己解除綁定（換手機、不想再收提醒），不必打電話請櫃檯處理
+// 個案自己解除綁定（換手機、不想再收提醒），不必打電話請櫃檯處理。
+//
+// 家人是沿用同一個 LINE 收通知的，只解自己等於孩子的提醒繼續往這支已經說不要的 LINE 送。
+// 所以一併把「同一個 LINE、且是自己授權家人」的綁定解掉；家人自己另外綁別的 LINE 則不動。
 router.delete('/line', requireClient, (req, res) => {
-  db.prepare("UPDATE clients SET line_user_id = '' WHERE id = ?").run(req.client.id);
-  db.prepare("UPDATE line_bindings SET status = 'revoked' WHERE client_id = ? AND status = 'done'")
-    .run(req.client.id);
-  audit('client', req.client.id, req.client.name, '解除 LINE 綁定');
-  res.json({ ok: true });
+  const me = db.prepare('SELECT line_user_id FROM clients WHERE id = ?').get(req.client.id) || {};
+  const ids = [req.client.id];
+  if (me.line_user_id) {
+    for (const m of bookableMembers(req.client.id)) {
+      const mm = db.prepare('SELECT line_user_id FROM clients WHERE id = ?').get(m.id) || {};
+      if (mm.line_user_id === me.line_user_id) ids.push(m.id);
+    }
+  }
+  const marks = ids.map(() => '?').join(',');
+  db.prepare(`UPDATE clients SET line_user_id = '' WHERE id IN (${marks})`).run(...ids);
+  db.prepare(`UPDATE line_bindings SET status = 'revoked'
+    WHERE client_id IN (${marks}) AND status = 'done'`).run(...ids);
+  audit('client', req.client.id, req.client.name, '解除 LINE 綁定',
+    ids.length > 1 ? `含 ${ids.length - 1} 位家人` : '');
+  res.json({ ok: true, released: ids.length });
 });
 
 module.exports = router;

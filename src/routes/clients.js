@@ -203,6 +203,16 @@ function portalPhone(c) {
   return '';
 }
 
+// 沒有任何電話的個案：專區登不進去、LINE 也綁不了，晤談提醒就永遠發不出去。
+// 這在手足案最常發生 —— 第二個孩子的手機跟哥哥姊姊重複被擋下，櫃檯就把欄位留空，
+// 然後沒有任何地方告訴他們這個孩子從此收不到提醒。存檔當下就講清楚。
+function contactWarning(c) {
+  if (portalPhone(c)) return '';
+  return '這位個案沒有留任何電話，將無法登入個案專區，也收不到 LINE 晤談提醒。'
+    + '若與家人共用同一支手機，請填在「法定代理人電話」（該欄可重複），'
+    + '或到個案頁用「授權家人代訂」掛到家人底下。';
+}
+
 function phoneTaken(phone, excludeId) {
   const p = String(phone || '').trim();
   if (!p) return null;
@@ -225,7 +235,7 @@ router.post('/clients', requireStaff('clients'), (req, res) => {
   }
   if (!data.intake_date) data.intake_date = today();
   applyMinor(data);
-  const warn = idNoWarning(data.id_no);
+  const warn = idNoWarning(data.id_no) || contactWarning(data);
   // 個案端預設密碼為手機末 6 碼（首次登入強制更換）。
   // 兒青個案的號碼通常只填在法定代理人電話，沒有這個備援就永遠開不了專區。
   const phone = portalPhone(data);
@@ -256,7 +266,7 @@ router.put('/clients/:id', requireStaff('clients'), (req, res) => {
   }
   if (data.status === 'closed' && !data.close_date) data.close_date = today();
   applyMinor(data, c.birth_date);
-  const warn = idNoWarning(data.id_no);
+  const warn = idNoWarning(data.id_no) || contactWarning({ ...c, ...data });
   db.prepare(`UPDATE clients SET ${Object.keys(data).map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
     .run(...Object.values(data), c.id);
   audit('staff', req.user.id, req.user.name, '修改個案資料', c.code);
@@ -379,8 +389,10 @@ router.get('/clients/:id/family', requireStaff('clients'), (req, res) => {
   res.json(familyOf(req.params.id));
 });
 function familyOf(clientId) {
+  // 帶上家人自己的 LINE 綁定狀態：櫃檯一眼看得出誰的提醒發不出去
   return db.prepare(`SELECT f.id, f.member_id, f.relationship, f.can_book, f.note,
-      c.name AS member_name, c.code AS member_code, c.active AS member_active
+      c.name AS member_name, c.code AS member_code, c.active AS member_active,
+      (IFNULL(c.line_user_id,'') <> '') AS member_line
     FROM client_family f JOIN clients c ON c.id = f.member_id
     WHERE f.client_id = ? ORDER BY c.name`).all(Number(clientId) || 0);
 }
@@ -420,7 +432,20 @@ router.post('/clients/:id/family', requireStaff('clients'), (req, res) => {
     req.body?.can_book === 0 || req.body?.can_book === false ? 0 : 1, String(req.body?.note || '').slice(0, 200));
   audit('staff', req.user.id, req.user.name, '授權家人代訂', c.code,
     { member: member.code, relationship: req.body?.relationship || '' });
-  res.json({ id: info.lastInsertRowid, family: familyOf(c.id) });
+
+  // 家長早就綁好 LINE 了，現在才把孩子授權進來 —— 這個孩子的晤談提醒要送到同一個 LINE。
+  //
+  // 綁定時只會帶上「當下已授權」的家人（見 portal.js 的 /line），所以先綁定、後授權的順序
+  // 會讓新授權的家人永遠收不到提醒，而且畫面上看不出哪裡漏了：家長那邊顯示「已綁定」，
+  // 孩子的提醒就這樣安靜地不會發。手足案一多，每一組都會中。
+  // 這裡補上：授權當下就沿用家長的 LINE，不必再請家長重傳一次綁定碼。
+  let lineInherited = '';
+  if (c.line_user_id && !member.line_user_id) {
+    db.prepare('UPDATE clients SET line_user_id = ? WHERE id = ?').run(c.line_user_id, member.id);
+    audit('staff', req.user.id, req.user.name, '家人沿用 LINE 綁定', member.code, { from: c.code });
+    lineInherited = member.name;
+  }
+  res.json({ id: info.lastInsertRowid, family: familyOf(c.id), line_inherited: lineInherited });
 });
 router.put('/clients/:id/family/:fid', requireStaff('clients'), (req, res) => {
   const row = db.prepare('SELECT * FROM client_family WHERE id = ? AND client_id = ?')
