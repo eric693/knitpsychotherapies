@@ -349,7 +349,10 @@ router.delete('/clients/:id', requireStaff('clients'), (req, res) => {
   if (!c) return res.status(404).json({ error: '找不到此個案' });
   let cancelled = 0;
   db.transaction(() => {
-    db.prepare("UPDATE clients SET active = 0, status = 'closed', close_date = CASE WHEN close_date = '' THEN ? ELSE close_date END WHERE id = ?")
+    // 一併關掉個案專區：登入本來就要求 active = 1，所以停用後也進不去，
+    // 但旗標留著 1 會讓「誰開著專區」的清單與檢查一直出現已經不在案的人。
+    db.prepare(`UPDATE clients SET active = 0, status = 'closed', portal_enabled = 0,
+        close_date = CASE WHEN close_date = '' THEN ? ELSE close_date END WHERE id = ?`)
       .run(today(), c.id);
     const info = db.prepare(`UPDATE appointments SET status = 'cancelled', cancel_reason = '個案停用'
       WHERE client_id = ? AND status IN ('booked','arrived') AND date >= ?`).run(c.id, today());

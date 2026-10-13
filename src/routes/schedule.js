@@ -27,6 +27,24 @@ function conflictOf({ id, date, start_time, end_time, counselor_id, room_id, cli
     // 同一位個案同時段被排兩筆（多半是重複建檔或櫃檯重按），個案分身乏術，一併擋下
     if (client_id && r.client_id === Number(client_id)) return { row: r, kind: '個案' };
   }
+  // 團體場次也占用空間。自動指派（plans.pickRoom）本來就會避開團體，
+  // 但「櫃檯手動指定某一間」走的是這裡 —— 原本完全沒看團體，於是手動指定就能
+  // 把一對一排進正在上團體的那一間。視訊可以指定空間之後更容易踩到。
+  if (room_id) {
+    const g = db.prepare(`SELECT gs.*, g.name AS group_name, r.name AS room_name
+      FROM group_sessions gs JOIN groups g ON g.id = gs.group_id
+      LEFT JOIN rooms r ON r.id = gs.room_id
+      WHERE gs.room_id = ? AND gs.date = ? AND gs.status != 'cancelled'
+        AND gs.start_time < ? AND gs.end_time > ? LIMIT 1`)
+      .get(Number(room_id), date, end_time, start_time);
+    if (g) {
+      return {
+        kind: '諮商室',
+        row: { date: g.date, start_time: g.start_time, end_time: g.end_time,
+          room_name: g.room_name, client_name: `${g.group_name}（團體）`, group_session_id: g.id }
+      };
+    }
+  }
   return null;
 }
 

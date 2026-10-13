@@ -1816,6 +1816,58 @@ function startServer() {
     }
   });
   // 停用掉的個案（含被合併掉的）原本在個案清單完全查不到，櫃檯只能問工程師
+  // 自動指派本來就會避開團體，但「櫃檯手動指定某一間」原本完全沒看團體場次，
+  // 於是能把一對一排進正在上團體的那一間。視訊可以指定空間之後更容易踩到。
+  await test('手動指定的諮商室若正在上團體，要擋下來', async () => {
+    const rooms = await admin.ok('GET', '/api/rooms');
+    const clients = await admin.ok('GET', '/api/clients');
+    const me = await admin.ok('GET', '/api/me');
+    const room = rooms[0];
+    const day = nextWeekday(3, 211);
+    const g = await admin.ok('POST', '/api/groups',
+      { name: '團體佔室測試', counselor_id: 2, capacity: 6, sessions_total: 2, status: 'open' });
+    const gs = await admin.ok('POST', `/api/groups/${g.id}/sessions`,
+      { date: day, start_time: '14:00', end_time: '15:30', room_id: room.id });
+    try {
+      // 到所晤談：手動指定同一間、時段重疊 → 擋
+      const clash = await admin.post('/api/appointments', {
+        client_id: clients[0].id, counselor_id: me.id, date: day, start_time: '14:30',
+        mode: 'onsite', room_id: room.id, fee: 2000, override: true
+      });
+      equal(clash.status, 400, '團體佔用中的空間不該排得進去');
+      assert(/諮商室/.test(clash.data.error || ''), '錯誤訊息要指出是諮商室衝突：' + JSON.stringify(clash.data));
+      // 視訊也一樣：指定了空間就等於佔用那一間
+      const clash2 = await admin.post('/api/appointments', {
+        client_id: clients[0].id, counselor_id: me.id, date: day, start_time: '14:30',
+        mode: 'online', room_id: room.id, fee: 2000, override: true
+      });
+      equal(clash2.status, 400, '視訊指定同一間也該擋');
+      // 不佔空間的視訊不受影響
+      const okOne = await admin.ok('POST', '/api/appointments', {
+        client_id: clients[0].id, counselor_id: me.id, date: day, start_time: '14:30',
+        mode: 'online', fee: 2000, override: true
+      });
+      await admin.ok('POST', `/api/appointments/${okOne.id}/status`, { status: 'cancelled' }).catch(() => {});
+      await admin.del(`/api/appointments/${okOne.id}`).catch(() => {});
+    } finally {
+      await admin.ok('DELETE', `/api/groups/${g.id}/sessions/${gs.id}`).catch(() => {});
+      await admin.ok('DELETE', `/api/groups/${g.id}`).catch(() => {});
+    }
+  });
+  // 停用後專區旗標要跟著關，否則「誰開著專區」的清單會一直出現不在案的人
+  await test('停用個案時一併關閉個案專區', async () => {
+    const c = await admin.ok('POST', '/api/clients',
+      { name: '停用關專區測試', phone: '0912777001', portal_enabled: 1 });
+    try {
+      await admin.ok('DELETE', `/api/clients/${c.id}`);
+      const after = await admin.ok('GET', `/api/clients/${c.id}`);
+      equal(after.active, 0, '應已停用');
+      equal(after.portal_enabled, 0, '專區旗標應一併關閉');
+      await session().fails('POST', '/api/portal/login', { phone: '0912777001', password: '777001' }, '錯誤');
+    } finally {
+      await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
   await test('停用的個案查得到，並標明併進了哪一位', async () => {
     const a = await admin.ok('POST', '/api/clients', { name: '停用查詢測試甲', phone: '0912888001' });
     const b = await admin.ok('POST', '/api/clients', { name: '停用查詢測試乙', phone: '0912888002' });
