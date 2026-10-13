@@ -1,8 +1,35 @@
 const express = require('express');
 const { db, audit, today, getSetting } = require('../db');
 const { requireStaff } = require('../auth');
+const line = require('../line');
 
 const router = express.Router();
+
+// 團體場次通知：排定時與提醒時都送給「已綁 LINE 的在籍成員」。
+// 未綁定或未串接時 pushFlex 會記成待人工發送，不會靜靜地漏掉。
+// 卡片寫明參加者是誰 —— 家長一個 LINE 可能收好幾個孩子的通知。
+async function pushGroupSession(sessionId, kind) {
+  const s = db.prepare(`SELECT gs.*, g.name AS group_name, u.name AS counselor_name
+    FROM group_sessions gs JOIN groups g ON g.id = gs.group_id
+    LEFT JOIN users u ON u.id = g.counselor_id WHERE gs.id = ?`).get(Number(sessionId) || 0);
+  if (!s) return { sent: 0, pending: 0 };
+  const members = db.prepare(`SELECT c.id, c.name, c.line_user_id FROM group_members m
+    JOIN clients c ON c.id = m.client_id
+    WHERE m.group_id = ? AND m.status = 'active' AND c.active = 1`).all(s.group_id);
+  let sent = 0, pending = 0;
+  for (const m of members) {
+    if (!m.line_user_id) { pending++; continue; }
+    try {
+      const out = await line.pushFlex({
+        to: m.line_user_id, kind: kind === 'reminder' ? 'group_reminder' : 'group_scheduled',
+        flex: line.groupSessionFlex({ ...s, client_name: m.name }),
+        client_id: m.id
+      });
+      if (out.status === 'sent') sent++; else pending++;
+    } catch (e) { pending++; console.error('團體場次通知失敗：', e.message); }
+  }
+  return { sent, pending, members: members.length };
+}
 
 // 團體諮商：團體本身 + 成員名單 + 每次聚會（含出席與歷程紀錄）。
 // 團體聚會不放進 appointments（那是一對一模型），但週檢視會一併顯示、諮商室也會檢查衝突。
@@ -115,7 +142,7 @@ router.put('/group-members/:id', requireStaff('groups'), (req, res) => {
 });
 
 // ---- 聚會場次 ----
-router.post('/groups/:id/sessions', requireStaff('groups'), (req, res) => {
+router.post('/groups/:id/sessions', requireStaff('groups'), async (req, res) => {
   const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id);
   if (!g) return res.status(404).json({ error: '找不到此團體' });
   const b = req.body || {};
@@ -135,7 +162,10 @@ router.post('/groups/:id/sessions', requireStaff('groups'), (req, res) => {
     VALUES (?,?,?,?,?,?,?)`).run(g.id, Number(b.session_no) || last + 1, b.date, b.start_time, b.end_time,
     Number(b.room_id) || null, b.topic || '');
   if (g.status === 'open') db.prepare("UPDATE groups SET status = 'running' WHERE id = ?").run(g.id);
-  res.json({ id: info.lastInsertRowid });
+  audit('staff', req.user.id, req.user.name, '新增團體場次', g.name, { date: b.date, time: b.start_time });
+  // 排定當下就通知成員（與一對一預約成立同樣的時機）
+  const notify = await pushGroupSession(info.lastInsertRowid, 'scheduled').catch(() => null);
+  res.json({ id: info.lastInsertRowid, notify });
 });
 
 // 點名 + 歷程紀錄；完成時依團體收費為出席者產生收費單
@@ -205,3 +235,4 @@ router.delete('/group-sessions/:id', requireStaff('groups'), (req, res) => {
 });
 
 module.exports = router;
+module.exports.pushGroupSession = pushGroupSession;

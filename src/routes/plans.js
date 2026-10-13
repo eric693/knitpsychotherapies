@@ -416,97 +416,46 @@ router.put('/service-plans/:id/counselors', requireStaff('settings'), (req, res)
 
 // ---- 每位心理師每月收支 ----
 //
-// 收入面以「已完成的晤談」為準（未到只收部分費用，故另計）；
-// 心理師報酬取當時鎖定的 counselor_share，沒有的（舊資料或無方案）才即時試算。
-// 實收金額另外由收費單的收款狀態算，讓所方看得出「該收多少」與「實際收到多少」的差。
+// 與心理師自己看的「我的報酬確認」共用 counselorMonthSessions，兩邊的數字才不會對不起來
+// （原本各算一套，櫃檯回報過兩頁金額不同）。
+// 收入面以已完成與未到的晤談為準；心理師報酬取晤談完成當下鎖定的 counselor_share。
+//
+// 「已撥款／未撥款」依每一場的實際金流判斷（機構案看合作單位的請款單是否入帳、
+// 其餘看收費單是否收款），不是看收費單日期落在哪個月 —— 青壯方案的收費單是 0 元，
+// 以收費單算的話機構撥進來的錢永遠反映不出來。
 router.get('/plan-income', requireStaff('reports'), (req, res) => {
   const month = String(req.query.month || today().slice(0, 7));
   const counselorFilter = Number(req.query.counselor_id) || 0;
-  const appts = db.prepare(`SELECT a.*, u.name AS counselor_name, p.name AS plan_name, p.kind AS plan_kind,
-      t.name AS topic_name, c.name AS client_name, c.code AS client_code
-    FROM appointments a
-    JOIN users u ON u.id = a.counselor_id
-    LEFT JOIN service_plans p ON p.id = a.plan_id
-    LEFT JOIN plan_topics t ON t.id = a.topic_id
-    LEFT JOIN clients c ON c.id = a.client_id
+  const counselors = db.prepare(`SELECT DISTINCT u.id, u.name
+    FROM appointments a JOIN users u ON u.id = a.counselor_id
     WHERE substr(a.date,1,7) = ? AND a.status IN ('done','no_show')
-      ${counselorFilter ? 'AND a.counselor_id = ?' : ''}
-    ORDER BY a.date, a.start_time`).all(...(counselorFilter ? [month, counselorFilter] : [month]));
+      ${counselorFilter ? 'AND a.counselor_id = ?' : ''}`)
+    .all(...(counselorFilter ? [month, counselorFilter] : [month]));
 
-  // 收費單以月份彙整，用來對照實收
-  const invoices = db.prepare(`SELECT i.*, a.counselor_id,
-      (SELECT COALESCE(SUM(amount),0) FROM refunds rf WHERE rf.invoice_id = i.id) AS refunded
-    FROM invoices i LEFT JOIN appointments a ON a.id = i.appointment_id
-    WHERE substr(i.date,1,7) = ? AND i.status != 'void'`).all(month);
+  const payouts = db.prepare('SELECT * FROM payouts WHERE month = ?').all(month);
 
-  const byCounselor = new Map();
-  const ensure = (id, name) => {
-    if (!byCounselor.has(id)) {
-      byCounselor.set(id, {
-        counselor_id: id, counselor_name: name, sessions: 0, no_shows: 0,
-        gross: 0, subsidy: 0, self_pay: 0, venue: 0, share: 0, center: 0,
-        collected: 0, uncollected: 0, plans: new Map()
-      });
-    }
-    return byCounselor.get(id);
-  };
+  const rows = counselors.map(u => {
+    const sessions = counselorMonthSessions(u.id, month);
+    const t = sumTotals(sessions);
+    const mine = payouts.filter(p => p.user_id === u.id);
+    return {
+      counselor_id: u.id, counselor_name: u.name,
+      sessions: t.sessions, no_shows: t.no_shows,
+      gross: t.gross, subsidy: t.subsidy, self_pay: t.self_pay, venue: t.venue,
+      share: t.share, center: t.gross - t.share,
+      settled_share: t.settled_share, unsettled_share: t.unsettled_share,
+      unsettled_sessions: t.unsettled_sessions,
+      settled_gross: sessions.filter(r => r.settled).reduce((a, r) => a + r.gross, 0),
+      unsettled_gross: sessions.filter(r => !r.settled).reduce((a, r) => a + r.gross, 0),
+      plans: sumByPlan(sessions).map(pl => ({ ...pl, center: pl.gross - pl.share })),
+      payout_recorded: mine.reduce((a, b) => a + b.gross, 0),
+      payout_status: mine.some(p => p.status === 'paid') ? 'paid' : mine.length ? 'pending' : 'none'
+    };
+  }).sort((a, b) => b.gross - a.gross);
 
-  for (const a of appts) {
-    const row = ensure(a.counselor_id, a.counselor_name);
-    const q = resolveFee({ plan_id: a.plan_id, topic_id: a.topic_id, counselor_id: a.counselor_id,
-      fee_override: a.fee, client_id: a.client_id });
-    // 未到只收部分費用：固定規費時換算成等效比例，各項才會一致縮放
-    const rate = a.status === 'no_show' ? noShowCharge(a.fee).rate : 1;
-    // 未到只收部分費用：個案自付與方案給付都按同一比例計，心理師報酬亦然
-    const clientPay = Math.round((a.fee || 0) * rate);
-    const subsidy = Math.round((a.subsidy_amount || 0) * rate);
-    const gross = clientPay + subsidy;
-    const venue = Math.round((q.venue_fee || 0) * rate);
-    const share = Math.round((a.counselor_share || q.counselor_share) * rate);
-
-    if (a.status === 'no_show') row.no_shows++; else row.sessions++;
-    row.gross += gross; row.subsidy += subsidy; row.self_pay += clientPay;
-    row.venue += venue; row.share += share; row.center += gross - share;
-
-    const key = a.plan_id || 0;
-    if (!row.plans.has(key)) {
-      row.plans.set(key, {
-        plan_id: a.plan_id, plan_name: a.plan_name || '未指定方案', plan_kind: a.plan_kind || '',
-        sessions: 0, gross: 0, subsidy: 0, self_pay: 0, venue: 0, share: 0, center: 0
-      });
-    }
-    const pr = row.plans.get(key);
-    pr.sessions++; pr.gross += gross; pr.subsidy += subsidy; pr.self_pay += clientPay;
-    pr.venue += venue; pr.share += share; pr.center += gross - share;
-  }
-
-  for (const inv of invoices) {
-    if (!inv.counselor_id) continue;
-    if (counselorFilter && inv.counselor_id !== counselorFilter) continue;
-    const row = byCounselor.get(inv.counselor_id);
-    if (!row) continue;
-    if (inv.status === 'paid') row.collected += inv.amount - (inv.refunded || 0);
-    else if (inv.status === 'unpaid') row.uncollected += inv.amount;
-  }
-
-  const payouts = db.prepare(`SELECT p.*, u.name AS counselor_name FROM payouts p
-    JOIN users u ON u.id = p.user_id WHERE p.month = ?`).all(month);
-
-  const rows = [...byCounselor.values()].map(r => ({
-    ...r,
-    plans: [...r.plans.values()].sort((a, b) => b.gross - a.gross),
-    payout_recorded: payouts.filter(p => p.user_id === r.counselor_id).reduce((a, b) => a + b.gross, 0),
-    payout_status: payouts.some(p => p.user_id === r.counselor_id && p.status === 'paid') ? 'paid'
-      : payouts.some(p => p.user_id === r.counselor_id) ? 'pending' : 'none'
-  })).sort((a, b) => b.gross - a.gross);
-
-  const total = rows.reduce((acc, r) => ({
-    sessions: acc.sessions + r.sessions, no_shows: acc.no_shows + r.no_shows,
-    gross: acc.gross + r.gross, subsidy: acc.subsidy + r.subsidy, self_pay: acc.self_pay + r.self_pay,
-    venue: acc.venue + r.venue, share: acc.share + r.share, center: acc.center + r.center,
-    collected: acc.collected + r.collected, uncollected: acc.uncollected + r.uncollected
-  }), { sessions: 0, no_shows: 0, gross: 0, subsidy: 0, self_pay: 0, venue: 0, share: 0, center: 0,
-    collected: 0, uncollected: 0 });
+  const keys = ['sessions', 'no_shows', 'gross', 'subsidy', 'self_pay', 'venue', 'share', 'center',
+    'settled_share', 'unsettled_share', 'settled_gross', 'unsettled_gross', 'unsettled_sessions'];
+  const total = Object.fromEntries(keys.map(k => [k, rows.reduce((a, r) => a + r[k], 0)]));
 
   res.json({ month, rows, total });
 });

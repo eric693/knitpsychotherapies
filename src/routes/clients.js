@@ -59,7 +59,10 @@ function idNoWarning(idNo) {
 // 清單只回畫表格要用的欄位。個案數上千時，`SELECT c.*` 會把病史、住址、
 // 甚至個案端的密碼雜湊一起送到每個櫃檯的瀏覽器，既慢也不該給。
 const CLIENT_LIST_COLUMNS = `c.id, c.code, c.name, c.gender, c.birth_date, c.phone,
-  c.counselor_id, c.status, c.risk_level, c.is_minor, c.portal_enabled, c.created_at`;
+  c.counselor_id, c.status, c.risk_level, c.is_minor, c.portal_enabled, c.created_at,
+  c.active, c.merged_into,
+  (SELECT code FROM clients m WHERE m.id = c.merged_into) AS merged_into_code,
+  (SELECT name FROM clients m WHERE m.id = c.merged_into) AS merged_into_name`;
 
 // 心理師只看得到自己主責的個案。督導與管理者不受限 ——
 // 督導要覆核實習生的紀錄，管理者要處理合併、轉介與帳務，看不到全所就做不了事。
@@ -69,7 +72,15 @@ function ownClientsOnly(user) {
 }
 function clientListWhere(query, user) {
   const { status = '', q = '', counselor_id = '', risk = '' } = query;
-  const where = ['c.active = 1'], args = [];
+  // 停用的個案（被合併掉、或刪除時因有歷史資料而改為停用）原本完全查不到 ——
+  // 櫃檯要找「那個人去哪了」就只能問工程師。status=inactive 專門查這些，
+  // 預設仍只列在案的，避免停用資料混進日常清單。
+  const where = [query.status === 'inactive' ? 'c.active = 0' : 'c.active = 1'], args = [];
+  if (query.status === 'inactive') {
+    if (ownClientsOnly(user)) { where.push('c.counselor_id = ?'); args.push(user.id); }
+    if (q) { where.push('(c.name LIKE ? OR c.code LIKE ? OR c.phone LIKE ?)'); args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
+    return { sql: where.join(' AND '), args };
+  }
   if (ownClientsOnly(user)) { where.push('c.counselor_id = ?'); args.push(user.id); }
   if (status) { where.push('c.status = ?'); args.push(status); }
   if (risk) { where.push('c.risk_level = ?'); args.push(risk); }
@@ -270,14 +281,23 @@ router.put('/clients/:id', requireStaff('clients'), (req, res) => {
   db.prepare(`UPDATE clients SET ${Object.keys(data).map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
     .run(...Object.values(data), c.id);
   audit('staff', req.user.id, req.user.name, '修改個案資料', c.code);
-  // 建檔當下沒留號碼的（兒青個案很常是事後才補家長電話），密碼在那時是空的，
-  // 專區等於開了卻進不去。補上號碼就順手把預設密碼補出來，不必再記得去按「重設密碼」。
-  if (!c.password_hash && (data.phone !== undefined || data.guardian_phone !== undefined)) {
-    const phone = portalPhone({ ...c, ...data });
-    if (phone) {
+  // 個案端密碼預設是「登入號碼末 6 碼」，所以號碼一改，舊密碼就對不上了。
+  //
+  // 兩種情形都要處理：
+  //  1. 建檔當下沒留號碼（兒青個案很常事後才補家長電話），密碼在那時是空的 —— 補發。
+  //  2. 號碼改成另一支，而個案還沒自己改過密碼（must_change_password = 1）—— 跟著換成新號碼末 6 碼。
+  //     個案已經自己設過密碼的（= 0）絕對不動，否則等於把人家的密碼改掉。
+  // 少了第 2 點，櫃檯改個號碼就會讓個案拿新號碼末 6 碼登不進去，而且畫面上毫無線索。
+  if (data.phone !== undefined || data.guardian_phone !== undefined) {
+    const before = portalPhone(c);
+    const after = portalPhone({ ...c, ...data });
+    const stillDefault = !c.password_hash || c.must_change_password;
+    if (after && stillDefault && after !== before) {
       db.prepare('UPDATE clients SET password_hash = ?, must_change_password = 1 WHERE id = ?')
-        .run(bcrypt.hashSync(phone.slice(-6), 10), c.id);
-      audit('staff', req.user.id, req.user.name, '補發個案端預設密碼', c.code);
+        .run(bcrypt.hashSync(after.slice(-6), 10), c.id);
+      audit('staff', req.user.id, req.user.name,
+        c.password_hash ? '登入號碼變更，同步更新個案端預設密碼' : '補發個案端預設密碼', c.code,
+        { from: before || '（無）', to: after });
     }
   }
   // 由未結案轉為結案時，依系統設定自動建立結案後的關懷追蹤點

@@ -228,29 +228,73 @@ router.get('/payouts', requireStaff('payouts'), (req, res) => {
 // 以及其中有多少還沒收到錢（機構案請款單未入帳、或收費單還沒收款）。
 // 帶 only_settled=1 時金額只計已撥款的場次，未撥款的那幾場留到錢進來的月份再付 ——
 // 不論勾不勾，未撥款的數字都會回傳，行政看得到自己少付了什麼。
+// 前幾個月被「未撥款」排除掉、而現在錢已經進來的場次。
+//
+// 機構案常常是九月做完、十月才撥款。九月結算時那些場次被排除（正確），但錢進來之後
+// 沒有任何地方把它們撈回來付 —— 十月的帶入只看十月的場次，九月的報酬就這樣懸在空中。
+// 判斷「還沒付」用的是該月已開立的報酬單總額：報酬單的金額已經蓋過那個月的報酬，
+// 就不再補；不足的差額才是待補的部分。
+function catchUpSessions(userId, month, backMonths = 6) {
+  const out = [];
+  for (let i = 1; i <= backMonths; i++) {
+    const m = monthsAgo(month, i);
+    const rows = counselorMonthSessions(userId, m).filter(r => r.status === 'done');
+    if (!rows.length) continue;
+    const settled = rows.filter(r => r.settled);
+    if (!settled.length) continue;
+    const paidOut = db.prepare('SELECT COALESCE(SUM(gross),0) g FROM payouts WHERE user_id = ? AND month = ?')
+      .get(userId, m).g;
+    const due = settled.reduce((a, r) => a + r.share, 0);
+    if (due > paidOut) out.push({ month: m, sessions: settled.length, due, paid: paidOut, gap: due - paidOut });
+  }
+  return out;
+}
+
+// YYYY-MM 往前推 n 個月
+function monthsAgo(month, n) {
+  const [y, m] = String(month).split('-').map(Number);
+  const d = new Date(y, (m - 1) - n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 router.get('/payouts/suggest', requireStaff('payouts'), (req, res) => {
   const month = String(req.query.month || today().slice(0, 7));
   const onlySettled = ['1', 'true', 'yes'].includes(String(req.query.only_settled || ''));
+  // 把前幾個月「已撥款但報酬還沒付足」的部分一起帶進來
+  const catchUp = ['1', 'true', 'yes'].includes(String(req.query.catch_up || ''));
   const users = db.prepare(`SELECT DISTINCT u.id AS user_id, u.name AS user_name, u.license_type
     FROM appointments a JOIN users u ON u.id = a.counselor_id
     WHERE a.status = 'done' AND substr(a.date,1,7) = ? ORDER BY u.name`).all(month);
-  res.json(users.map(u => {
+  // 本月沒場次、但前幾個月有待補的人也要列出來，否則那筆錢永遠沒人想起
+  const extra = catchUp
+    ? db.prepare(`SELECT DISTINCT u.id AS user_id, u.name AS user_name, u.license_type
+        FROM appointments a JOIN users u ON u.id = a.counselor_id
+        WHERE a.status = 'done' AND substr(a.date,1,7) < ? AND substr(a.date,1,7) >= ?`)
+      .all(month, monthsAgo(month, 6)).filter(x => !users.some(u => u.user_id === x.user_id))
+    : [];
+  res.json([...users, ...extra].map(u => {
     const all = counselorMonthSessions(u.user_id, month).filter(r => r.status === 'done');
     const settled = all.filter(r => r.settled);
     const unsettled = all.filter(r => !r.settled);
     const use = onlySettled ? settled : all;
     const sum = (list, k) => list.reduce((a, b) => a + (b[k] || 0), 0);
+    const back = catchUp ? catchUpSessions(u.user_id, month) : [];
+    const backGap = back.reduce((a, b) => a + b.gap, 0);
     return {
       ...u,
       sessions: use.length,
       fee_total: sum(use, 'self_pay'),
-      share_total: sum(use, 'share'),
+      share_total: sum(use, 'share') + backGap,
+      month_share: sum(use, 'share'),
       all_sessions: all.length,
       unsettled_sessions: unsettled.length,
       unsettled_share: sum(unsettled, 'share'),
-      unsettled_fee: sum(unsettled, 'self_pay')
+      unsettled_fee: sum(unsettled, 'self_pay'),
+      // 前幾個月已撥款但還沒付足的部分
+      catch_up: back,
+      catch_up_share: backGap
     };
-  }));
+  }).filter(r => r.sessions || r.catch_up_share));
 });
 
 router.post('/payouts', requireStaff('payouts'), (req, res) => {

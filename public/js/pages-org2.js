@@ -651,46 +651,55 @@ App.page('payouts', {
     // 勾「只計已撥款」就把那幾場排除，未撥款的金額仍列出來，才知道自己少付了什麼。
     el.querySelector('#gen').onclick = async () => {
       const month = el.querySelector('#m').value;
-      const load = async onlySettled => {
-        const rows = await GET(`/payouts/suggest?month=${month}${onlySettled ? '&only_settled=1' : ''}`);
-        return rows;
-      };
-      const first = await load(false);
+      const load = async (onlySettled, catchUp) => GET(`/payouts/suggest?month=${month}`
+        + `${onlySettled ? '&only_settled=1' : ''}${catchUp ? '&catch_up=1' : ''}`);
+      const first = await load(false, false);
       if (!first.length) return UI.toast('當月沒有已完成的晤談');
-      const table = rows => `${UI.table(['', '心理師', '完成節數', '晤談收費合計', '系統試算報酬', '尚未撥款', '給付總額'],
+      const table = rows => `${UI.table(
+        ['', '心理師', '完成節數', '本月報酬', '補前月已撥款', '尚未撥款', '給付總額'],
         rows.map((r, i) => `<tr>
-            <td><input type="checkbox" class="pk" data-i="${i}"${r.sessions ? ' checked' : ''}></td>
+            <td><input type="checkbox" class="pk" data-i="${i}"${r.share_total ? ' checked' : ''}></td>
             <td>${UI.esc(r.user_name)}</td>
             <td>${r.sessions}${r.all_sessions !== r.sessions
     ? ` <span style="color:var(--muted)">／共 ${r.all_sessions}</span>` : ''}</td>
-            <td>${UI.fmtMoney(r.fee_total)}</td>
-            <td>${UI.fmtMoney(r.share_total)}</td>
+            <td>${UI.fmtMoney(r.month_share === undefined ? r.share_total : r.month_share)}</td>
+            <td>${r.catch_up_share
+    ? `<span style="color:var(--ok)">${UI.fmtMoney(r.catch_up_share)}</span>
+       <div style="font-size:11.5px;color:var(--muted)">${r.catch_up.map(c =>
+      `${c.month} ${c.sessions} 場`).join('、')}</div>`
+    : '－'}</td>
             <td>${r.unsettled_sessions
     ? `<span style="color:var(--warn)">${r.unsettled_sessions} 場　${UI.fmtMoney(r.unsettled_share)}</span>`
     : '－'}</td>
             <td><input class="gross" data-i="${i}" type="number" value="${r.share_total || r.fee_total}"
-              style="width:120px"></td></tr>`))}`;
+              style="width:120px"></td></tr>`), '本月沒有可帶入的場次')}`;
       let rows = first;
       UI.modal({
         title: `${month} 依晤談量帶入報酬單`,
         wide: true,
         submitText: '建立勾選項目',
-        body: `<label style="display:block;margin-bottom:10px">
+        body: `<label style="display:block;margin-bottom:6px">
             <input type="checkbox" id="onlysettled"> 只計已撥款的場次（機構案請款單已入帳、自費案已收款）</label>
+          <label style="display:block;margin-bottom:10px">
+            <input type="checkbox" id="catchup"> 一併補上前幾個月已撥款、但報酬還沒付足的場次</label>
           <div id="gen-rows">${table(rows)}</div>
           <label style="display:block;margin-top:10px">
             <input type="checkbox" id="autosplit" checked> 給付總額超過每筆上限（19,999）時自動拆成多筆</label>
           <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
             給付總額預設帶入系統依方案拆帳試算的報酬，可依實際情形改；扣繳金額於建立時自動試算。<br>
             「尚未撥款」是機構案請款單還沒入帳、或收費單還沒收款的場次 ——
-            勾上方選項就不計入這次付款，等錢進來的月份再結算。</div>`,
+            勾上方選項就不計入這次付款，等錢進來的月份再結算。<br>
+            機構案常常是上個月做完、這個月才撥款。勾「<strong>一併補上前幾個月</strong>」會回溯六個月，
+            把已經撥款、但那個月的報酬單金額還不足的差額加進來，上個月被排除的場次才不會懸在空中。</div>`,
         onOpen: e2 => {
-          e2.querySelector('#onlysettled').onchange = async ev => {
+          const reload = async () => {
             try {
-              rows = await load(ev.target.checked);
+              rows = await load(e2.querySelector('#onlysettled').checked, e2.querySelector('#catchup').checked);
               e2.querySelector('#gen-rows').innerHTML = table(rows);
             } catch (err) { UI.err(err); }
           };
+          e2.querySelector('#onlysettled').onchange = reload;
+          e2.querySelector('#catchup').onchange = reload;
         },
         onSubmit: async e2 => {
           const picks = [...e2.querySelectorAll('.pk')].filter(c => c.checked).map(c => Number(c.dataset.i));

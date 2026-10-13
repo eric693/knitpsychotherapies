@@ -544,6 +544,55 @@ function startServer() {
       { phone: '096-123-4567', password: '234567' })).ok, '有分隔符號的號碼也該通');
     await admin.ok('DELETE', `/api/clients/${kid.id}`).catch(() => {});
   });
+  // 密碼預設是「登入號碼末 6 碼」，所以號碼改掉、舊密碼就對不上 ——
+  // 櫃檯改個號碼就讓個案登不進去，而且畫面上毫無線索
+  await test('改了登入號碼，預設密碼跟著換；個案自己設過的密碼不動', async () => {
+    const a = await admin.ok('POST', '/api/clients',
+      { name: '換號碼測試甲', phone: '0966100001', portal_enabled: 1 });
+    const b = await admin.ok('POST', '/api/clients',
+      { name: '換號碼測試乙', phone: '0966200002', portal_enabled: 1 });
+    try {
+      // 甲：還沒自己改過密碼 → 換號碼後，新號碼末 6 碼要能登入
+      await admin.ok('PUT', `/api/clients/${a.id}`, { phone: '0966100099' });
+      const s1 = session();
+      await s1.fails('POST', '/api/portal/login', { phone: '0966100099', password: '100001' }, '錯誤');
+      assert((await s1.ok('POST', '/api/portal/login',
+        { phone: '0966100099', password: '100099' })).ok, '換號碼後應可用新號碼末 6 碼登入');
+
+      // 乙：個案自己改過密碼 → 換號碼不能動他的密碼
+      const s2 = session();
+      await s2.ok('POST', '/api/portal/login', { phone: '0966200002', password: '200002' });
+      await s2.ok('PUT', '/api/portal/password', { old_password: '200002', new_password: 'myOwnPass1' });
+      await admin.ok('PUT', `/api/clients/${b.id}`, { phone: '0966200088' });
+      const s3 = session();
+      assert((await s3.ok('POST', '/api/portal/login',
+        { phone: '0966200088', password: 'myOwnPass1' })).ok, '自己設的密碼不該被換號碼覆蓋');
+      await s3.fails('POST', '/api/portal/login', { phone: '0966200088', password: '200088' }, '錯誤');
+    } finally {
+      for (const x of [a, b]) await admin.ok('DELETE', `/api/clients/${x.id}/purge`).catch(() => {});
+    }
+  });
+  // 輸入綁定碼只會寫入 line_user_id，不該動到登入憑證
+  await test('完成 LINE 綁定後，原本的專區密碼照樣登得進去', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    const c = await admin.ok('POST', '/api/clients',
+      { name: '綁定後登入測試', phone: '0966300003', portal_enabled: 1 });
+    try {
+      const code = await admin.ok('POST', '/api/line/bind-code', { client_id: c.id });
+      const body = JSON.stringify({ events: [{ type: 'message', replyToken: 'rb9',
+        source: { userId: 'Ubind999' }, message: { type: 'text', text: code.code } }] });
+      const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+      await fetch(BASE + '/api/line/webhook', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+      const after = await admin.ok('GET', `/api/clients/${c.id}`);
+      equal(after.line_user_id, 'Ubind999', '綁定應完成');
+      assert((await session().ok('POST', '/api/portal/login',
+        { phone: '0966300003', password: '300003' })).ok, '綁定後密碼不該被動到');
+    } finally {
+      await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
   await test('建檔時沒留號碼，事後補上就自動補發專區密碼', async () => {
     const kid = await admin.ok('POST', '/api/clients',
       { name: '測試童二', phone: '', birth_date: '2015-03-03', portal_enabled: 1 });
@@ -654,6 +703,44 @@ function startServer() {
       assert(!/沒有留任何電話/.test(u.warning || ''), '補上電話後不該再示警');
     } finally {
       await admin.ok('DELETE', `/api/clients/${c.id}`).catch(() => {});
+    }
+  });
+  // 團體場次排定後要通知成員，不然家長不知道孩子哪天要上課
+  await test('團體場次排定後自動通知已綁 LINE 的成員', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    const g = await admin.ok('POST', '/api/groups',
+      { name: '團體通知測試', counselor_id: 2, capacity: 6, sessions_total: 4, status: 'open' });
+    const m1 = await admin.ok('POST', '/api/clients', { name: '團體成員甲', phone: '0922111001' });
+    const m2 = await admin.ok('POST', '/api/clients', { name: '團體成員乙', phone: '0922111002' });
+    try {
+      for (const m of [m1, m2]) await admin.ok('POST', `/api/groups/${g.id}/members`, { client_id: m.id });
+      // 只有甲綁了 LINE
+      const code = await admin.ok('POST', '/api/line/bind-code', { client_id: m1.id });
+      const body = JSON.stringify({ events: [{ type: 'message', replyToken: 'rg1',
+        source: { userId: 'Ugroup001' }, message: { type: 'text', text: code.code } }] });
+      const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+      await fetch(BASE + '/api/line/webhook', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+
+      const day = addDays(ymd(new Date()), 20);
+      const s1 = await admin.ok('POST', `/api/groups/${g.id}/sessions`,
+        { date: day, start_time: '15:00', end_time: '16:30', topic: '情緒覺察' });
+      assert(s1.notify, '排定場次應回報通知結果：' + JSON.stringify(s1));
+      equal(s1.notify.members, 2, '應對兩位在籍成員處理');
+      equal(s1.notify.sent + s1.notify.pending, 2, '每位成員都要有處理結果');
+      // 冒煙環境的權杖是假的，實際送不出去會記成待人工發送 —— 重點是有留下紀錄、沒有靜靜漏掉
+      const log = await admin.ok('GET', '/api/notifications?limit=80');
+      const rows = log.rows || log;
+      const hit = rows.filter(r => r.kind === 'group_scheduled');
+      assert(hit.length >= 1, '應留下團體通知的紀錄：' + JSON.stringify(rows.slice(0, 3)));
+      // 卡片要寫明是誰的課（家長一個 LINE 可能收好幾個孩子的通知）
+      const txt = JSON.stringify(hit);
+      assert(txt.includes('團體通知測試'), '卡片應帶出團體名稱');
+      assert(txt.includes('團體成員甲'), '卡片應寫明參加者是誰');
+    } finally {
+      await admin.ok('DELETE', `/api/groups/${g.id}`).catch(() => {});
+      for (const m of [m1, m2]) await admin.ok('DELETE', `/api/clients/${m.id}/purge`).catch(() => {});
     }
   });
   // 先綁 LINE、後授權家人：這個順序原本會讓新授權的家人永遠收不到提醒 ——
@@ -1728,6 +1815,42 @@ function startServer() {
       await admin.del(`/api/appointments/${appt.id}`).catch(() => {});
     }
   });
+  // 停用掉的個案（含被合併掉的）原本在個案清單完全查不到，櫃檯只能問工程師
+  await test('停用的個案查得到，並標明併進了哪一位', async () => {
+    const a = await admin.ok('POST', '/api/clients', { name: '停用查詢測試甲', phone: '0912888001' });
+    const b = await admin.ok('POST', '/api/clients', { name: '停用查詢測試乙', phone: '0912888002' });
+    try {
+      await admin.ok('DELETE', `/api/clients/${a.id}`);          // 停用
+      const live = await admin.ok('GET', '/api/clients?page=1&q=停用查詢測試');
+      assert(!live.rows.some(r => r.id === a.id), '預設清單不該出現停用的');
+      assert(live.rows.some(r => r.id === b.id), '在案的仍要列出');
+      const dead = await admin.ok('GET', '/api/clients?page=1&status=inactive&q=停用查詢測試');
+      assert(dead.rows.some(r => r.id === a.id), '查「已停用」要找得到');
+      assert(!dead.rows.some(r => r.id === b.id), '在案的不該混進停用清單');
+      equal(dead.rows.find(r => r.id === a.id).active, 0, '應標記為停用');
+    } finally {
+      for (const x of [a, b]) await admin.ok('DELETE', `/api/clients/${x.id}/purge`).catch(() => {});
+    }
+  });
+  // 櫃檯回報「我的報酬」與「心理師收支」兩頁金額不一樣 —— 兩邊改用同一個計算函式
+  await test('心理師收支與我的報酬確認是同一套計算，且含已撥款拆分', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    const d = await admin.ok('GET', `/api/plan-income?month=${month}`);
+    assert(Array.isArray(d.rows), '應回傳清單');
+    assert('settled_gross' in d.total && 'unsettled_share' in d.total, '彙總要有已撥款／未撥款');
+    for (const r of d.rows) {
+      equal(r.settled_gross + r.unsettled_gross, r.gross, `${r.counselor_name}：已撥款＋未撥款應等於服務總額`);
+      equal(r.settled_share + r.unsettled_share, r.share, `${r.counselor_name}：報酬的拆分也要相符`);
+      equal(r.gross - r.share, r.center, `${r.counselor_name}：所方淨收 = 服務總額 − 報酬`);
+      // 與心理師自己那一頁逐位比對
+      const mine = await (r.counselor_id === 2 ? lin : admin)
+        .ok('GET', `/api/my/income?month=${month}`).catch(() => null);
+      if (mine && r.counselor_id === 2) {
+        equal(mine.total.share, r.share, '兩頁的報酬合計必須一致');
+        equal(mine.total.unsettled_share, r.unsettled_share, '兩頁的未撥款金額必須一致');
+      }
+    }
+  });
   // 補助方案的錢分兩半：跟單位請的是「方案給付」那一半。
   // 拿個案自付去加總的話，青壯方案這種自付 0 元的會算出 0 元請款單。
   await test('未設議定價時，請款金額以方案給付計，不是個案自付', async () => {
@@ -2770,6 +2893,58 @@ function startServer() {
     const slip = await admin.get(`/api/payouts/slip?batch=${made.batch_id}`);
     assert(slip.text.includes('年終獎金'), '整批報酬單應列出獎金');
     await admin.ok('DELETE', `/api/payouts/batch/${made.batch_id}`).catch(() => {});
+  });
+  // 機構案九月做完、十月才撥款：九月結算時被排除（正確），但錢進來後要有地方把它撈回來付
+  await test('報酬帶入可補上前月已撥款、報酬還沒付足的場次', async () => {
+    const lins = (await admin.ok('GET', '/api/users')).find(u => u.username === 'lin');
+    const clients = await admin.ok('GET', '/api/clients');
+    // 上個月做一場、收款（＝錢已進來），但那個月沒開任何報酬單
+    const prev = (() => { const d = new Date(); d.setMonth(d.getMonth() - 1, 15); return ymd(d); })();
+    const month = ymd(new Date()).slice(0, 7);
+    // 要帶方案才有抽成，沒方案的場次心理師報酬是 0，就沒有待補的金額可驗
+    const plan = await admin.ok('POST', '/api/service-plans', {
+      name: '補前月測試方案', kind: 'self', fee: 2000, session_minutes: 50,
+      share_mode: 'percent', share_percent: 60, portal_visible: 0
+    });
+    const appt = await admin.ok('POST', '/api/appointments', {
+      client_id: clients[0].id, counselor_id: lins.id, date: prev, start_time: '07:00',
+      plan_id: plan.id, override: true
+    });
+    await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'done' });
+    let inv = (await admin.ok('GET', '/api/invoices')).rows.find(i => i.appointment_id === appt.id);
+    if (!inv) {
+      // 沒有自動開單就手動開一張，重點是「這一場的錢已經進來」
+      inv = await admin.ok('POST', '/api/invoices',
+        { client_id: clients[0].id, appointment_id: appt.id, date: prev, item: '晤談費', amount: 2000 });
+      inv = (await admin.ok('GET', '/api/invoices')).rows.find(i => i.appointment_id === appt.id);
+    }
+    assert(inv, '這一場應該要有收費單才測得到撥款');
+    if (inv.status !== 'paid') await admin.ok('POST', `/api/invoices/${inv.id}/pay`, { method: '現金' });
+    try {
+      const plain = (await admin.ok('GET', `/api/payouts/suggest?month=${month}`))
+        .find(r => r.user_id === lins.id) || { catch_up_share: 0 };
+      equal(plain.catch_up_share || 0, 0, '沒勾補前月時不該出現補發金額');
+      const listBack = await admin.ok('GET', `/api/payouts/suggest?month=${month}&catch_up=1`);
+      const withBack = listBack.find(r => r.user_id === lins.id);
+      assert(withBack, '勾了補前月應列出這位心理師，實際：' + JSON.stringify(listBack));
+      assert(withBack.catch_up_share > 0, '應算出待補金額：' + JSON.stringify(withBack.catch_up));
+      equal(withBack.share_total, withBack.month_share + withBack.catch_up_share,
+        '給付總額＝本月報酬＋補前月');
+      assert(withBack.catch_up.some(c => c.month === prev.slice(0, 7)), '應指出是哪個月待補');
+      // 把那個月的報酬單補開之後就不該再出現
+      const made = await admin.ok('POST', '/api/payouts', {
+        user_id: lins.id, month: prev.slice(0, 7), item: '補發鐘點',
+        base_amount: withBack.catch_up[0].due, income_type: '9B'
+      });
+      const after = (await admin.ok('GET', `/api/payouts/suggest?month=${month}&catch_up=1`))
+        .find(r => r.user_id === lins.id) || { catch_up_share: 0 };
+      equal(after.catch_up_share || 0, 0, '付足之後不該再重複補');
+      await admin.ok('DELETE', `/api/payouts/${made.id}`).catch(() => {});
+    } finally {
+      await admin.ok('POST', `/api/appointments/${appt.id}/status`, { status: 'cancelled' }).catch(() => {});
+      await admin.del(`/api/appointments/${appt.id}`).catch(() => {});
+      await admin.ok('DELETE', `/api/service-plans/${plan.id}`).catch(() => {});
+    }
   });
   // 這個月只結好了其中幾位時，不必等全部結完才送
   await test('月結可只送出指定心理師', async () => {

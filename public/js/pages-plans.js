@@ -458,7 +458,13 @@ App.page('income', {
   help: [
     '依方案別結算每位心理師每月的服務量、收入、報酬與所方淨收。',
     '按「明細／列印」看該心理師逐筆晤談的組成，可列印給對方核對。',
-    '只計已完成的晤談。',
+    '只計已完成與未到的晤談。',
+    '「已撥款／未撥款」是依<strong>每一場的實際金流</strong>判斷：機構案看合作單位的請款單是否入帳、'
+      + '其餘看收費單是否收款。青壯方案的收費單是 0 元，所以不能用收費單判斷，'
+      + '要等請款單標「已入帳」那一場才算錢進來了。',
+    '這頁的數字與心理師自己看的「我的報酬確認」是同一套計算，兩邊一定對得起來。'
+      + '與「報酬與扣繳」的報酬單金額不同是正常的 —— 報酬單是行政實際要付的錢，'
+      + '可以手改、可以加獎金、也可以先排除未撥款的場次。',
   ],
   module: 'reports',
   async render(el) {
@@ -482,10 +488,11 @@ App.page('income', {
        <td style="color:var(--muted)">以「服務總額 − 場地費」為基數計算</td></tr>`,
     `<tr><td>所方淨收</td><td style="text-align:right"><strong>${UI.fmtMoney(t.center)}</strong></td>
        <td style="color:var(--muted)">服務總額 − 心理師報酬</td></tr>`,
-    `<tr><td>實收</td><td style="text-align:right">${UI.fmtMoney(t.collected)}</td>
-       <td style="color:var(--muted)">已收款金額</td></tr>`,
-    `<tr><td>未收</td><td style="text-align:right;color:var(--danger)">${UI.fmtMoney(t.uncollected)}</td>
-       <td style="color:var(--muted)">尚未收款，可於收費管理催收</td></tr>`
+    `<tr><td>已撥款</td><td style="text-align:right">${UI.fmtMoney(t.settled_gross)}</td>
+       <td style="color:var(--muted)">錢已經進來的場次（機構案請款單已入帳、自費案已收款）</td></tr>`,
+    `<tr><td>未撥款</td><td style="text-align:right;color:var(--danger)">${UI.fmtMoney(t.unsettled_gross)}</td>
+       <td style="color:var(--muted)">${t.unsettled_sessions} 場的錢還沒進來；對應報酬 ${UI.fmtMoney(t.unsettled_share)}，
+         報酬帶入時勾「只計已撥款」會先排除</td></tr>`
   ])}
         ${UI.barChart(d.rows.map(r => ({ label: r.counselor_name, value: r.share, note: `${r.sessions} 場` })),
       { horizontal: true, format: v => UI.fmtMoney(v), title: '心理師報酬' })}
@@ -493,6 +500,7 @@ App.page('income', {
       ${d.rows.map(r => `<div class="card"><h3>${UI.esc(r.counselor_name)}
           <span style="font-size:13px;font-weight:400;color:var(--muted)">
             ${r.sessions} 場｜應收 ${UI.fmtMoney(r.gross)}｜報酬 ${UI.fmtMoney(r.share)}｜所方 ${UI.fmtMoney(r.center)}</span>
+          ${r.unsettled_share ? UI.tag(`未撥款 ${r.unsettled_sessions} 場／${UI.fmtMoney(r.unsettled_share)}`, 'warn') : ''}
           ${r.payout_status === 'paid' ? UI.tag('報酬已付', 'ok') : r.payout_status === 'pending' ? UI.tag('報酬待付', 'warn') : ''}</h3>
         ${UI.table(['方案', '場次', '服務總額', '方案給付', '個案自付', '場地費', '心理師報酬', '所方淨收'],
       r.plans.map(p => `<tr>

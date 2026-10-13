@@ -28,6 +28,8 @@ async function apptDialog(appt, onDone, defaults) {
       ${UI.input('fee', '個案應付金額', { type: 'number', value: a.fee !== undefined ? a.fee : (App.meta.default_fee || 2000) })}
       <div class="form-row full" id="quota-hint" style="display:none"></div>
       ${UI.select('package_id', '扣抵方案', [['', '不扣抵（單次收費）']].concat(packages.map(p => [p.id, `${p.name}（剩 ${p.remaining} 次）`])), { value: a.package_id || '' })}
+      ${isNew ? `${UI.input('repeat_times', '連續排幾次（含這一次）', { type: 'number', value: 1, min: 1 })}
+        ${UI.select('repeat_weeks', '間隔', [[1, '每週'], [2, '每兩週'], [3, '每三週'], [4, '每四週']], { value: 1 })}` : ''}
       <div class="form-row full" id="mu-row" style="${a.mode === 'online' ? '' : 'display:none'}">
         <label>視訊連結</label>
         <input name="meeting_url" value="${UI.esc(a.meeting_url || '')}" placeholder="https://meet.google.com/xxx-xxxx-xxx">
@@ -150,18 +152,61 @@ async function apptDialog(appt, onDone, defaults) {
       const data = UI.formData(el);
       // 選「不佔用空間」＝不指派任何諮商室（視訊在家或個案端連線的情形）
       if (data.room_id === 'none') data.room_id = '';
-      const save = () => (isNew ? POST('/appointments', data) : PUT(`/appointments/${a.id}`, data));
-      try {
-        await save();
-      } catch (e) {
-        // 方案額度或人次上限擋下時，讓有權限的人確認後仍可排入（會寫進稽核軌跡）
-        if (!/已使用|已排滿|限 /.test(e.message)) throw e;
-        if (!await UI.confirm(`${e.message}\n\n仍要排入嗎？（此決定會記錄於稽核軌跡）`)) return false;
-        data.override = true;
-        await save();
+      const times = Math.max(1, Math.min(Number(data.repeat_times) || 1, 52));
+      const everyWeeks = Math.max(1, Number(data.repeat_weeks) || 1);
+      delete data.repeat_times; delete data.repeat_weeks;
+
+      const saveOne = async payload => {
+        try {
+          await POST('/appointments', payload);
+          return { ok: true };
+        } catch (e) {
+          // 方案額度或人次上限擋下時，讓有權限的人確認後仍可排入（會寫進稽核軌跡）
+          if (!/已使用|已排滿|限 /.test(e.message)) return { ok: false, why: e.message };
+          return { ok: false, why: e.message, overridable: true };
+        }
+      };
+
+      if (!isNew) {
+        try {
+          await PUT(`/appointments/${a.id}`, data);
+        } catch (e) {
+          if (!/已使用|已排滿|限 /.test(e.message)) throw e;
+          if (!await UI.confirm(`${e.message}\n\n仍要排入嗎？（此決定會記錄於稽核軌跡）`)) return false;
+          await PUT(`/appointments/${a.id}`, { ...data, override: true });
+        }
+        UI.toast('已儲存');
+        onDone && onDone();
+        return;
       }
-      UI.toast('已儲存');
-      onDone && onDone();
+
+      // 連續排約：逐次送出，沿用既有的衝突與額度檢查。
+      // 中間某幾週撞到休診、請假或額度是常態，所以不整批失敗 ——
+      // 排得進去的先排進去，排不進去的逐筆列出原因讓櫃檯自己處理。
+      const dates = Array.from({ length: times }, (_, i) => UI.addDays(data.date, i * everyWeeks * 7));
+      const results = [];
+      for (const date of dates) {
+        const r = await saveOne({ ...data, date });
+        if (!r.ok && r.overridable) {
+          // 額度類的擋下才問一次，問完的決定套用到剩下的每一次
+          const go = await UI.confirm(`${date}：${r.why}\n\n仍要排入嗎？（此決定會記錄於稽核軌跡）`);
+          if (go) { data.override = true; results.push({ date, ...(await saveOne({ ...data, date })) }); continue; }
+        }
+        results.push({ date, ...r });
+      }
+      const okCount = results.filter(r => r.ok).length;
+      const bad = results.filter(r => !r.ok);
+      if (!bad.length) { UI.toast(times > 1 ? `已排入 ${okCount} 次` : '已儲存'); onDone && onDone(); return; }
+      UI.modal({
+        title: `已排入 ${okCount} 次，${bad.length} 次排不進去`,
+        hideFooter: true,
+        body: `${UI.table(['日期', '原因'], bad.map(b => `<tr><td>${b.date}</td>
+            <td style="color:var(--danger)">${UI.esc(b.why)}</td></tr>`))}
+          <div style="font-size:13px;color:var(--muted);margin-top:8px">
+            排得進去的已經排好了。上面這幾次請另外找時間，或先處理衝突再排。</div>`,
+        onClose: () => { onDone && onDone(); }
+      });
+      return false;
     }
   });
 }
@@ -235,6 +280,9 @@ App.page('schedule', {
       + '按「展開完整時段」把格線全部攤開，點任一空格就用那天那個時間開新預約。',
     '下方「諮商室使用表」預設收合，點標題展開；展開或收合會記住，下次進來維持一樣。',
     '右上「新增預約」排新的一筆；同一心理師或同一諮商室撞時段會直接擋下。',
+    '要一次排好幾次（如每兩週一次、連續六次），在新增預約時填「連續排幾次」與「間隔」即可。'
+      + '中間某幾週撞到請假或額度上限時不會整批失敗 —— 排得進去的先排好，'
+      + '排不進去的會逐筆列出日期與原因。',
     '下方是「諮商室使用表」，看各間諮商室的使用狀況；點有人的格子可改那筆預約，點空格可在那個時段新增。',
     '每週可預約時段與請假已移到選單的「心理師排班／請假」。',
     '上方下拉可只看某一位心理師。',

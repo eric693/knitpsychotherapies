@@ -180,6 +180,8 @@ App.page('clients', {
     '心理師只看得到自己主責的個案（清單、搜尋與排約選單都是）；督導與管理者看得到全所。',
     '點個案姓名進「個案總覽」，晤談紀錄、處遇計畫、量表、附件、同意書都在那裡。',
     '不再服務的個案請用「停用」保留紀錄；「永久刪除」僅管理者可用，且無法復原。',
+    '<strong>要找已停用的個案</strong>（停用掉的、或被合併掉的），把狀態下拉選「已停用（含合併掉的）」'
+      + '就會列出來，被合併的那筆會標明併進了哪一位；點「詳情」仍看得到完整紀錄。',
   ],
   module: 'clients',
   async render(el) {
@@ -199,7 +201,9 @@ App.page('clients', {
           ${c.is_minor ? UI.tag('未成年') : ''}</td>
         <td>${c.age !== null ? c.age + ' 歲' : '-'}／${UI.esc(TW.gender[c.gender] || '')}</td>
         <td>${UI.esc(c.counselor_name || '未指定')}</td>
-        <td>${stateTag('client_status', c.status)}</td>
+        <td>${stateTag('client_status', c.status)}
+          ${c.active ? '' : UI.tag(c.merged_into_code
+    ? '已併入 ' + UI.esc(c.merged_into_code + ' ' + (c.merged_into_name || '')) : '已停用', 'warn')}</td>
         <td>${stateTag('risk_level', c.risk_level)}</td>
         <td>${c.last_session || '-'}</td>
         <td>${c.next_session || '-'}</td>
@@ -207,7 +211,7 @@ App.page('clients', {
         <td style="text-align:right;white-space:nowrap">
           <button class="btn tiny secondary" data-ed="${c.id}">編輯</button>
           <a class="btn tiny secondary" href="#client/${c.id}">詳情</a>
-          ${App.me.role === 'admin' ? `<button class="btn tiny danger" data-del="${c.id}">刪除</button>` : ''}</td></tr>`);
+          ${App.me.role === 'admin' && c.active ? `<button class="btn tiny danger" data-del="${c.id}">刪除</button>` : ''}</td></tr>`);
       el.querySelector('#list').innerHTML = UI.table(
         ['編號', '姓名', '年齡／性別', '主責心理師', '狀態', '風險', '最近晤談', '下次預約', '聯絡電話', ''],
         rows, '沒有符合條件的個案')
@@ -259,7 +263,7 @@ App.page('clients', {
     };
     el.innerHTML = `<div class="toolbar">
         <input id="q" placeholder="搜尋姓名／編號／電話">
-        <select id="st"><option value="">全部狀態</option>${App.enumOptions('client_status').map(o => `<option value="${o[0]}">${o[1]}</option>`).join('')}</select>
+        <select id="st"><option value="">全部狀態</option>${App.enumOptions('client_status').map(o => `<option value="${o[0]}">${o[1]}</option>`).join('')}<option value="inactive">已停用（含合併掉的）</option></select>
         <select id="cs">${App.counselorOptions(true).map(o => `<option value="${o[0]}">${UI.esc(o[1])}</option>`).join('')}</select>
         <div class="spacer"></div>
         <button class="btn secondary" id="dup">找重複個案</button>

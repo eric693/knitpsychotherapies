@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const { db, audit, today, addDays, getSetting, setSetting, nowStamp } = require('../db');
 const { requireStaff } = require('../auth');
 const line = require('../line');
+const groups = require('./groups');
 const { logApptEvent } = require('../appt-events');
 
 const router = express.Router();
@@ -672,10 +673,32 @@ async function pushClientReminders() {
   }
 }
 
+// 團體場次提醒：與一對一晤談同一個提前時數，逐場只推一次。
+// 團體沒有「個案自己改期」，所以卡片上不放改期按鈕（見 line.js 的 groupSessionFlex）。
+async function pushGroupReminders() {
+  const hours = Number(getSetting('line_reminder_hours', '24'));
+  if (!(hours > 0)) return;
+  const rows = db.prepare(`SELECT id FROM group_sessions
+    WHERE status != 'cancelled' AND reminded_at = ''
+      AND datetime(date || ' ' || start_time) BETWEEN datetime('now','localtime')
+        AND datetime('now','localtime','+' || ? || ' hours')
+    ORDER BY date, start_time LIMIT 100`).all(hours);
+  for (const r of rows) {
+    try {
+      const out = await groups.pushGroupSession(r.id, 'reminder');
+      // 有人收到就蓋章；全部都沒綁定時不蓋，等成員綁好還有機會推
+      if (out && out.sent > 0) {
+        db.prepare('UPDATE group_sessions SET reminded_at = ? WHERE id = ?').run(nowStamp(), r.id);
+      }
+    } catch (e) { console.error('團體場次提醒失敗：', e.message); }
+  }
+}
+
 async function runDailyPush() {
   if (!line.lineEnabled()) return;
   await pushCounselorDaily();
   await pushClientReminders();
+  await pushGroupReminders();
 }
 
 module.exports = router;

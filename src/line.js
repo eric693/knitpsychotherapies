@@ -169,6 +169,39 @@ function bookingConfirmedFlex(a) {
 }
 
 // 晤談提醒（個案）
+// 團體場次卡：排定與提醒共用一張，只有標題與提示不同。
+// 團體跟一對一一樣要通知成員，但團體沒有「個案自己改期」這件事 ——
+// 人數牽一動百，改期一律回所內處理，所以不放改期按鈕，只留專區與電話。
+function groupSessionFlex(s, kind = 'scheduled') {
+  const c = centerInfo();
+  const footer = [];
+  const portal = s.portal_url || portalUrl();
+  if (portal) footer.push(actionButton('個案專區', { type: 'uri', label: '個案專區', uri: portal }, 'secondary'));
+  if (c.phone) footer.push(actionButton('有問題請來電', { type: 'uri', label: '有問題請來電', uri: `tel:${c.phone}` }, 'secondary'));
+  const title = kind === 'reminder' ? '團體課程提醒' : '團體課程已排定';
+  return card({
+    title,
+    subtitle: c.name,
+    altText: `${title}：${s.date}（${weekdayOf(s.date)}）${s.start_time} ${s.group_name || ''}`,
+    body: [
+      { type: 'text', text: `${s.date}（${weekdayOf(s.date)}）${s.start_time}-${s.end_time}`,
+        weight: 'bold', size: 'lg', color: '#3b4a55', wrap: true },
+      sep(),
+      // 家長一個 LINE 可能收好幾個孩子的通知，每張都寫清楚是誰的
+      ...(s.client_name ? [kv('參加者', s.client_name)] : []),
+      kv('團體', s.group_name || ''),
+      ...(s.session_no ? [kv('場次', `第 ${s.session_no} 次`)] : []),
+      ...(s.topic ? [kv('主題', s.topic)] : []),
+      ...(s.counselor_name ? [kv('帶領者', s.counselor_name)] : []),
+      kv('地點', c.address || c.name),
+      noteBox(kind === 'reminder'
+        ? '請準時出席。無法出席請及早來電告知，以便帶領者調整團體進行方式。'
+        : '已為您排入這個團體場次。如需調整請來電，團體時間牽涉其他成員，恕無法於線上改期。')
+    ],
+    footer
+  });
+}
+
 function reminderFlex(a) {
   const c = centerInfo();
   const footer = [];
@@ -422,7 +455,7 @@ function verifySignature(rawBody, signature) {
 module.exports = {
   lineEnabled, weekdayOf, centerInfo,
   card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
-  bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, portalUrl,
+  bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, groupSessionFlex, portalUrl,
   counselorScheduleFlex, counselorBookingFlex, receiptFlex,
   pushFlex, pushText, pushMessages, imageMessage, replyMessages, verifySignature, logNotification,
   retryNotification, retryFailedNotifications

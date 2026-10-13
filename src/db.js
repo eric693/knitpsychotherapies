@@ -249,6 +249,10 @@ ensureColumns('notifications', {
 });
 
 // 報酬單拆單：同一筆報酬拆成數筆各低於扣繳門檻時，用 batch_* 記住它們原屬同一次結算
+// 團體場次也要發提醒，需要一個「已提醒過」的印記，否則每 10 分鐘會重複推
+ensureColumns('group_sessions', {
+  reminded_at: "TEXT NOT NULL DEFAULT ''"
+});
 ensureColumns('payouts', {
   pay_date: "TEXT NOT NULL DEFAULT ''",              // 支領日期（列印勞務報酬單用）
   batch_id: "TEXT NOT NULL DEFAULT ''",              // 同批拆單共用的識別碼
