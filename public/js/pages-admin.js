@@ -1187,6 +1187,7 @@ App.page('settings', {
         ['booking_rate_limit', '每 IP 每 10 分鐘可送出的預約次數（0 = 不限；同公司或同電信 NAT 會共用 IP）'],
         ['booking_notice', '表單注意事項'], ['booking_privacy', '個資告知文字']]],
       ['諮商室指派', [['room_auto_assign', '成立預約時自動指派空房（1/0）'],
+        ['room_required', '到所晤談一定要有諮商室才能成立（1/0；排滿或未指定即擋下，視訊不受限）'],
         ['room_hide_from_client', '個案端與表單不顯示諮商室（1/0）']]],
       ['其他開關', [['intern_review_enabled', '啟用實習生紀錄督導覆核（1/0）'],
         ['receipt_title_default', '收據預設抬頭'],

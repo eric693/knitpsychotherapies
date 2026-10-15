@@ -650,6 +650,11 @@ function consentDocHtml(opts) {
           ${signed.agreed ? '' : '　<strong>【不同意】</strong>'}</div>
         <div>簽署時間：${esc(signed.signed_at)}　版本：${signed.version}</div>
         ${signed.signature ? `<div><img src="${esc(signed.signature)}" alt="簽名" class="sig"></div>` : ''}
+        ${signed.staff_name ? `<div style="margin-top:10px">心理師：${esc(signed.staff_name)}
+            ${signed.staff_signed_at ? `　簽署時間：${esc(String(signed.staff_signed_at).slice(0, 16))}` : ''}</div>
+          ${signed.staff_signature
+    ? `<div><img src="${esc(signed.staff_signature)}" alt="心理師簽名" class="sig"></div>`
+    : '<div>心理師簽名：____________________</div>'}` : ''}
       </div>` : `<div class="lines">${opts.signBlock ? esc(opts.signBlock)
     : `<div>本人簽名：____________________　　日期：____________________</div>
        <div>諮商／臨床心理師簽名：____________________（諮／臨 心字＿＿＿＿＿號）　　日期：____________________</div>`}
@@ -739,7 +744,8 @@ router.get('/clients/:id/consents/:key', requireStaff('consents'), (req, res) =>
 router.post('/clients/:id/consents', requireStaff('consents'), (req, res) => {
   const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: '找不到此個案' });
-  const { key, agreed = 1, signer_name = '', signer_role = 'client', signature = '' } = req.body || {};
+  const { key, agreed = 1, signer_name = '', signer_role = 'client', signature = '',
+    staff_signature = '' } = req.body || {};
   const t = db.prepare('SELECT * FROM consent_templates WHERE key = ?').get(key || '');
   if (!t) return res.status(400).json({ error: '找不到此同意書範本' });
   if (!agreed && !t.allow_decline) return res.status(400).json({ error: '此同意書為必要項目，不得選擇不同意' });
@@ -747,11 +753,26 @@ router.post('/clients/:id/consents', requireStaff('consents'), (req, res) => {
   if (c.is_minor && t.minor_only && signer_role !== 'guardian') {
     return res.status(400).json({ error: '此同意書須由法定代理人簽署' });
   }
-  db.prepare(`INSERT INTO consents (client_id, key, title, body, version, agreed, signer_name, signer_role, signature, signed_ip)
-              VALUES (?,?,?,?,?,?,?,?,?,?)`)
-    .run(c.id, t.key, t.title, t.body, t.version, agreed ? 1 : 0, signer_name, signer_role, signature, clientIp(req));
-  audit('staff', req.user.id, req.user.name, '登錄同意書', `${c.code}/${t.key}`, { agreed: !!agreed });
-  res.json({ ok: true });
+  // 所方這一側的簽名：優先用這次當場簽的，沒有就蓋上這位心理師存好的簽名檔。
+  // 兩種都沒有也照樣收 —— 紙本已經簽過、只是回來補登的情形很常見。
+  const me = db.prepare('SELECT id, name, signature_image FROM users WHERE id = ?').get(req.user.id) || {};
+  const png = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/;
+  let staffSign = '';
+  if (staff_signature) {
+    if (!png.test(staff_signature)) return res.status(400).json({ error: '簽名格式不正確，請重新簽一次' });
+    if (staff_signature.length > 400000) return res.status(400).json({ error: '簽名圖片過大，請重新簽一次' });
+    staffSign = staff_signature;
+  } else if (me.signature_image) {
+    staffSign = me.signature_image;
+  }
+  db.prepare(`INSERT INTO consents (client_id, key, title, body, version, agreed, signer_name, signer_role,
+      signature, signed_ip, staff_id, staff_name, staff_signature, staff_signed_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(c.id, t.key, t.title, t.body, t.version, agreed ? 1 : 0, signer_name, signer_role, signature, clientIp(req),
+      me.id || null, me.name || '', staffSign, staffSign ? nowStamp() : '');
+  audit('staff', req.user.id, req.user.name, '登錄同意書', `${c.code}/${t.key}`,
+    { agreed: !!agreed, staff_signed: !!staffSign });
+  res.json({ ok: true, staff_signed: !!staffSign, staff_name: me.name || '' });
 });
 
 router.get('/consents/:id', requireStaff('consents'), (req, res) => {

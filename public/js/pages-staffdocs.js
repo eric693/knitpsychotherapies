@@ -3,44 +3,8 @@
 // 這兩件事原本都靠人工來回 —— 表單用 LINE 傳、薪資一個一個問。
 // 放在同一組頁面，心理師登入後一個地方就找得到「我要的檔案」與「我這個月領多少」。
 
-// ---- 手寫簽名板 ----
-// 手機用手指、電腦用滑鼠都要能簽。存出來是 PNG data URI，直接貼進報酬單列印。
-function signaturePad(canvas) {
-  const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.scale(dpr, dpr);
-  ctx.lineWidth = 2.2;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = '#16324a';
-  let drawing = false, dirty = false;
-  const pos = e => {
-    const r = canvas.getBoundingClientRect();
-    const t = e.touches ? e.touches[0] : e;
-    return { x: t.clientX - r.left, y: t.clientY - r.top };
-  };
-  const start = e => { drawing = true; dirty = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
-  const move = e => {
-    if (!drawing) return;
-    e.preventDefault();               // 手指在簽名板上滑動時不要跟著捲整頁
-    const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke();
-  };
-  const end = () => { drawing = false; };
-  canvas.addEventListener('mousedown', start);
-  canvas.addEventListener('mousemove', move);
-  document.addEventListener('mouseup', end);
-  canvas.addEventListener('touchstart', start, { passive: true });
-  canvas.addEventListener('touchmove', move, { passive: false });
-  canvas.addEventListener('touchend', end);
-  return {
-    get dirty() { return dirty; },
-    clear() { ctx.clearRect(0, 0, canvas.width, canvas.height); dirty = false; },
-    toPng() { return canvas.toDataURL('image/png'); }
-  };
-}
+// 手寫簽名板已移到 ui.js 的 UI.signaturePad，報酬確認與同意書共用同一個元件。
+
 
 // ---- 文件 ----
 function docDialog(d, cats, onDone) {
@@ -253,13 +217,13 @@ App.page('my-payout', {
     el.querySelector('#m').onchange = e => App.go('my-payout/' + e.target.value);
     const sigEl = el.querySelector('#sig');
     if (sigEl) {
-      const pad = signaturePad(sigEl);
+      const pad = UI.signaturePad(sigEl);
       el.querySelector('#clr').onclick = () => pad.clear();
       el.querySelector('#ok').onclick = async () => {
-        if (!pad.dirty) return UI.toast('請先在框內簽名', true);
+        if (!pad.drawn()) return UI.toast('請先在框內簽名', true);
         if (!await UI.confirm(`確認 ${d.month} 的報酬明細無誤，實付合計 ${money(d.net)}？`)) return;
         try {
-          await POST(`/my/payout-months/${d.month}/confirm`, { sign_image: pad.toPng() });
+          await POST(`/my/payout-months/${d.month}/confirm`, { sign_image: pad.dataUrl() });
           UI.toast('已確認，感謝');
           App.go('my-payout/' + d.month);
         } catch (e) { UI.err(e); }

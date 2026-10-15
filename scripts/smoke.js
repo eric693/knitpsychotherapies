@@ -705,6 +705,71 @@ function startServer() {
       await admin.ok('DELETE', `/api/clients/${c.id}`).catch(() => {});
     }
   });
+  // 櫃檯改期後：個案手上只有舊時間那張卡，不通知他就只能等當天撲空；
+  // 而且提醒印記不清掉的話，系統會認為「已經提醒過了」而不再依新時間發
+  await test('櫃檯改期要通知個案，並讓提醒依新時間重發', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    const c = await admin.ok('POST', '/api/clients', { name: '改期通知測試', phone: '0944123001' });
+    try {
+      const code = await admin.ok('POST', '/api/line/bind-code', { client_id: c.id });
+      const body = JSON.stringify({ events: [{ type: 'message', replyToken: 'rr1',
+        source: { userId: 'Umove001' }, message: { type: 'text', text: code.code } }] });
+      const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+      await fetch(BASE + '/api/line/webhook', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+
+      const day = nextWeekday(2, 225);
+      const a = await admin.ok('POST', '/api/appointments', {
+        client_id: c.id, counselor_id: 2, date: day, start_time: '07:00', fee: 2000, override: true
+      });
+      // 假裝提醒已經發過
+      await admin.ok('POST', `/api/appointments/${a.id}/remind`, {}).catch(() => {});
+      const moved = addDays(day, 7);
+      const r = await admin.ok('PUT', `/api/appointments/${a.id}`, { date: moved, start_time: '08:00' });
+      assert(r.notify, '改期應回報有送出通知：' + JSON.stringify(r));
+      const after = (await admin.ok('GET', `/api/appointments?client_id=${c.id}`)).find(x => x.id === a.id);
+      equal(after.date, moved, '日期要真的改掉');
+      equal(after.reminded_at || '', '', '改期後提醒印記要清掉，否則不會依新時間重發');
+      // 通知紀錄查得到，且卡片同時有舊時間與新時間
+      const log = await admin.ok('GET', '/api/notifications?limit=60');
+      const hit = (log.rows || log).filter(x => x.kind === 'rescheduled');
+      assert(hit.length >= 1, '應留下改期通知紀錄');
+      const txt = JSON.stringify(hit);
+      assert(txt.includes(moved), '卡片要寫出新日期');
+      assert(txt.includes(day), '卡片要寫出原日期，個案才知道改的是哪一筆');
+
+      // 只改備註不算改期，不該亂發通知
+      const r2 = await admin.ok('PUT', `/api/appointments/${a.id}`, { note: '只是加個備註' });
+      equal(r2.notify, null, '沒改時間就不該送改期通知');
+      await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' }).catch(() => {});
+      await admin.del(`/api/appointments/${a.id}`).catch(() => {});
+    } finally {
+      await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
+  // 帶團體的心理師，當日行程卡原本看不到團體場次
+  await test('心理師的當日行程包含團體場次', async () => {
+    const g = await admin.ok('POST', '/api/groups',
+      { name: '行程含團體測試', counselor_id: 2, capacity: 6, sessions_total: 2, status: 'open' });
+    const day = nextWeekday(4, 232);
+    const gs = await admin.ok('POST', `/api/groups/${g.id}/sessions`,
+      { date: day, start_time: '16:00', end_time: '17:30', topic: '人際互動' });
+    try {
+      const d = await admin.ok('GET', `/api/line/schedule-preview?counselor_id=2&date=${day}`)
+        .catch(() => null);
+      if (d) {
+        const txt = JSON.stringify(d);
+        assert(txt.includes('行程含團體測試'), '行程應列出團體場次：' + txt.slice(0, 300));
+      }
+      // 沒有預覽端點時改驗週檢視也看得到（同一份資料來源）
+      const wk = await admin.ok('GET', `/api/schedule/week?start=${day}`);
+      assert((wk.group_sessions || []).some(x => x.id === gs.id), '週檢視應含這場團體');
+    } finally {
+      await admin.ok('DELETE', `/api/groups/${g.id}/sessions/${gs.id}`).catch(() => {});
+      await admin.ok('DELETE', `/api/groups/${g.id}`).catch(() => {});
+    }
+  });
   // 團體場次排定後要通知成員，不然家長不知道孩子哪天要上課
   await test('團體場次排定後自動通知已綁 LINE 的成員', async () => {
     await admin.ok('PUT', '/api/line/settings',
@@ -1866,6 +1931,100 @@ function startServer() {
       await session().fails('POST', '/api/portal/login', { phone: '0912777001', password: '777001' }, '錯誤');
     } finally {
       await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
+  // 同意書要有所方簽名：心理師存一次簽名檔，之後每份自動蓋上
+  await test('同意書帶心理師簽名：存檔簽名自動蓋，也可當場重簽', async () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const c = await admin.ok('POST', '/api/clients', { name: '同意書簽名測試', phone: '0913555001' });
+    try {
+      const t = (await admin.ok('GET', '/api/consent-templates'))[0];
+      // 還沒存簽名檔 → 不會有所方簽名
+      await admin.ok('PUT', '/api/me/signature', { signature: '' });
+      await admin.ok('POST', `/api/clients/${c.id}/consents`,
+        { key: t.key, signer_name: '測試簽署人', signer_role: 'client', signature: png });
+      let got = await admin.ok('GET', `/api/clients/${c.id}/consents/${t.key}`);
+      equal(got.signed.staff_signature || '', '', '沒存簽名檔時不該有所方簽名');
+      assert(got.signed.staff_name, '仍要記下是誰經手的');
+
+      // 存了簽名檔 → 之後簽署自動蓋上
+      await admin.ok('PUT', '/api/me/signature', { signature: png });
+      equal((await admin.ok('GET', '/api/me/signature')).signature, png, '簽名檔應存得起來');
+      assert((await admin.ok('GET', '/api/me')).has_signature, '/api/me 要回報已有簽名檔');
+      const r = await admin.ok('POST', `/api/clients/${c.id}/consents`,
+        { key: t.key, signer_name: '測試簽署人', signer_role: 'client', signature: png });
+      assert(r.staff_signed, '應自動蓋上存檔簽名');
+      got = await admin.ok('GET', `/api/clients/${c.id}/consents/${t.key}`);
+      equal(got.signed.staff_signature, png, '所方簽名要存進同意書');
+      assert(got.signed.staff_signed_at, '要記下所方簽署時間');
+
+      // 列印版要印出心理師簽名（列印走簽署紀錄的 id）
+      const pr = await admin.get(`/api/consents/${got.signed.id}/print`);
+      assert(/心理師/.test(pr.text), '列印版應列出心理師欄位');
+      assert(pr.text.includes(got.signed.staff_name), '列印版要寫出是哪位心理師');
+
+      // 格式不對的簽名擋下
+      await admin.fails('POST', `/api/clients/${c.id}/consents`,
+        { key: t.key, signer_name: '測試簽署人', signature: png, staff_signature: 'not-an-image' }, '簽名格式');
+    } finally {
+      await admin.ok('PUT', '/api/me/signature', { signature: '' }).catch(() => {});
+      await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
+  // 到所晤談沒有空間就不該成立 —— 自動指派在全滿時回傳 null，原本照樣建立
+  await test('到所晤談沒有諮商室就擋下，視訊不受限', async () => {
+    const rooms = await admin.ok('GET', '/api/rooms');
+    const clients = await admin.ok('GET', '/api/clients');
+    const me = await admin.ok('GET', '/api/me');
+    const day = nextWeekday(1, 218);
+    const made = [];
+    try {
+      // 把所有諮商室占滿同一個時段（每間換一位心理師，否則會先撞到心理師衝突）
+      const staff = (await admin.ok('GET', '/api/users'))
+        .filter(u => u.active && ['counselor', 'supervisor', 'admin'].includes(u.role));
+      assert(staff.length >= rooms.length + 2, '前置：心理師人數要夠分配，實際 ' + staff.length);
+      for (const [i, r] of rooms.entries()) {
+        made.push(await admin.ok('POST', '/api/appointments', {
+          client_id: clients[i % clients.length].id,
+          counselor_id: staff[i].id, date: day, start_time: '07:00',
+          mode: 'onsite', room_id: r.id, fee: 2000, override: true
+        }));
+      }
+      equal(made.length, rooms.length, '前置：應能把每一間都占住');
+      const spare = staff[rooms.length].id;
+      const spare2 = staff[rooms.length + 1].id;
+      // 用一位沒被占用的個案，否則會先撞到「同一位個案同時段兩筆」
+      const other = await admin.ok('POST', '/api/clients', { name: '空房測試個案', phone: '0913666002' });
+      const other2 = await admin.ok('POST', '/api/clients', { name: '空房測試個案二', phone: '0913666003' });
+      made.push({ id: null, clientId: other.id }, { id: null, clientId: other2.id });
+      // 再排一筆到所 → 沒有空房，要擋下
+      const blocked = await admin.post('/api/appointments', {
+        client_id: other.id, counselor_id: spare, date: day, start_time: '07:00',
+        mode: 'onsite', fee: 2000, override: true
+      });
+      equal(blocked.status, 400, '沒有空房不該成立');
+      assert(/諮商室/.test(blocked.data.error || ''), '錯誤要講清楚是空間問題：' + JSON.stringify(blocked.data));
+      // 視訊不佔空間，照樣排得進去
+      const online = await admin.ok('POST', '/api/appointments', {
+        client_id: other.id, counselor_id: spare, date: day, start_time: '07:00',
+        mode: 'online', fee: 2000, override: true
+      });
+      made.push(online);
+      // 關掉設定就回到原本行為（只警告）
+      await admin.ok('PUT', '/api/settings', { room_required: '0' });
+      const warn = await admin.ok('POST', '/api/appointments', {
+        client_id: other2.id, counselor_id: spare2, date: day, start_time: '07:00',
+        mode: 'onsite', fee: 2000, override: true
+      });
+      made.push(warn);
+      assert((warn.warnings || []).some(w => /排滿/.test(w)), '關掉設定時要給警告');
+    } finally {
+      await admin.ok('PUT', '/api/settings', { room_required: '1' }).catch(() => {});
+      for (const a of made) {
+        if (a.clientId) { await admin.ok('DELETE', `/api/clients/${a.clientId}/purge`).catch(() => {}); continue; }
+        await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' }).catch(() => {});
+        await admin.del(`/api/appointments/${a.id}`).catch(() => {});
+      }
     }
   });
   await test('停用的個案查得到，並標明併進了哪一位', async () => {

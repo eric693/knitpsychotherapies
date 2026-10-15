@@ -511,26 +511,54 @@ async function consentDialog(clientId, key, isMinorDoc, onDone) {
         ${UI.input('signer_name', '簽署人姓名', { required: true })}
         ${UI.select('signer_role', '簽署身分', App.enumOptions('signer_role'), { value: isMinorDoc ? 'guardian' : 'client' })}
       </div>
-      <div class="form-row full" style="margin-top:10px"><label>簽名</label>
+      <div class="form-row full" style="margin-top:10px"><label>個案／法定代理人簽名</label>
         <canvas id="sig" style="border:1px dashed var(--border);border-radius:8px;height:150px;background:#fff;touch-action:none"></canvas>
         <button class="btn tiny secondary" id="clr" type="button" style="align-self:flex-start;margin-top:6px">清除簽名</button></div>
+      <div class="form-row full" style="margin-top:10px"><label>心理師簽名</label>
+        ${App.me.has_signature
+    ? `<div style="font-size:13.5px;color:var(--muted)">會自動蓋上你存檔的簽名。
+         要改存檔的簽名請到左下「我的簽名檔」。
+         <label style="display:inline-flex;gap:6px;align-items:center;margin-left:8px">
+           <input type="checkbox" id="resign" style="width:auto"> 這一份改成當場簽</label></div>
+       <div id="staffpad" hidden></div>`
+    : `<div style="font-size:13.5px;color:var(--muted);margin-bottom:6px">
+         你還沒有存檔簽名。可以在下方當場簽，或到左下「我的簽名檔」存一次，之後每份自動蓋上。</div>
+       <div id="staffpad"></div>`}
+      </div>
       ${signed ? `<div style="margin-top:10px;font-size:13px;color:var(--muted)">
-        已於 ${UI.esc(signed.signed_at)} 由 ${UI.esc(signed.signer_name)} 簽署（版本 ${signed.version}）</div>` : ''}`,
+        已於 ${UI.esc(signed.signed_at)} 由 ${UI.esc(signed.signer_name)} 簽署（版本 ${signed.version}）
+        ${signed.staff_name ? `；所方 ${UI.esc(signed.staff_name)} 已簽` : '；<span style="color:var(--warn)">所方尚未簽名</span>'}</div>` : ''}`,
     onOpen: el => {
       const pad = UI.signaturePad(el.querySelector('#sig'));
       el.querySelector('#clr').onclick = () => pad.clear();
       el._pad = pad;
+      // 心理師簽名板：沒有存檔簽名時直接顯示；有存檔但想重簽時勾「這一份改成當場簽」才展開
+      const box = el.querySelector('#staffpad');
+      const mountStaff = () => {
+        if (el._spad) return;
+        box.innerHTML = `<canvas id="ssig" style="border:1px dashed var(--border);border-radius:8px;
+            height:120px;width:100%;background:#fff;touch-action:none"></canvas>
+          <button class="btn tiny secondary" id="sclr" type="button"
+            style="align-self:flex-start;margin-top:6px">清除簽名</button>`;
+        el._spad = UI.signaturePad(el.querySelector('#ssig'));
+        el.querySelector('#sclr').onclick = () => el._spad.clear();
+      };
+      if (!App.me.has_signature) mountStaff();
+      const re = el.querySelector('#resign');
+      if (re) re.onchange = e => { box.hidden = !e.target.checked; if (e.target.checked) mountStaff(); };
     },
     onSubmit: async el => {
       const d = UI.formData(el);
       if (!d.signer_name) throw new Error('請填寫簽署人姓名');
       const sig = el._pad.dataUrl();
-      if (!sig) throw new Error('請完成簽名');
-      await POST(`/clients/${clientId}/consents`, {
+      if (!sig) throw new Error('請完成個案／法定代理人簽名');
+      const staffSig = el._spad ? el._spad.dataUrl() : '';
+      const r = await POST(`/clients/${clientId}/consents`, {
         key, agreed: d.agreed === undefined ? 1 : Number(d.agreed),
-        signer_name: d.signer_name, signer_role: d.signer_role, signature: sig
+        signer_name: d.signer_name, signer_role: d.signer_role, signature: sig,
+        staff_signature: staffSig
       });
-      UI.toast('已完成簽署');
+      UI.toast(r.staff_signed ? `已完成簽署（心理師簽名：${r.staff_name}）` : '已完成簽署');
       onDone && onDone();
     }
   });

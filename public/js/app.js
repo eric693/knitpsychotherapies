@@ -194,6 +194,7 @@ const App = {
             <div class="name">${UI.esc(App.me.name)}</div>
             <div>${UI.esc(App.me.title || TW.role[App.me.role] || '')}</div>
             <button id="pw-btn" type="button">修改密碼</button>
+            <button id="sign-btn" type="button">我的簽名檔</button>
             <button id="logout-btn" type="button">登出</button>
           </div>
         </aside>
@@ -201,6 +202,7 @@ const App = {
       </div>`;
     document.getElementById('logout-btn').onclick = async () => { await POST('/logout'); location.reload(); };
     document.getElementById('pw-btn').onclick = App.changePasswordDialog;
+    document.getElementById('sign-btn').onclick = App.signatureDialog;
     const sidebar = document.getElementById('sidebar'), backdrop = document.getElementById('backdrop');
     document.getElementById('menu-btn').onclick = () => { sidebar.classList.add('open'); backdrop.classList.add('show'); };
     backdrop.onclick = () => { sidebar.classList.remove('open'); backdrop.classList.remove('show'); };
@@ -220,6 +222,47 @@ const App = {
       const n = d[sp.dataset.badge] || 0;
       sp.textContent = n > 99 ? '99+' : n;
       sp.hidden = !n;
+    });
+  },
+
+  // 我的簽名檔：簽一次存起來，之後簽同意書時直接蓋上去，不必每份重簽。
+  async signatureDialog() {
+    const cur = await GET('/me/signature').catch(() => ({ signature: '' }));
+    UI.modal({
+      title: '我的簽名檔',
+      submitText: '儲存簽名',
+      body: `<div style="font-size:14px;line-height:1.8;margin-bottom:10px">
+          在下方框內簽一次（手機可直接用手指）。存好之後，登錄同意書時會自動蓋上這個簽名，
+          不必每一份重簽。</div>
+        ${cur.signature ? `<div style="margin-bottom:10px">
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:4px">目前存檔的簽名</div>
+          <img src="${UI.esc(cur.signature)}" alt="目前的簽名"
+            style="height:64px;background:#fff;border:1px solid var(--border);border-radius:8px"></div>` : ''}
+        <canvas id="sig" style="width:100%;height:170px;background:#fff;border:1px dashed var(--border);
+          border-radius:10px;touch-action:none"></canvas>
+        <div class="toolbar" style="margin-top:10px">
+          <button class="btn secondary small" id="clr" type="button">清除重簽</button>
+          <div class="spacer"></div>
+          ${cur.signature ? '<button class="btn secondary small" id="del" type="button">刪除存檔簽名</button>' : ''}
+        </div>`,
+      onOpen: (el, close) => {
+        const pad = UI.signaturePad(el.querySelector('#sig'));
+        el._pad = pad;
+        el.querySelector('#clr').onclick = () => pad.clear();
+        const del = el.querySelector('#del');
+        if (del) del.onclick = async () => {
+          if (!await UI.confirm('刪除存檔的簽名？之後登錄同意書要當場簽。')) return;
+          await PUT('/me/signature', { signature: '' });
+          App.me.has_signature = false;
+          UI.toast('已刪除'); close();
+        };
+      },
+      onSubmit: async el => {
+        if (!el._pad || !el._pad.drawn()) throw new Error('請先在框內簽名');
+        await PUT('/me/signature', { signature: el._pad.dataUrl() });
+        App.me.has_signature = true;
+        UI.toast('簽名已儲存');
+      }
     });
   },
 

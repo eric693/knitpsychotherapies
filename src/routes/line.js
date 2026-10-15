@@ -582,13 +582,27 @@ router.post('/line/remind-batch', requireStaff('schedule'), async (req, res) => 
 
 // ---- 推播：心理師行程 ----
 
+// 心理師的當日行程：一對一與團體場次都要列。
+// 原本只撈 appointments，帶團體的心理師看到的行程是缺的 —— 那天真正要到所的時間沒出現在卡片上。
 function counselorSchedule(counselorId, date) {
-  return db.prepare(`SELECT a.start_time, a.end_time, a.mode, c.name AS client_name, c.code AS client_code,
+  const one = db.prepare(`SELECT a.start_time, a.end_time, a.mode, c.name AS client_name, c.code AS client_code,
       c.risk_level, p.name AS plan_name
     FROM appointments a JOIN clients c ON c.id = a.client_id
     LEFT JOIN service_plans p ON p.id = a.plan_id
     WHERE a.counselor_id = ? AND a.date = ? AND a.status IN ('booked','arrived')
     ORDER BY a.start_time`).all(counselorId, date);
+  // 帶領者與協同帶領者都算這位心理師的行程
+  const grp = db.prepare(`SELECT gs.start_time, gs.end_time, g.name AS group_name, gs.session_no,
+      (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.status = 'active') AS member_count
+    FROM group_sessions gs JOIN groups g ON g.id = gs.group_id
+    WHERE (g.counselor_id = ? OR g.co_counselor_id = ?) AND gs.date = ? AND gs.status != 'cancelled'
+    ORDER BY gs.start_time`).all(counselorId, counselorId, date);
+  return [...one, ...grp.map(g => ({
+    start_time: g.start_time, end_time: g.end_time, mode: 'onsite',
+    client_name: `${g.group_name}（團體 ${g.member_count} 人）`,
+    client_code: g.session_no ? `第 ${g.session_no} 次` : '',
+    risk_level: '', plan_name: '', is_group: true
+  }))].sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)));
 }
 
 async function pushCounselorDay(counselor, date, title) {

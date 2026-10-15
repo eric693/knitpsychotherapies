@@ -250,6 +250,18 @@ ensureColumns('notifications', {
 
 // 報酬單拆單：同一筆報酬拆成數筆各低於扣繳門檻時，用 batch_* 記住它們原屬同一次結算
 // 團體場次也要發提醒，需要一個「已提醒過」的印記，否則每 10 分鐘會重複推
+// 同意書的心理師簽名：所方這一側也要有人簽，不能只有個案單方簽署。
+// 簽名圖存在 users.signature_image（心理師在帳號設定裡簽一次），
+// 簽同意書時直接蓋上去；也可以當場重簽一個，兩種方式都收。
+ensureColumns('users', {
+  signature_image: "TEXT NOT NULL DEFAULT ''"
+});
+ensureColumns('consents', {
+  staff_id: 'INTEGER REFERENCES users(id)',
+  staff_name: "TEXT NOT NULL DEFAULT ''",
+  staff_signature: "TEXT NOT NULL DEFAULT ''",
+  staff_signed_at: "TEXT NOT NULL DEFAULT ''"
+});
 ensureColumns('group_sessions', {
   reminded_at: "TEXT NOT NULL DEFAULT ''"
 });
@@ -1569,6 +1581,9 @@ if (getSetting('military_urls_seeded', '') !== '1') {
     // ---- 諮商室指派 ----
     // 個案端與線上表單一律不顯示諮商室；成立預約時由系統挑一間當下沒被占用的空間。
     room_auto_assign: '1',
+    // 到所晤談一定要有空間：自動指派在所有諮商室都被占用時會回傳 null，
+    // 沒有這道檢查就會留下一筆沒有場地的約，當天才發現沒地方用。視訊不受限。
+    room_required: '1',
     room_hide_from_client: '1',
     // ---- 方案人次上限的預設值（各方案可自訂覆寫）----
     // 預設不限：只有真的有名額限制的補助方案（如青壯方案一週 6 人次）才在該方案自己設定，

@@ -198,6 +198,17 @@ router.post('/appointments', requireStaff('schedule'), async (req, res) => {
     ? (Number(b.room_id) || null)
     : (Number(b.room_id) || plans.pickRoom({ date: b.date, start_time: b.start_time, end_time }));
 
+  // 到所晤談一定要有空間：自動指派在所有諮商室都被占用時會回傳 null，
+  // 原本只給一句警告、預約照樣成立，於是會留下一筆沒有場地的約，當天才發現沒地方用。
+  // 視訊不受限（本來就可以不佔空間），設定可於「系統設定」關閉。
+  if (b.mode !== 'online' && !roomId && getSetting('room_required', '1') === '1') {
+    return res.status(400).json({
+      error: Number(b.room_id)
+        ? '指定的諮商室在這個時段已被使用，請改選其他空間'
+        : '此時段所有諮商室都已排滿，請先指定一間可用的諮商室再成立預約'
+    });
+  }
+
   const info = db.prepare(`INSERT INTO appointments
     (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, subsidy_amount, package_id,
      plan_id, topic_id, counselor_share, source, note, meeting_url, created_by)
@@ -214,6 +225,7 @@ router.post('/appointments', requireStaff('schedule'), async (req, res) => {
   // 全所只有 2-3 間，排滿時要講清楚，不要靜悄悄留一筆沒有空間的預約
   const warnings = [...check.warnings];
   if (!roomId && b.mode !== 'online') warnings.push('此時段所有諮商室都已排滿，這筆預約尚未指定空間，請確認場地安排');
+  // （「系統設定 → 成立預約必須指定諮商室」開著時，上面這種情形已在前面擋下）
   // 櫃檯直接排約也要推「預約已成立」給個案（原本只有線上申請確認時才推），
   // 否則同一件事在 LINE 上有沒有通知，取決於這筆預約是從哪個入口進來的。
   let notify = null;
@@ -235,7 +247,7 @@ router.post('/appointments', requireStaff('schedule'), async (req, res) => {
   res.json({ id: info.lastInsertRowid, room_id: roomId, warnings, usage: check.usage, notify });
 });
 
-router.put('/appointments/:id', requireStaff('schedule'), (req, res) => {
+router.put('/appointments/:id', requireStaff('schedule'), async (req, res) => {
   const a = db.prepare('SELECT * FROM appointments WHERE id = ?').get(req.params.id);
   if (!a) return res.status(404).json({ error: '找不到此預約' });
   if (a.status === 'done') return res.status(400).json({ error: '已完成的晤談不可修改，請改用取消或新增紀錄' });
@@ -293,20 +305,51 @@ router.put('/appointments/:id', requireStaff('schedule'), (req, res) => {
     ? (askedRoom === undefined ? null : askedRoom)
     : ((askedRoom === undefined ? a.room_id : askedRoom)
       || plans.pickRoom({ date: b.date, start_time: b.start_time, end_time: b.end_time, exclude_appointment_id: a.id }));
+  if (b.mode !== 'online' && !roomId && getSetting('room_required', '1') === '1') {
+    return res.status(400).json({
+      error: askedRoom
+        ? '指定的諮商室在這個時段已被使用，請改選其他空間'
+        : '此時段所有諮商室都已排滿，請先指定一間可用的諮商室'
+    });
+  }
+  // 時間一變，先前發出去的提醒就是錯的 —— 清掉印記讓提醒依新時間重發，
+  // 否則個案手上只有舊時間那張卡，而系統認為「已經提醒過了」。
+  const moved = a.date !== b.date || a.start_time !== b.start_time;
   db.prepare(`UPDATE appointments SET counselor_id = ?, room_id = ?, date = ?, start_time = ?, end_time = ?,
     type = ?, mode = ?, fee = ?, subsidy_amount = ?, plan_id = ?, topic_id = ?, counselor_share = ?,
-    note = ?, meeting_url = ? WHERE id = ?`).run(
+    note = ?, meeting_url = ?${moved ? ", reminded_at = '', confirmed_at = ''" : ''} WHERE id = ?`).run(
     Number(b.counselor_id), roomId, b.date, b.start_time, b.end_time,
     b.type, b.mode, quote.fee, quote.subsidy_amount, Number(b.plan_id) || null, Number(b.topic_id) || null,
     quote.counselor_share, b.note || '', meeting_url, a.id);
   audit('staff', req.user.id, req.user.name, '修改預約', String(a.id));
   // 只有時間或心理師真的變了才算異動；改備註、改收費不會出現在工作台
-  if (a.date !== b.date || a.start_time !== b.start_time || Number(a.counselor_id) !== Number(b.counselor_id)) {
+  const changedWho = Number(a.counselor_id) !== Number(b.counselor_id);
+  if (moved || changedWho) {
     logApptEvent({ appointment_id: a.id, kind: 'rescheduled', from_date: a.date, from_time: a.start_time,
       actor_type: 'staff', actor_name: req.user.name, via: '櫃檯',
-      note: Number(a.counselor_id) !== Number(b.counselor_id) ? '更換心理師' : '' });
+      note: changedWho ? '更換心理師' : '' });
   }
-  res.json({ ok: true });
+  // 櫃檯改期後要告訴個案新時間。個案自己在專區改期時系統會通知心理師，
+  // 反過來卻什麼都沒送 —— 個案手上還是舊時間那張卡，只能等當天撲空。
+  let notify = null;
+  if (moved || changedWho) {
+    const client = db.prepare('SELECT id, name, code, line_user_id FROM clients WHERE id = ?').get(a.client_id);
+    if (client && client.line_user_id) {
+      const counselor = db.prepare('SELECT name FROM users WHERE id = ?').get(Number(b.counselor_id)) || {};
+      try {
+        notify = await line.pushFlex({
+          to: client.line_user_id, kind: 'rescheduled', client_id: client.id, appointment_id: a.id,
+          flex: line.rescheduledFlex({
+            client_name: client.name, counselor_name: counselor.name || '',
+            from_date: a.date, from_time: a.start_time,
+            date: b.date, start_time: b.start_time, end_time: b.end_time,
+            mode: b.mode, meeting_url, changed_counselor: changedWho
+          })
+        });
+      } catch (e) { console.error('改期通知失敗：', e.message); }
+    }
+  }
+  res.json({ ok: true, notify });
 });
 
 // 狀態異動：報到 / 完成 / 取消 / 未到

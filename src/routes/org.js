@@ -482,6 +482,26 @@ router.post('/users/:id/reset-password', requireStaff('users'), (req, res) => {
   res.json({ username: u.username, password: pw });
 });
 
+// 我的簽名檔：簽一次存起來，之後簽同意書時直接蓋上去，不必每份重簽。
+// 存的是 PNG data URI，與月結確認用的是同一個簽名板元件。
+router.get('/me/signature', requireStaff(), (req, res) => {
+  const u = db.prepare('SELECT signature_image FROM users WHERE id = ?').get(req.user.id) || {};
+  res.json({ signature: u.signature_image || '' });
+});
+
+router.put('/me/signature', requireStaff(), (req, res) => {
+  const sign = String((req.body || {}).signature || '');
+  if (sign) {
+    if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sign)) {
+      return res.status(400).json({ error: '請在簽名欄簽名後再儲存' });
+    }
+    if (sign.length > 400000) return res.status(400).json({ error: '簽名圖片過大，請重新簽一次' });
+  }
+  db.prepare('UPDATE users SET signature_image = ? WHERE id = ?').run(sign, req.user.id);
+  audit('staff', req.user.id, req.user.name, sign ? '更新個人簽名檔' : '清除個人簽名檔');
+  res.json({ ok: true });
+});
+
 router.put('/me/password', requireStaff(), (req, res) => {
   const { old_password = '', new_password = '' } = req.body || {};
   if (!bcrypt.compareSync(old_password, req.user.password_hash)) return res.status(400).json({ error: '舊密碼不正確' });

@@ -57,6 +57,8 @@ app.get('/api/me', requireStaff(), (req, res) => {
   res.json({
     id: req.user.id, username: req.user.username, name: req.user.name,
     role: req.user.role, title: req.user.title, license_type: req.user.license_type,
+    // 有沒有存過簽名檔：同意書要決定「直接蓋章」還是「請當場簽」
+    has_signature: !!req.user.signature_image,
     // 實習生：紀錄簽核走督導覆核；is_supervisor 決定「待覆核紀錄」頁是否出現
     is_intern: !!req.user.is_intern,
     is_supervisor: req.user.role === 'admin' || req.user.role === 'supervisor'

@@ -202,6 +202,38 @@ function groupSessionFlex(s, kind = 'scheduled') {
   });
 }
 
+// 改期通知：原時間劃掉、新時間放大。
+// 個案手上只有舊時間那張卡，不主動告訴他就只能等當天撲空。
+function rescheduledFlex(a) {
+  const c = centerInfo();
+  const footer = [];
+  if (a.mode === 'online' && a.meeting_url) {
+    footer.push(actionButton('進入視訊晤談', { type: 'uri', label: '進入視訊晤談', uri: a.meeting_url }));
+  }
+  const portal = a.portal_url || portalUrl();
+  if (portal) footer.push(actionButton('個案專區', { type: 'uri', label: '個案專區', uri: portal }, 'secondary'));
+  if (c.phone) footer.push(actionButton('有問題請來電', { type: 'uri', label: '有問題請來電', uri: `tel:${c.phone}` }, 'secondary'));
+  return card({
+    title: a.changed_counselor ? '晤談時間與心理師已更動' : '晤談時間已更動',
+    subtitle: c.name,
+    altText: `晤談改期：${a.from_date} ${a.from_time} → ${a.date}（${weekdayOf(a.date)}）${a.start_time}`,
+    body: [
+      { type: 'text', text: `原 ${a.from_date} ${a.from_time}`, size: 'sm', color: '#9aa7b0',
+        decoration: 'line-through', wrap: true },
+      { type: 'text', text: `${a.date}（${weekdayOf(a.date)}）${a.start_time}-${a.end_time}`,
+        weight: 'bold', size: 'lg', color: '#3b4a55', wrap: true },
+      sep(),
+      // 家長一個 LINE 可能收好幾個孩子的通知，每張都寫清楚是誰的
+      ...(a.client_name ? [kv('個案', a.client_name)] : []),
+      ...(a.counselor_name ? [kv('心理師', a.counselor_name)] : []),
+      kv('形式', a.mode === 'online' ? '線上視訊' : '到所晤談'),
+      ...(a.mode === 'online' ? [] : [kv('地點', c.address || c.name)]),
+      noteBox('時間已為您更動，提醒也會依新時間重新發送。如有問題請來電洽詢。')
+    ],
+    footer
+  });
+}
+
 function reminderFlex(a) {
   const c = centerInfo();
   const footer = [];
@@ -455,7 +487,7 @@ function verifySignature(rawBody, signature) {
 module.exports = {
   lineEnabled, weekdayOf, centerInfo,
   card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
-  bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, groupSessionFlex, portalUrl,
+  bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, groupSessionFlex, rescheduledFlex, portalUrl,
   counselorScheduleFlex, counselorBookingFlex, receiptFlex,
   pushFlex, pushText, pushMessages, imageMessage, replyMessages, verifySignature, logNotification,
   retryNotification, retryFailedNotifications
