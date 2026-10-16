@@ -278,6 +278,9 @@ router.get('/meta', requireStaff(), (req, res) => {
     scales: SCALE_KEYS,
     counselors: db.prepare("SELECT id, name, role, license_type FROM users WHERE active = 1 AND role IN ('counselor','supervisor','admin') ORDER BY id").all(),
     rooms: db.prepare('SELECT id, name FROM rooms WHERE active = 1 ORDER BY id').all(),
+    // 排約視窗要知道能不能留「自動指派」這個選項，以及沒選空間會不會被擋
+    room_auto_assign: getSetting('room_auto_assign', '1') === '1',
+    room_required: getSetting('room_required', '1') === '1',
     session_minutes: require('../plans').defaultSessionMinutes(),
     default_fee: Number(getSetting('default_fee', '2000')),
     intake_fee: Number(getSetting('intake_fee', '2500')),

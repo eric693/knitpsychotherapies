@@ -1971,6 +1971,85 @@ function startServer() {
       await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
     }
   });
+  // 媽媽用自己的手機幫孩子預約，之後再用同一支手機替自己預約 ——
+  // 原本只比對電話，會把媽媽的申請認成孩子那一筆：申請上是媽媽的名字、編號卻是孩子的，
+  // 而媽媽本人在個案管理裡根本不存在
+  await test('同手機不同姓名的預約申請要另外建檔，不會掛到家人那筆', async () => {
+    const kid = await admin.ok('POST', '/api/clients', { name: '母子測試小孩', phone: '0978555001' });
+    // 送單上限是按 IP 計數的，而且不論上限多少都會累加 ——
+    // 用一個專屬 IP 送出，才不會吃掉其他測試的額度
+    const mk = async name => {
+      const r = await fetch(BASE + '/api/public/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-real-ip': '203.0.113.77' },
+        body: JSON.stringify({ name, phone: '0978555001', plan_id: youthPlanId, consent: true,
+          birth_date: '1995-05-05', main_issue: '測試' })
+      });
+      const d = await r.json();
+      assert(r.status < 400, '建立申請單失敗：' + JSON.stringify(d));
+      return d.id || d.request_id;
+    };
+    const id = await mk('母子測試媽媽');
+    try {
+      // 送出當下不該被認成小孩那筆
+      const pending = await admin.ok('GET', '/api/bookings');
+      const row1 = (pending.rows || pending).find(x => x.id === id);
+      assert(!row1.client_id, '同手機不同姓名，送出時不該自動對應到家人：' + JSON.stringify(row1.client_id));
+      const r = await admin.ok('POST', `/api/bookings/${id}/create-client`);
+      assert(!r.matched, '不同姓名不該被認成既有個案');
+      assert(r.client_id && r.client_id !== kid.id, '應建立新的個案，而不是掛到小孩那筆');
+      const made = await admin.ok('GET', `/api/clients/${r.client_id}`);
+      equal(made.name, '母子測試媽媽', '新建的應該是媽媽本人');
+      // 同手機的家人要一併回報，提示櫃檯去設代訂授權
+      assert((r.family_candidates || []).some(c => c.id === kid.id), '應提示同手機的家人');
+
+      // 同姓名同電話才算同一個人
+      const id2 = await mk('母子測試小孩');
+      const list = await admin.ok('GET', '/api/bookings');
+      const row2 = (list.rows || list).find(x => x.id === id2);
+      equal(row2.client_id, kid.id, '同名同電話應在送出當下就對應到既有個案');
+      // 已對應的申請不需要、也不該再建一次檔
+      await admin.fails('POST', `/api/bookings/${id2}/create-client`, {}, '已對應');
+      await admin.ok('DELETE', `/api/clients/${r.client_id}/purge`).catch(() => {});
+    } finally {
+      await admin.ok('DELETE', `/api/clients/${kid.id}/purge`).catch(() => {});
+    }
+  });
+  // 關掉自動指派＝櫃檯必須自己挑一間；但個案端與線上表單看不到空間，仍要自動指派
+  await test('關閉自動指派後：櫃檯必須選諮商室，個案端仍自動配', async () => {
+    const clients = await admin.ok('GET', '/api/clients');
+    const rooms = await admin.ok('GET', '/api/rooms');
+    const me = await admin.ok('GET', '/api/me');
+    const day = nextWeekday(5, 246);
+    await admin.ok('PUT', '/api/settings', { room_auto_assign: '0' });
+    const made = [];
+    try {
+      const blocked = await admin.post('/api/appointments', {
+        client_id: clients[0].id, counselor_id: me.id, date: day, start_time: '07:00',
+        mode: 'onsite', fee: 2000, override: true
+      });
+      equal(blocked.status, 400, '沒選空間不該成立');
+      assert(/諮商室/.test(blocked.data.error || ''), '要說明是空間問題');
+      // 明確選一間就排得進去
+      const okOne = await admin.ok('POST', '/api/appointments', {
+        client_id: clients[0].id, counselor_id: me.id, date: day, start_time: '07:00',
+        mode: 'onsite', room_id: rooms[0].id, fee: 2000, override: true
+      });
+      made.push(okOne);
+      equal((await admin.ok('GET', `/api/appointments?date=${day}`))
+        .find(a => a.id === okOne.id).room_id, rooms[0].id, '選的那間要留住');
+      // meta 要讓前端知道自動指派關了
+      const meta = await admin.ok('GET', '/api/meta');
+      equal(meta.room_auto_assign, false, 'meta 要回報自動指派已關');
+      equal(meta.room_required, true, 'meta 要回報必填');
+    } finally {
+      await admin.ok('PUT', '/api/settings', { room_auto_assign: '1' }).catch(() => {});
+      for (const a of made) {
+        await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' }).catch(() => {});
+        await admin.del(`/api/appointments/${a.id}`).catch(() => {});
+      }
+    }
+  });
   // 到所晤談沒有空間就不該成立 —— 自動指派在全滿時回傳 null，原本照樣建立
   await test('到所晤談沒有諮商室就擋下，視訊不受限', async () => {
     const rooms = await admin.ok('GET', '/api/rooms');

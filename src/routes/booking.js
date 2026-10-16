@@ -156,8 +156,13 @@ router.post('/public/bookings', publicWrite, async (req, res) => {
     if (plan.age_max && age > plan.age_max) return res.status(400).json({ error: `「${plan.name}」限 ${plan.age_max} 歲以下` });
   }
 
-  // 已建檔的舊個案（以手機比對）：一併檢查年度額度與心理師人次上限
-  const client = db.prepare('SELECT * FROM clients WHERE phone = ? AND active = 1 ORDER BY id DESC LIMIT 1').get(phone) || null;
+  // 已建檔的舊個案：**姓名與手機都相符**才算同一個人。
+  // 只比手機的話，媽媽用自己的手機幫孩子預約、再用同一支手機替自己預約時，
+  // 會被認成孩子那一筆 —— 申請上是媽媽的名字、編號卻是孩子的，媽媽本人則從沒被建檔。
+  // 同手機但不同姓名一律視為新的人，由櫃檯在建檔時決定要不要設成家人。
+  const samePhone = db.prepare('SELECT * FROM clients WHERE phone = ? AND active = 1 ORDER BY id DESC').all(phone);
+  const normName = v => String(v || '').replace(/\s/g, '');
+  const client = samePhone.find(c => normName(c.name) === normName(name)) || null;
   if (date) {
     const minDate = plans.earliestBookableDate();
     const max = Number(getSetting('booking_max_days', '45'));
@@ -514,12 +519,32 @@ router.post('/bookings/:id/create-client', requireStaff('clients'), (req, res) =
   const b = db.prepare('SELECT * FROM booking_requests WHERE id = ?').get(req.params.id);
   if (!b) return res.status(404).json({ error: '找不到此預約申請' });
   if (b.client_id) return res.status(400).json({ error: '此申請已對應個案' });
-  const exist = db.prepare('SELECT * FROM clients WHERE phone = ? AND active = 1').get(b.phone);
+  // 用手機比對「這個人是不是已經建過檔」原本只看號碼，於是媽媽用自己的手機幫孩子預約、
+  // 再用同一支手機替自己預約時，會被認成孩子那一筆 —— 申請上顯示媽媽的名字、
+  // 編號卻是孩子的，而媽媽本人在個案管理裡根本不存在。
+  // 比對必須姓名與電話都相符才算同一個人；只有電話相同的列出來讓櫃檯自己決定。
+  const samePhone = db.prepare('SELECT * FROM clients WHERE phone = ? AND active = 1 ORDER BY id').all(b.phone);
+  const norm = v => String(v || '').replace(/\s/g, '');
+  const exist = samePhone.find(c => norm(c.name) === norm(b.name));
   if (exist) {
     db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(exist.id, b.id);
     return res.json({ client_id: exist.id, matched: true });
   }
-  res.json(createClientFromBooking(b, req.user));
+  // 同手機但不同姓名（家人共用一支手機）：除非櫃檯明確指定要掛到誰，否則一律建新檔，
+  // 並把同手機的人一併回報，讓櫃檯接著去設「授權家人代訂」。
+  const useExisting = Number((req.body || {}).client_id) || 0;
+  if (useExisting) {
+    const c = db.prepare('SELECT * FROM clients WHERE id = ? AND active = 1').get(useExisting);
+    if (!c) return res.status(400).json({ error: '指定的個案不存在或已停用' });
+    db.prepare('UPDATE booking_requests SET client_id = ? WHERE id = ?').run(c.id, b.id);
+    return res.json({ client_id: c.id, matched: true });
+  }
+  const created = createClientFromBooking(b, req.user);
+  res.json({
+    ...created,
+    // 同一支手機底下的其他人：多半是家人，提示櫃檯去設代訂授權
+    family_candidates: samePhone.map(c => ({ id: c.id, code: c.code, name: c.name }))
+  });
 });
 
 // 成立預約：寫進排程、指派諮商室、鎖定方案金額與心理師報酬，並以 LINE 通知雙方
@@ -558,7 +583,11 @@ router.post('/bookings/:id/confirm', requireStaff('bookings'), async (req, res) 
   const mode = b.mode || (quote.plan && quote.plan.default_mode) || 'onsite';
   const roomId = mode === 'online'
     ? null
-    : (Number(body.room_id) || plans.pickRoom({ date, start_time: startTime, end_time: endT }));
+    : (Number(body.room_id) || plans.pickRoom({ date, start_time: startTime, end_time: endT, force: true }));
+  // 櫃檯從申請單成立預約時，沒有空房就擋下並講清楚，不要留一筆沒有場地的約
+  if (!roomId && mode !== 'online' && getSetting('room_required', '1') === '1') {
+    return res.status(400).json({ error: '這個時段的諮商室已經排滿，請改約其他時段或先調整現有排程' });
+  }
 
   const info = db.prepare(`INSERT INTO appointments
     (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, subsidy_amount,

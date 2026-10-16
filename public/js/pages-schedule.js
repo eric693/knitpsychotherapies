@@ -22,8 +22,10 @@ async function apptDialog(appt, onDone, defaults) {
       ${UI.select('topic_id', '主題', [['', '不指定主題']], { value: a.topic_id || '' })}
       ${UI.select('type', '晤談類型', App.enumOptions('appt_type'), { value: a.type })}
       ${UI.select('mode', '形式', App.enumOptions('appt_mode'), { value: a.mode })}
-      ${UI.select('room_id', '諮商室',
-    [['', '自動指派'], ['none', '不佔用空間']].concat((App.meta.rooms || []).map(r => [r.id, r.name])),
+      ${UI.select('room_id', '諮商室' + (App.meta.room_required ? '（到所晤談必填）' : ''),
+    [...(App.meta.room_auto_assign ? [['', '自動指派']] : [['', '請選擇諮商室']]),
+      ['none', '不佔用空間'],
+      ...(App.meta.rooms || []).map(r => [r.id, r.name])],
     { value: a.mode === 'online' && !a.room_id ? 'none' : (a.room_id || '') })}
       ${UI.input('fee', '個案應付金額', { type: 'number', value: a.fee !== undefined ? a.fee : (App.meta.default_fee || 2000) })}
       <div class="form-row full" id="quota-hint" style="display:none"></div>
@@ -130,7 +132,9 @@ async function apptDialog(appt, onDone, defaults) {
         }
         hint.textContent = online
           ? '視訊若在所內某一間進行，請直接選那一間，該時段才會被占用。'
-          : '';
+          : (!App.meta.room_auto_assign && App.meta.room_required
+            ? '到所晤談一定要選一間諮商室才能成立（自動指派已關閉）。'
+            : '');
       };
       const syncRoom = mode => {
         roomSel.disabled = false;
@@ -152,6 +156,10 @@ async function apptDialog(appt, onDone, defaults) {
       const data = UI.formData(el);
       // 選「不佔用空間」＝不指派任何諮商室（視訊在家或個案端連線的情形）
       if (data.room_id === 'none') data.room_id = '';
+      // 關閉自動指派時，到所晤談一定要挑一間 —— 在送出前就講清楚，不必等後端回錯誤
+      if (data.mode !== 'online' && !data.room_id && !App.meta.room_auto_assign && App.meta.room_required) {
+        throw new Error('請選擇諮商室（到所晤談必填）');
+      }
       const times = Math.max(1, Math.min(Number(data.repeat_times) || 1, 52));
       const everyWeeks = Math.max(1, Number(data.repeat_weeks) || 1);
       delete data.repeat_times; delete data.repeat_weeks;

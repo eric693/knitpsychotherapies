@@ -364,8 +364,11 @@ function checkBooking({ plan_id, client, counselor_id, date, appointment_id, bir
 
 // 未指定諮商室時自動指派：個案端與線上表單一律看不到空間配置，
 // 由系統挑一間該時段沒被占用的諮商室（只有 2-3 間，取編號最小的即可）。
-function pickRoom({ date, start_time, end_time, exclude_appointment_id }) {
-  if (getSetting('room_auto_assign', '1') !== '1') return null;
+// force：個案端與線上預約表單用。那兩條路**看不到也選不了空間**，
+// 所以「關閉自動指派」只該管到櫃檯 —— 全域關掉會讓個案端成立一筆沒有場地的約。
+// 櫃檯端不帶 force，設定關掉時就回傳 null，由 room_required 擋下，逼櫃檯自己挑一間。
+function pickRoom({ date, start_time, end_time, exclude_appointment_id, force }) {
+  if (!force && getSetting('room_auto_assign', '1') !== '1') return null;
   const rooms = db.prepare('SELECT * FROM rooms WHERE active = 1 ORDER BY id').all();
   if (!rooms.length) return null;
   const busy = new Set(db.prepare(`SELECT room_id FROM appointments

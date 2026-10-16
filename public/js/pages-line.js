@@ -147,8 +147,27 @@ async function bookingDialog(id, onDone) {
       if (mk) {
         mk.onclick = async () => {
           const r = await POST(`/bookings/${id}/create-client`);
-          UI.toast(r.matched ? '已對應到既有個案' : `已建檔（${r.code}）`);
           close();
+          // 同一支手機底下已經有別人（家人共用手機）：建新檔是對的，
+          // 但要提醒櫃檯去設代訂授權，否則家長在專區看不到彼此、LINE 也各綁各的
+          const others = (r.family_candidates || []).filter(c => c.id !== r.client_id);
+          if (!r.matched && others.length) {
+            await new Promise(done => UI.modal({
+              title: `已建檔（${r.code}）`, hideFooter: true,
+              onClose: done,
+              body: `<div style="font-size:14px;line-height:1.85">
+                  這支手機底下原本就有
+                  <strong>${others.map(c => UI.esc(c.name + '（' + c.code + '）')).join('、')}</strong>，
+                  多半是同一家人。<br><br>
+                  系統<strong>已另外建立新的個案</strong>（不會掛到既有那筆），
+                  請到任一位的個案頁用「<strong>找同手機的家人</strong>」把他們設為一家人 ——
+                  設好之後家長在專區看得到全部孩子的時段，LINE 也會一組綁定碼全綁。</div>
+                <div class="toolbar" style="margin-top:14px"><div class="spacer"></div>
+                  <a class="btn" href="#client/${r.client_id}">前往新建的個案</a></div>`
+            }));
+          } else {
+            UI.toast(r.matched ? '已對應到既有個案' : `已建檔（${r.code}）`);
+          }
           bookingDialog(id, onDone);
         };
       }

@@ -333,7 +333,12 @@ router.post('/appointments', requireClient, async (req, res) => {
   }
   // 諮商室由系統指派（個案端不顯示空間配置）；排滿時留空由櫃檯安排，
   // 週檢視的「未指定空間」清單會列出來。視訊晤談不佔空間。
-  const roomId = mode === 'online' ? null : plans.pickRoom({ date, start_time, end_time: slot.end_time });
+  const roomId = mode === 'online' ? null : plans.pickRoom({ date, start_time, end_time: slot.end_time, force: true });
+  // 個案端選不了空間，所以沒空房時只能擋下 —— 讓他另挑時段，
+  // 總比成立一筆沒有場地的約、當天才發現沒地方用要好。
+  if (!roomId && mode !== 'online' && getSetting('room_required', '1') === '1') {
+    return res.status(400).json({ error: '這個時段的諮商室已經滿了，請改選其他時段' });
+  }
   const info = db.prepare(`INSERT INTO appointments
     (client_id, counselor_id, room_id, date, start_time, end_time, type, mode, status, fee, subsidy_amount,
      plan_id, counselor_share, meeting_url, source, note)
@@ -430,7 +435,7 @@ router.post('/appointments/:id/reschedule', requireClient, async (req, res) => {
   if (roomId && conflictOf({
     id: a.id, date, start_time, end_time: slot.end_time, counselor_id: a.counselor_id, room_id: roomId
   })) {
-    roomId = plans.pickRoom({ date, start_time, end_time: slot.end_time, exclude_appointment_id: a.id });
+    roomId = plans.pickRoom({ date, start_time, end_time: slot.end_time, exclude_appointment_id: a.id, force: true });
     roomNote = roomId ? '' : '；改期後諮商室待重新安排';
   }
   db.prepare(`UPDATE appointments SET date = ?, start_time = ?, end_time = ?, reminded_at = '',
