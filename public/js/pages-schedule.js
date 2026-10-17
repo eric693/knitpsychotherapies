@@ -354,15 +354,18 @@ App.page('schedule', {
             : (a.room_name ? UI.esc(a.room_name) : '');
           const flags = `${a.risk_level === 'high' ? '⚠' : ''}`
             + `${a.confirmed_at ? '✅' : ''}${a.cancel_requested_at ? '🕓' : ''}`;
+          // 已取消／未到用文字講明白，不靠劃線 —— 劃線會被看成「這格沒有預約」
+          const stateTag = { cancelled: '已取消', no_show: '未到' }[a.status]
+            ? `<span class="state-tag">${{ cancelled: '已取消', no_show: '未到' }[a.status]}</span>` : '';
           return {
             time: mins(a.start_time) === null ? null : a.start_time,
             // 精簡時擠成一行：個案用正常字重、心理師與空間用淡色，還是分得出誰是誰
             html: compact
               ? `<div class="appt-chip one ${a.status}" data-appt="${a.id}">
-                  <strong>${a.start_time}</strong> ${UI.esc(a.client_name)}${flags}
+                  <strong>${a.start_time}</strong> ${UI.esc(a.client_name)}${flags}${stateTag}
                   <span class="sub">${UI.esc(a.counselor_name)}${where ? '／' + where : ''}</span></div>`
               : `<div class="appt-chip ${a.status}" data-appt="${a.id}">
-                  <strong>${a.start_time}</strong>
+                  <strong>${a.start_time}</strong>${stateTag}
                   <span class="who who-client">個案</span> ${UI.esc(a.client_name)}
                   ${a.risk_level === 'high' ? '⚠' : ''}${a.confirmed_at ? '　✅已確認' : ''}${a.cancel_requested_at ? '　🕓申請取消' : ''}<br>
                   <span style="font-size:11.5px"><span class="who who-staff">心理師</span> ${UI.esc(a.counselor_name)}

@@ -366,7 +366,15 @@ table.list tr:hover td { background: #f8fbfb; }
 .appt-chip:hover { filter: brightness(0.97); }
 .appt-chip.done { border-left-color: var(--ok); background: var(--ok-bg); }
 .appt-chip.no_show { border-left-color: var(--danger); background: var(--danger-bg); }
-.appt-chip.cancelled { border-left-color: #90a4ae; background: #eef2f5; color: var(--muted); text-decoration: line-through; }
+/* 已取消不劃線：劃線會讓人以為「這格什麼都沒有」，而取消掉的約櫃檯仍要看得清楚是誰、
+   原本幾點、為什麼取消。改用淡色底＋明寫「已取消」標籤，狀態一樣清楚但讀得到字。 */
+.appt-chip.cancelled { border-left-color: #90a4ae; background: #eef2f5; color: var(--muted); }
+.appt-chip .state-tag {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .04em; padding: 0 4px;
+  border-radius: 3px; margin-left: 4px; white-space: nowrap;
+  background: #cfd8dd; color: #44565f;
+}
+.appt-chip.no_show .state-tag { background: var(--danger-bg); color: var(--danger); }
 .appt-chip.arrived { border-left-color: var(--accent); background: var(--warn-bg); }
 .appt-chip.off { border-left-color: #90a4ae; background: #eceff1; color: var(--muted); cursor: default; }
 .appt-chip.group { border-left-color: var(--accent); background: #fdf3e0; }
