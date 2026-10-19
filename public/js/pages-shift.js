@@ -476,13 +476,19 @@ App.page('waitlist', {
     '這裡列出<strong>被取消而空出來的時段</strong>，右邊會算出有幾位候補人選符合。',
     '按「查看並通知」挑人發通知；對方回覆願意後，再按「直接排約」成立預約。',
     '想從候補名單反查時間，用「查任意時段候補」。',
-    '候補名單本身是在個案或來電登記那邊登記的。',
+    '<strong>上方是候補名單</strong>：誰在等、等幾天、在等哪個方案。'
+      + '要把人放進來有三個入口 —— 來電登記選「候補中」、'
+      + '線上預約申請按「<strong>轉為候補</strong>」、在案個案的頁面按「<strong>加入候補</strong>」。',
+    '方案名額滿了就是典型的候補情境：先把人排進名單，等有人取消釋出時段、或下個週期名額開出來再遞補。',
   ],
   module: 'schedule',
   async render(el) {
     const from = localStorage.getItem('mc-wl-from') || UI.today();
     const to = localStorage.getItem('mc-wl-to') || UI.addDays(UI.today(), 30);
-    const rows = await GET(`/waitlist/openings?from=${from}&to=${to}`);
+    const [rows, wl] = await Promise.all([
+      GET(`/waitlist/openings?from=${from}&to=${to}`),
+      GET('/waitlist').catch(() => ({ rows: [], alert_days: 14 }))
+    ]);
     el.innerHTML = `
       <div class="toolbar">
         <label style="font-size:13px">期間</label>
@@ -491,6 +497,29 @@ App.page('waitlist', {
         <input type="date" id="t" value="${to}">
         <div class="spacer"></div>
         <button class="btn secondary" id="any">查任意時段候補</button>
+      </div>
+      <div class="card">
+        <h3>候補名單（${wl.rows.length}）
+          <span style="font-size:13px;font-weight:400;color:var(--muted)">等候中的人；超過 ${wl.alert_days} 天未處理會標紅</span></h3>
+        ${UI.table(['姓名', '聯絡電話', '在等的方案', '指定心理師', '希望時段', '等候天數', '來源', ''],
+    wl.rows.map(w => `<tr>
+          <td>${w.client_id ? `<a href="#client/${w.client_id}"><strong>${UI.esc(w.name)}</strong></a>`
+    : `<strong>${UI.esc(w.name)}</strong>`}
+            ${w.urgency === 'high' ? ' ' + UI.tag('高緊急', 'danger') : ''}
+            ${w.client_code ? `<br><span style="font-size:12px;color:var(--muted)">${UI.esc(w.client_code)}</span>` : ''}</td>
+          <td>${UI.esc(w.phone || '')}</td>
+          <td>${UI.esc(w.plan_name || '未指定')}</td>
+          <td>${UI.esc(w.preferred_counselor_name || '不指定')}</td>
+          <td style="font-size:12.5px">${UI.esc(w.preferred_time || '－')}</td>
+          <td${w.waiting_days >= wl.alert_days ? ' style="color:var(--danger);font-weight:600"' : ''}>${w.waiting_days} 天</td>
+          <td style="font-size:12.5px">${UI.esc(w.source || '')}</td>
+          <td style="white-space:nowrap">
+            <button class="btn tiny" data-wlbook="${w.id}">安排晤談</button>
+            <button class="btn tiny secondary" data-wlout="${w.id}">移出候補</button></td></tr>`),
+    '目前沒有人在候補')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          把人放進候補有三個入口：來電登記選「候補中」、線上預約申請按「轉為候補」、
+          在案個案頁按「加入候補」。</div>
       </div>
       <div class="card">
         <h3>釋出時段（${rows.length}）</h3>
@@ -509,6 +538,39 @@ App.page('waitlist', {
     const reload = () => App.go('waitlist');
     el.querySelector('#f').onchange = e => { localStorage.setItem('mc-wl-from', e.target.value); reload(); };
     el.querySelector('#t').onchange = e => { localStorage.setItem('mc-wl-to', e.target.value); reload(); };
+    el.querySelectorAll('[data-wlbook]').forEach(b => {
+      b.onclick = () => {
+        const w = wl.rows.find(x => x.id === Number(b.dataset.wlbook));
+        // 已建檔的直接帶進排約視窗；還沒建檔的要先建檔，提示到來電登記走派案流程
+        if (!w.client_id) {
+          return UI.toast(`${w.name} 還沒建檔，請先到「來電登記與派案」建檔後再排約`, true);
+        }
+        apptDialog(null, reload, {
+          client_id: w.client_id, counselor_id: w.preferred_counselor_id || undefined,
+          plan_id: w.plan_id || undefined
+        });
+      };
+    });
+    el.querySelectorAll('[data-wlout]').forEach(b => {
+      b.onclick = () => {
+        const w = wl.rows.find(x => x.id === Number(b.dataset.wlout));
+        UI.modal({
+          title: `移出候補：${w.name}`,
+          submitText: '移出',
+          body: `<div class="form-grid">
+              ${UI.select('to', '移出後的狀態', [['assigned', '已派案（接下來會排約）'],
+    ['converted', '已建檔成案'], ['closed', '不再等候／未成案']], { value: 'assigned' })}
+              ${UI.input('reason', '原因（選填）', { full: true })}
+            </div>
+            <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+              資料不會刪除，只是改狀態，來電登記那邊仍查得到。</div>`,
+          onSubmit: async form => {
+            await POST(`/waitlist/${w.id}/release`, UI.formData(form));
+            UI.toast('已移出候補'); reload();
+          }
+        });
+      };
+    });
     el.querySelectorAll('[data-slot]').forEach(b => {
       b.onclick = () => waitlistCandidateModal(rows.find(r => r.id === Number(b.dataset.slot)));
     });

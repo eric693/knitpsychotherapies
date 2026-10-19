@@ -1971,6 +1971,65 @@ function startServer() {
       await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
     }
   });
+  // 方案名額滿了就是典型的候補情境：人要留著等，但現在排不進去。
+  // 原本只能從來電登記進候補，而且候補名單在畫面上根本看不到。
+  await test('候補名單：線上申請與在案個案都能轉進來，名單看得到也移得出', async () => {
+    const base = await admin.ok('GET', '/api/waitlist');
+    const before = base.rows.length;
+    const c = await admin.ok('POST', '/api/clients', { name: '候補測試個案', phone: '0955321001' });
+    const mk = async name => {
+      const r = await fetch(BASE + '/api/public/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-real-ip': '203.0.113.88' },
+        body: JSON.stringify({ name, phone: '0955321002', plan_id: youthPlanId, consent: true,
+          birth_date: '1994-04-04', main_issue: '想排候補' })
+      });
+      const d = await r.json();
+      assert(r.status < 400, '建立申請單失敗：' + JSON.stringify(d));
+      return d.id || d.request_id;
+    };
+    const reqId = await mk('候補測試申請人');
+    try {
+      // 1) 線上預約申請 → 候補
+      await admin.ok('POST', `/api/bookings/${reqId}/waitlist`,
+        { urgency: 'high', preferred_time: '平日晚上', note: '名額滿了' });
+      const list1 = await admin.ok('GET', '/api/waitlist');
+      const w1 = list1.rows.find(x => x.booking_request_id === reqId);
+      assert(w1, '申請應出現在候補名單');
+      equal(w1.urgency, 'high', '緊急度要帶過去');
+      equal(w1.preferred_time, '平日晚上', '希望時段要帶過去');
+      assert(w1.plan_name, '要記得在等哪個方案：' + JSON.stringify(w1.plan_name));
+      // 申請單本身移出待處理
+      const br = (await admin.ok('GET', '/api/bookings')).rows || await admin.ok('GET', '/api/bookings');
+      equal((br.find ? br : br.rows).find(x => x.id === reqId).status, 'waitlisted', '申請應標成已轉候補');
+      await admin.fails('POST', `/api/bookings/${reqId}/waitlist`, {}, '已經在候補');
+
+      // 2) 在案個案 → 候補
+      await admin.ok('POST', `/api/clients/${c.id}/waitlist`,
+        { plan_id: youthPlanId, preferred_time: '週六上午', issue: '想換時段' });
+      const list2 = await admin.ok('GET', '/api/waitlist');
+      const w2 = list2.rows.find(x => x.client_id === c.id);
+      assert(w2, '在案個案應出現在候補名單');
+      equal(w2.client_code, (await admin.ok('GET', `/api/clients/${c.id}`)).code, '要帶出個案編號');
+      await admin.fails('POST', `/api/clients/${c.id}/waitlist`, {}, '已經在候補名單');
+      equal(list2.rows.length, before + 2, '名單應多兩位');
+      // 高緊急的排前面
+      assert(list2.rows.findIndex(x => x.id === w1.id) < list2.rows.findIndex(x => x.id === w2.id),
+        '高緊急度應排在前面');
+
+      // 3) 移出候補
+      await admin.ok('POST', `/api/waitlist/${w2.id}/release`, { to: 'assigned', reason: '已排約' });
+      const list3 = await admin.ok('GET', '/api/waitlist');
+      assert(!list3.rows.some(x => x.id === w2.id), '移出後不該再出現在名單');
+      await admin.fails('POST', `/api/waitlist/${w2.id}/release`, {}, '找不到');
+      // 釋出時段的可遞補人選仍沿用同一份名單
+      const open = await admin.ok('GET', `/api/waitlist/openings?from=${ymd(new Date())}&to=${addDays(ymd(new Date()), 60)}`);
+      assert(Array.isArray(open), '釋出時段應仍可查詢');
+      await admin.ok('POST', `/api/waitlist/${w1.id}/release`, { to: 'closed' }).catch(() => {});
+    } finally {
+      await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
   // 媽媽用自己的手機幫孩子預約，之後再用同一支手機替自己預約 ——
   // 原本只比對電話，會把媽媽的申請認成孩子那一筆：申請上是媽媽的名字、編號卻是孩子的，
   // 而媽媽本人在個案管理裡根本不存在

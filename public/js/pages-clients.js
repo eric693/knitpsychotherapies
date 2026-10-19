@@ -570,6 +570,8 @@ App.page('client', {
   sub: '',
   help: [
     '上方按鈕是這位個案的常用動作：編輯資料、新增預約、撰寫晤談紀錄、登錄危機事件。',
+    '方案名額滿了、或想換時段但現在排不進去，按「<strong>加入候補</strong>」把人排進候補名單；'
+      + '之後有時段釋出時，「候補遞補」頁就會把他配對出來。',
     '下方分頁依序是晤談紀錄、處遇計畫、量表、附件、危機事件與同意書。',
     '晤談紀錄僅主責心理師、督導與管理者可讀；實習生的紀錄要送督導覆核才定稿。',
     '未成年個案的紀錄自動採用「療育服務紀錄表」的欄位（家長回饋、本次療育目標、療育活動內容、兒童表現、居家療育建議、下次預定討論事項與家長簽名），成人維持 S/O/A/P；依個案年齡自動判斷，不必自己選。',
@@ -592,6 +594,7 @@ App.page('client', {
     head.innerHTML = `<div class="toolbar">
       <button class="btn small" id="edit">編輯資料</button>
       <button class="btn small secondary" id="book">新增預約</button>
+      ${App.can('schedule') ? '<button class="btn small secondary" id="towl">加入候補</button>' : ''}
       ${c.can_view_notes && App.can('notes') ? '<button class="btn small secondary" id="newnote">撰寫晤談紀錄</button>' : ''}
       ${App.can('risk') ? '<button class="btn small warn" id="risk">登錄危機事件</button>' : ''}
       <div class="spacer"></div>
@@ -608,6 +611,29 @@ App.page('client', {
     el.appendChild(head);
     head.querySelector('#edit').onclick = () => clientDialog(c, () => App.go('client/' + id));
     head.querySelector('#book').onclick = () => apptDialog({ client_id: c.id, counselor_id: c.counselor_id || App.me.id, date: UI.today(), start_time: '14:00', type: c.status === 'intake' ? 'intake' : 'individual', mode: 'onsite' }, () => App.go('client/' + id));
+    // 方案名額滿了、或現在排不進去：排進候補名單，有時段釋出時「候補遞補」頁會配對出來
+    const towl = head.querySelector('#towl');
+    if (towl) towl.onclick = () => UI.modal({
+      title: `加入候補：${c.name}`,
+      submitText: '加入候補名單',
+      body: `<div class="form-grid">
+          ${UI.select('plan_id', '在等哪個方案',
+    [['', '不指定方案']].concat((App.meta.plans || []).map(p => [p.id, p.name])), { value: '' })}
+          ${UI.select('counselor_id', '指定心理師',
+    [['', '不指定']].concat(App.counselorOptions()), { value: c.counselor_id || '' })}
+          ${UI.select('urgency', '緊急度', [['normal', '一般'], ['high', '高（優先遞補）'], ['low', '低']],
+    { value: 'normal' })}
+          ${UI.input('preferred_time', '希望時段', { full: true, placeholder: '如 平日晚上、週六上午' })}
+          ${UI.textarea('issue', '想談的主題／原因', { full: true })}
+        </div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          加入後可在「候補遞補」頁看到；有時段釋出時系統會依指定心理師、緊急度、
+          希望時段吻合度與等候天數排出人選。</div>`,
+      onSubmit: async form => {
+        await POST(`/clients/${c.id}/waitlist`, UI.formData(form));
+        UI.toast('已加入候補名單');
+      }
+    });
     if (head.querySelector('#newnote')) head.querySelector('#newnote').onclick = () => noteDialog({ client_id: c.id, note_format: c.note_format }, () => App.go('client/' + id));
     if (head.querySelector('#risk')) head.querySelector('#risk').onclick = () => riskDialog({ client_id: c.id }, () => App.go('client/' + id));
     head.querySelector('#deact').onclick = async () => {

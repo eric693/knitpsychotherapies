@@ -262,6 +262,13 @@ ensureColumns('consents', {
   staff_signature: "TEXT NOT NULL DEFAULT ''",
   staff_signed_at: "TEXT NOT NULL DEFAULT ''"
 });
+// 候補名單就是 intakes 裡 status = 'waiting' 的人。
+// 原本只能從來電登記進去，但方案名額用完時，人多半是從線上預約申請或既有個案那邊冒出來的，
+// 所以要記得「在等哪個方案」與「從哪張申請轉過來」。
+ensureColumns('intakes', {
+  plan_id: 'INTEGER REFERENCES service_plans(id)',
+  booking_request_id: 'INTEGER REFERENCES booking_requests(id)'
+});
 ensureColumns('group_sessions', {
   reminded_at: "TEXT NOT NULL DEFAULT ''"
 });

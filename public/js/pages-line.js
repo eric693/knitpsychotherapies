@@ -14,7 +14,7 @@ const TEXT_FIELDS = [
   ['line_text_receipt_note', '收據已開立：灰底注意事項', 2]
 ];
 
-const BOOKING_STATUS = { new: '待處理', confirmed: '已成立', filed: '已建檔', rejected: '未成立', cancelled: '已取消' };
+const BOOKING_STATUS = { new: '待處理', confirmed: '已成立', filed: '已建檔', waitlisted: '已轉候補', rejected: '未成立', cancelled: '已取消' };
 
 // Google 表單的問題會增刪，同步時整份回應都留了一份；
 // 這裡原樣攤開來，櫃檯不必回 Google 後台就看得到個案填的每一個字。
@@ -121,6 +121,7 @@ async function bookingDialog(id, onDone) {
         ${b.client_id ? '' : '此人尚未建檔，成立預約前請先按左下「由申請資料建檔」。'}</div>
       <div class="toolbar" style="margin-top:10px">
         ${b.client_id ? '' : '<button class="btn secondary" id="mkclient" type="button">由申請資料建檔</button>'}
+        ${b.status === 'confirmed' ? '' : '<button class="btn secondary" id="towl" type="button">轉為候補</button>'}
         <div class="spacer"></div>
         <button class="btn danger" id="reject" type="button">未能成立（通知個案）</button>
       </div>`,
@@ -171,6 +172,29 @@ async function bookingDialog(id, onDone) {
           bookingDialog(id, onDone);
         };
       }
+      // 方案名額滿了、或現在排不進去但人要留著等：轉進候補名單，
+      // 待遇有人取消釋出時段、或下個週期名額開出來時再遞補
+      const towl = el.querySelector('#towl');
+      if (towl) towl.onclick = () => UI.modal({
+        title: `轉為候補：${b.name}`,
+        submitText: '加入候補名單',
+        body: `<div style="font-size:13.5px;line-height:1.8;margin-bottom:10px">
+            這筆申請會移出待處理、改記在<strong>候補名單</strong>裡。
+            之後有時段釋出時，「候補遞補」頁就會把這個人配對出來。</div>
+          <div class="form-grid">
+            ${UI.select('urgency', '緊急度', [['normal', '一般'], ['high', '高（優先遞補）'], ['low', '低']],
+    { value: 'normal' })}
+            ${UI.input('preferred_time', '希望時段', { value: b.alt_note || '', full: true,
+    placeholder: '如 平日晚上、週六上午' })}
+            ${UI.textarea('note', '備註', { full: true })}
+          </div>`,
+        onSubmit: async form => {
+          await POST(`/bookings/${id}/waitlist`, UI.formData(form));
+          UI.toast('已加入候補名單');
+          close();
+          onDone && onDone();
+        }
+      });
       el.querySelector('#reject').onclick = async () => {
         const note = el.querySelector('[name=reply_note]').value;
         if (!await UI.confirm('確定要回覆此申請未能成立嗎？')) return;

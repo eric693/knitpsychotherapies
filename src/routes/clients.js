@@ -781,6 +781,27 @@ router.get('/consents/:id', requireStaff('consents'), (req, res) => {
   res.json(row);
 });
 
+// 既有個案加入候補：方案名額滿了、或想換時段但現在排不進去。
+// 一樣寫進 intakes（status = 'waiting'），與來電候補、申請轉候補共用同一份名單。
+router.post('/clients/:id/waitlist', requireStaff('schedule'), (req, res) => {
+  const c = db.prepare('SELECT * FROM clients WHERE id = ? AND active = 1').get(req.params.id);
+  if (!c) return res.status(404).json({ error: '找不到此個案' });
+  const dup = db.prepare("SELECT id FROM intakes WHERE client_id = ? AND status = 'waiting'").get(c.id);
+  if (dup) return res.status(400).json({ error: `${c.name} 已經在候補名單裡` });
+  const b = req.body || {};
+  const info = db.prepare(`INSERT INTO intakes
+    (name, phone, gender, birth_date, is_minor, source, issue, preferred_time, preferred_counselor_id,
+     urgency, status, plan_id, client_id, taken_by, note)
+    VALUES (?,?,?,?,?,?,?,?,?,?,'waiting',?,?,?,?)`).run(
+    c.name, c.phone || c.guardian_phone || '', c.gender || '', c.birth_date || '', c.is_minor ? 1 : 0,
+    '在案個案', String(b.issue || '').slice(0, 500), String(b.preferred_time || '').slice(0, 200),
+    Number(b.counselor_id) || c.counselor_id || null,
+    ['low', 'normal', 'high'].includes(b.urgency) ? b.urgency : 'normal',
+    Number(b.plan_id) || null, c.id, req.user.id, String(b.note || '').slice(0, 500));
+  audit('staff', req.user.id, req.user.name, '加入候補名單', c.code, { plan_id: b.plan_id || null });
+  res.json({ id: info.lastInsertRowid });
+});
+
 // ---- 結案摘要（結案時產出，內容取自處遇計畫與晤談次數）----
 router.get('/clients/:id/summary', requireStaff('clients'), (req, res) => {
   const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);

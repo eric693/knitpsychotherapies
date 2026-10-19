@@ -547,6 +547,33 @@ router.post('/bookings/:id/create-client', requireStaff('clients'), (req, res) =
   });
 });
 
+// 轉為候補：方案名額滿了、或現在排不進去，但人要留著等。
+//
+// 候補名單是 intakes（status = 'waiting'），所以這裡把申請單的資料搬成一筆候補登記，
+// 不另外做一套名單 —— 釋出時段的配對、等候天數示警都直接沿用既有那一套。
+// 申請單本身標成 waitlisted，待處理清單就不會一直掛著它。
+router.post('/bookings/:id/waitlist', requireStaff('bookings'), (req, res) => {
+  const b = db.prepare('SELECT * FROM booking_requests WHERE id = ?').get(req.params.id);
+  if (!b) return res.status(404).json({ error: '找不到此預約申請' });
+  if (b.status === 'confirmed') return res.status(400).json({ error: '此申請已成立預約，不需要排候補' });
+  const dup = db.prepare("SELECT id FROM intakes WHERE booking_request_id = ? AND status = 'waiting'").get(b.id);
+  if (dup) return res.status(400).json({ error: '這筆申請已經在候補名單裡' });
+  const body = req.body || {};
+  const info = db.prepare(`INSERT INTO intakes
+    (name, phone, gender, birth_date, source, issue, preferred_time, preferred_counselor_id,
+     urgency, status, plan_id, booking_request_id, client_id, taken_by, note)
+    VALUES (?,?,?,?,?,?,?,?,?,'waiting',?,?,?,?,?)`).run(
+    b.name, b.phone, b.gender || '', b.birth_date || '', '線上預約表單',
+    b.main_issue || '', String(body.preferred_time || b.alt_note || ''),
+    Number(body.counselor_id) || b.counselor_id || null,
+    ['low', 'normal', 'high'].includes(body.urgency) ? body.urgency : 'normal',
+    Number(body.plan_id) || b.plan_id || null, b.id, b.client_id || null, req.user.id,
+    String(body.note || '').slice(0, 500));
+  db.prepare("UPDATE booking_requests SET status = 'waitlisted' WHERE id = ?").run(b.id);
+  audit('staff', req.user.id, req.user.name, '預約申請轉候補', b.name, { request_id: b.id });
+  res.json({ id: info.lastInsertRowid });
+});
+
 // 成立預約：寫進排程、指派諮商室、鎖定方案金額與心理師報酬，並以 LINE 通知雙方
 router.post('/bookings/:id/confirm', requireStaff('bookings'), async (req, res) => {
   const b = db.prepare('SELECT * FROM booking_requests WHERE id = ?').get(req.params.id);

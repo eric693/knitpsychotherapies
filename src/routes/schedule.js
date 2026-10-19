@@ -876,6 +876,33 @@ function waitlistMessage({ name, date, start_time, end_time, counselor_name }) {
 }
 
 // 近期釋出的時段（取消／未到，且該時段目前確實沒有其他有效預約占用）＋可遞補人選
+// 候補名單本身：intakes 裡 status = 'waiting' 的人。
+// 原本這份名單在畫面上沒有任何地方看得到，只能間接透過「釋出時段的可遞補人選」瞄到幾個人，
+// 於是方案名額滿了、排了一串候補，櫃檯卻說不出現在到底有誰在等、等多久了。
+router.get('/waitlist', requireStaff('schedule'), (req, res) => {
+  const rows = db.prepare(`SELECT i.*, u.name AS preferred_counselor_name, p.name AS plan_name,
+      c.code AS client_code, c.name AS client_name,
+      CAST(julianday('now','localtime') - julianday(i.created_at) AS INTEGER) AS waiting_days
+    FROM intakes i
+    LEFT JOIN users u ON u.id = i.preferred_counselor_id
+    LEFT JOIN service_plans p ON p.id = i.plan_id
+    LEFT JOIN clients c ON c.id = i.client_id
+    WHERE i.status = 'waiting'
+    ORDER BY i.urgency = 'high' DESC, i.created_at`).all();
+  res.json({ rows, alert_days: Number(getSetting('waitlist_alert_days', '14')) });
+});
+
+// 移出候補：成案了、或對方自己說不等了。不刪資料，改狀態留下軌跡。
+router.post('/waitlist/:id/release', requireStaff('schedule'), (req, res) => {
+  const row = db.prepare("SELECT * FROM intakes WHERE id = ? AND status = 'waiting'").get(req.params.id);
+  if (!row) return res.status(404).json({ error: '找不到這筆候補' });
+  const to = ['assigned', 'converted', 'closed'].includes((req.body || {}).to) ? req.body.to : 'closed';
+  db.prepare('UPDATE intakes SET status = ?, close_reason = ? WHERE id = ?')
+    .run(to, String((req.body || {}).reason || '').slice(0, 200), row.id);
+  audit('staff', req.user.id, req.user.name, '移出候補名單', row.name, { to });
+  res.json({ ok: true });
+});
+
 router.get('/waitlist/openings', requireStaff('schedule'), (req, res) => {
   const from = req.query.from || today();
   const to = req.query.to || addDays(from, 30);
