@@ -705,6 +705,48 @@ function startServer() {
       await admin.ok('DELETE', `/api/clients/${c.id}`).catch(() => {});
     }
   });
+  // 櫃檯常見動線：先取消、之後又把這筆改到新時間。
+  // 狀態沒跟著回到「已預約」的話，卡片會一直寫「已取消」（以為沒排成），
+  // 而且候補遞補會把那個時段當成空檔列出來 —— 實際上那裡是有人的。
+  await test('把已取消的預約改到新時間，狀態要回到已預約且不再算空檔', async () => {
+    const clients = await admin.ok('GET', '/api/clients');
+    const rooms = await admin.ok('GET', '/api/rooms');
+    const me = await admin.ok('GET', '/api/me');
+    const day = nextWeekday(1, 253);
+    const a = await admin.ok('POST', '/api/appointments', {
+      client_id: clients[0].id, counselor_id: me.id, date: day, start_time: '07:00',
+      mode: 'onsite', room_id: rooms[0].id, fee: 2000, override: true
+    });
+    try {
+      await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' });
+      const moved = addDays(day, 7);
+      // 取消後的時段會出現在候補遞補的「釋出時段」
+      const before = await admin.ok('GET', `/api/waitlist/openings?from=${day}&to=${addDays(day, 30)}`);
+      assert(before.some(o => o.id === a.id), '取消後應列為釋出時段');
+
+      await admin.ok('PUT', `/api/appointments/${a.id}`, { date: moved, start_time: '08:00' });
+      const after = (await admin.ok('GET', `/api/appointments?client_id=${clients[0].id}`))
+        .find(x => x.id === a.id);
+      equal(after.status, 'booked', '改期後狀態要回到已預約');
+      equal(after.date, moved, '日期要真的改掉');
+      equal(after.cancel_reason || '', '', '取消原因要清掉');
+      assert(after.reschedule_count > 0, '要記下這筆改過期，卡片才標得出「已改期」');
+      assert((after.rescheduled_from || '').includes(day), '要留下原本的時間：' + after.rescheduled_from);
+
+      // 不該再被當成可遞補的空檔
+      const openings = await admin.ok('GET', `/api/waitlist/openings?from=${day}&to=${addDays(day, 30)}`);
+      assert(!openings.some(o => o.id === a.id), '改期後不該再列為釋出時段');
+      // 那個時段也確實被佔住了
+      const clash = await admin.post('/api/appointments', {
+        client_id: clients[1].id, counselor_id: me.id, date: moved, start_time: '08:00',
+        mode: 'onsite', room_id: rooms[0].id, fee: 2000, override: true
+      });
+      equal(clash.status, 400, '新時段應該已被佔用');
+    } finally {
+      await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' }).catch(() => {});
+      await admin.del(`/api/appointments/${a.id}`).catch(() => {});
+    }
+  });
   // 櫃檯改期後：個案手上只有舊時間那張卡，不通知他就只能等當天撲空；
   // 而且提醒印記不清掉的話，系統會認為「已經提醒過了」而不再依新時間發
   await test('櫃檯改期要通知個案，並讓提醒依新時間重發', async () => {

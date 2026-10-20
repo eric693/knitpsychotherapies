@@ -375,6 +375,8 @@ table.list tr:hover td { background: #f8fbfb; }
   background: #cfd8dd; color: #44565f;
 }
 .appt-chip.no_show .state-tag { background: var(--danger-bg); color: var(--danger); }
+/* 已改期：這筆預約仍然成立，只是動過時間 —— 用藍調與「已取消」的灰明顯區隔 */
+.appt-chip .state-tag.moved { background: var(--primary-light); color: var(--primary); }
 .appt-chip.arrived { border-left-color: var(--accent); background: var(--warn-bg); }
 .appt-chip.off { border-left-color: #90a4ae; background: #eceff1; color: var(--muted); cursor: default; }
 .appt-chip.group { border-left-color: var(--accent); background: #fdf3e0; }

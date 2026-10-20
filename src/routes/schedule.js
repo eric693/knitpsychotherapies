@@ -315,13 +315,22 @@ router.put('/appointments/:id', requireStaff('schedule'), async (req, res) => {
   // 時間一變，先前發出去的提醒就是錯的 —— 清掉印記讓提醒依新時間重發，
   // 否則個案手上只有舊時間那張卡，而系統認為「已經提醒過了」。
   const moved = a.date !== b.date || a.start_time !== b.start_time;
+  // 把一筆「已取消／未到」的預約改到新時間，意思就是這個人改期了、會來 ——
+  // 狀態要跟著回到已預約。少了這一步，卡片會一直寫「已取消」（櫃檯以為沒排成），
+  // 而且候補遞補會把這個時段當成空檔列出來，實際上那裡是有人的。
+  const revived = moved && ['cancelled', 'no_show'].includes(a.status);
+  const nextStatus = revived ? 'booked' : a.status;
   db.prepare(`UPDATE appointments SET counselor_id = ?, room_id = ?, date = ?, start_time = ?, end_time = ?,
     type = ?, mode = ?, fee = ?, subsidy_amount = ?, plan_id = ?, topic_id = ?, counselor_share = ?,
-    note = ?, meeting_url = ?${moved ? ", reminded_at = '', confirmed_at = ''" : ''} WHERE id = ?`).run(
+    note = ?, meeting_url = ?${moved ? ", reminded_at = '', confirmed_at = ''" : ''}
+    ${moved ? ", rescheduled_from = ?, reschedule_count = reschedule_count + 1" : ''}
+    ${revived ? ", status = 'booked', cancel_reason = '', cancel_requested_at = ''" : ''} WHERE id = ?`).run(
     Number(b.counselor_id), roomId, b.date, b.start_time, b.end_time,
     b.type, b.mode, quote.fee, quote.subsidy_amount, Number(b.plan_id) || null, Number(b.topic_id) || null,
-    quote.counselor_share, b.note || '', meeting_url, a.id);
-  audit('staff', req.user.id, req.user.name, '修改預約', String(a.id));
+    quote.counselor_share, b.note || '', meeting_url,
+    ...(moved ? [`${a.date} ${a.start_time}`] : []), a.id);
+  audit('staff', req.user.id, req.user.name, '修改預約', String(a.id),
+    revived ? { revived_from: a.status } : '');
   // 只有時間或心理師真的變了才算異動；改備註、改收費不會出現在工作台
   const changedWho = Number(a.counselor_id) !== Number(b.counselor_id);
   if (moved || changedWho) {

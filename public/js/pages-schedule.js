@@ -354,9 +354,12 @@ App.page('schedule', {
             : (a.room_name ? UI.esc(a.room_name) : '');
           const flags = `${a.risk_level === 'high' ? '⚠' : ''}`
             + `${a.confirmed_at ? '✅' : ''}${a.cancel_requested_at ? '🕓' : ''}`;
-          // 已取消／未到用文字講明白，不靠劃線 —— 劃線會被看成「這格沒有預約」
-          const stateTag = { cancelled: '已取消', no_show: '未到' }[a.status]
-            ? `<span class="state-tag">${{ cancelled: '已取消', no_show: '未到' }[a.status]}</span>` : '';
+          // 已取消／未到用文字講明白，不靠劃線 —— 劃線會被看成「這格沒有預約」。
+          // 還在的預約若改過期，標「已改期」：櫃檯一眼知道這筆動過，不會與取消混淆。
+          const label = { cancelled: '已取消', no_show: '未到' }[a.status]
+            || (a.reschedule_count > 0 ? '已改期' : '');
+          const stateTag = label
+            ? `<span class="state-tag${label === '已改期' ? ' moved' : ''}">${label}</span>` : '';
           return {
             time: mins(a.start_time) === null ? null : a.start_time,
             // 精簡時擠成一行：個案用正常字重、心理師與空間用淡色，還是分得出誰是誰
