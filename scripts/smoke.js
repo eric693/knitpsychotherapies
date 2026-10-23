@@ -812,6 +812,57 @@ function startServer() {
       await admin.ok('DELETE', `/api/groups/${g.id}`).catch(() => {});
     }
   });
+  // LINE 月免費額度用完時會一直回 429。推播是 10 分鐘一輪的排程，
+  // 不擋的話每一輪都把同一批提醒再試一次、每次寫一筆失敗紀錄，幾天就上千筆。
+  await test('失敗通知可依錯誤訊息整批標記或刪除', async () => {
+    const before = (await admin.ok('GET', '/api/notifications/failed')).rows.length;
+    // 造幾筆同樣錯誤的失敗紀錄：未綁定 LINE 的個案推播就會失敗
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    const c = await admin.ok('POST', '/api/clients', { name: '批次清除測試', phone: '0933888001' });
+    try {
+      // 沒綁 LINE 的個案排了約，推提醒就會失敗並留下紀錄
+      const me = await admin.ok('GET', '/api/me');
+      const day = addDays(ymd(new Date()), 1);
+      const appts = [];
+      for (let i = 0; i < 3; i++) {
+        const a = await admin.ok('POST', '/api/appointments', {
+          client_id: c.id, counselor_id: me.id, date: day, start_time: `0${7 + i}:00`,
+          mode: 'online', fee: 2000, override: true
+        });
+        appts.push(a);
+        await admin.ok('POST', `/api/line/remind/${a.id}`, {}).catch(() => {});
+      }
+      const mid = await admin.ok('GET', '/api/notifications/failed');
+      const mine = mid.rows.filter(r => r.client_id === c.id && r.status === 'failed');
+      assert(mine.length >= 1, '前置：應產生失敗紀錄，實際 ' + JSON.stringify(mid.rows.slice(0, 3)));
+      const err = mine[0].error.slice(0, 20);
+      for (const a of appts) {
+        await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' }).catch(() => {});
+        await admin.del(`/api/appointments/${a.id}`).catch(() => {});
+      }
+
+      // 先試算，不會動到資料
+      const pre = await admin.ok('POST', '/api/notifications/bulk',
+        { error_like: err, action: 'delete', preview: true });
+      assert(pre.count >= mine.length, '試算應算得出筆數');
+      equal((await admin.ok('GET', '/api/notifications/failed')).rows.length, mid.rows.length,
+        '試算不該動到任何資料');
+
+      // 整批標記已處理
+      const r1 = await admin.ok('POST', '/api/notifications/bulk', { error_like: err, action: 'resolve' });
+      assert(r1.count >= mine.length, '應標記到這幾筆');
+      // 整批刪除
+      const r2 = await admin.ok('POST', '/api/notifications/bulk', { error_like: err, action: 'delete' });
+      assert(r2.count >= 1, '應刪得掉');
+      const after = await admin.ok('GET', '/api/notifications/failed');
+      assert(!after.rows.some(r => r.client_id === c.id && r.status === 'failed'), '刪除後不該再出現');
+      // 已送出／待人工發送的紀錄不受影響
+      assert(after.rows.length <= mid.rows.length, '不該刪到別的紀錄');
+    } finally {
+      await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
   // 團體場次排定後要通知成員，不然家長不知道孩子哪天要上課
   await test('團體場次排定後自動通知已綁 LINE 的成員', async () => {
     await admin.ok('PUT', '/api/line/settings',

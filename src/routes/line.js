@@ -249,7 +249,14 @@ router.post('/line/verify', requireStaff('settings'), async (req, res) => {
       return res.status(400).json({ error: `LINE 回覆 HTTP ${r.status}：${d.message || '權杖可能已失效'}` });
     }
     audit('staff', req.user.id, req.user.name, 'LINE 連線驗證', d.basicId || '');
-    res.json({ ok: true, basic_id: d.basicId, display_name: d.displayName, premium_id: d.premiumId });
+    // 加購或升級方案後按一下「驗證連線」就能解除額度封鎖，不必等到下個月
+    const wasLimited = line.monthlyLimitHit();
+    if (wasLimited) {
+      line.clearMonthlyLimit();
+      audit('staff', req.user.id, req.user.name, '解除 LINE 月額度封鎖', d.basicId || '');
+    }
+    res.json({ ok: true, basic_id: d.basicId, display_name: d.displayName, premium_id: d.premiumId,
+      monthly_limit_cleared: wasLimited });
   } catch (e) {
     res.status(400).json({ error: '無法連線至 LINE：' + String(e.message || e).slice(0, 120) });
   }
@@ -465,6 +472,9 @@ router.delete('/line/binding', requireStaff(), (req, res) => {
 router.get('/line/status', requireStaff(), (req, res) => {
   res.json({
     enabled: line.lineEnabled(),
+    // 月免費額度用完時推播會全部停掉改記為待人工發送，這件事要在頁面上講明白，
+    // 否則櫃檯只會看到「訊息都沒發出去」卻不知道原因
+    monthly_limit: line.monthlyLimitHit(),
     official_name: getSetting('line_official_name'),
     add_friend_url: getSetting('line_add_friend_url'),
     reminder_hours: Number(getSetting('line_reminder_hours', '24')),
@@ -500,6 +510,31 @@ router.post('/notifications/:id/retry', requireStaff('settings'), async (req, re
   if (!r.ok) return res.status(400).json({ error: r.error });
   audit('staff', req.user.id, req.user.name, '重送通知', String(req.params.id));
   res.json({ ok: true });
+});
+
+// 批次處理失敗通知。
+//
+// LINE 月額度用完時，每 10 分鐘的推播排程會把同一批提醒整批再試一次、每次都寫一筆失敗紀錄，
+// 幾天就累積上千筆 —— 一筆一筆按「已人工處理」是按不完的，真正要看的其他錯誤也被洗掉。
+// 可依錯誤訊息關鍵字篩選，預設只動「失敗」的，不碰已送出與待人工發送的紀錄。
+router.post('/notifications/bulk', requireStaff('settings'), (req, res) => {
+  const b = req.body || {};
+  const action = ['resolve', 'delete'].includes(b.action) ? b.action : 'resolve';
+  const where = ["status = 'failed'"], args = [];
+  if (b.error_like) { where.push('error LIKE ?'); args.push(`%${String(b.error_like).slice(0, 80)}%`); }
+  if (b.kind) { where.push('kind = ?'); args.push(String(b.kind)); }
+  if (b.before) { where.push('created_at < ?'); args.push(String(b.before)); }
+  if (b.unresolved_only) where.push('resolved = 0');
+  const sql = where.join(' AND ');
+  const n = db.prepare(`SELECT COUNT(*) n FROM notifications WHERE ${sql}`).get(...args).n;
+  if (b.preview) return res.json({ count: n, preview: true });
+  if (!n) return res.json({ count: 0 });
+  if (action === 'delete') db.prepare(`DELETE FROM notifications WHERE ${sql}`).run(...args);
+  else db.prepare(`UPDATE notifications SET resolved = 1 WHERE ${sql}`).run(...args);
+  audit('staff', req.user.id, req.user.name,
+    action === 'delete' ? '批次刪除失敗通知' : '批次標記通知已處理', `${n} 筆`,
+    { error_like: b.error_like || '', kind: b.kind || '', before: b.before || '' });
+  res.json({ count: n });
 });
 
 // 標記為已人工處理（例如已改用電話通知），不再列在待處理清單

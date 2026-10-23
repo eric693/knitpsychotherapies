@@ -689,6 +689,12 @@ const LINEPAGE = {
   async push(el) {
     const s = await GET('/line/status');
     el.innerHTML = `
+      ${s.monthly_limit ? `<div class="notice" style="border-left-color:var(--danger);background:var(--danger-bg)">
+        <strong>LINE 本月免費訊息額度已用完</strong>，所有推播暫停，訊息一律記為「待人工發送」。<br>
+        這是刻意停下來的：額度是按月重置，繼續重試只會不斷堆積失敗紀錄，該通知的人還是收不到。<br>
+        <strong>請改用電話或其他方式聯繫待通知的個案。</strong>
+        下個月額度重置後會自動恢復；若已在 LINE 後台加購訊息或升級方案，
+        到「串接設定」按一次「驗證連線」即可立即解除。</div>` : ''}
       <div class="card"><h3>手動推播</h3>
         <div style="font-size:14px;line-height:2">
           已綁定個案 <strong>${s.clients_bound}</strong> / ${s.clients_total}　已綁定員工 <strong>${s.staff_bound}</strong><br>
@@ -723,7 +729,23 @@ const LINEPAGE = {
     const drawFailed = async () => {
       const box = el.querySelector('#failed');
       const d = await GET('/notifications/failed');
-      box.innerHTML = `${UI.table(['時間', '類型', '對象', '內容', '狀態', ''], d.rows.map(n => `<tr>
+      // 同一個錯誤訊息重複幾百筆是典型情境（例如 LINE 月額度用完，每 10 分鐘整批重試一次），
+      // 一筆一筆按是按不完的，所以把「同一種錯誤一次清掉」放在最上面
+      const groups = {};
+      for (const n of d.rows) {
+        if (n.status !== 'failed' || !n.error) continue;
+        const key = n.error.slice(0, 60);
+        groups[key] = (groups[key] || 0) + 1;
+      }
+      const bulky = Object.entries(groups).filter(([, c]) => c >= 5).sort((a, b) => b[1] - a[1]);
+      box.innerHTML = `${bulky.length ? `<div class="notice" style="margin-bottom:10px">
+          <strong>同一種錯誤重複很多筆</strong>，可以整批處理，不必一筆一筆按：
+          ${bulky.map(([err, c]) => `<div style="margin-top:6px">
+            <span style="font-size:12.5px">${UI.esc(err)}</span> ${UI.tag(c + ' 筆', 'danger')}
+            <button class="btn tiny secondary" data-bulkres="${UI.esc(err)}">全部標記已處理</button>
+            <button class="btn tiny danger" data-bulkdel="${UI.esc(err)}">全部刪除</button></div>`).join('')}
+        </div>` : ''}
+        ${UI.table(['時間', '類型', '對象', '內容', '狀態', ''], d.rows.map(n => `<tr>
           <td>${UI.esc(n.created_at.slice(5, 16))}</td><td>${UI.esc(n.kind)}</td>
           <td>${UI.esc(n.client_name || n.target || '-')}</td>
           <td><div class="ellipsis" style="max-width:260px" title="${UI.esc(n.content || '')}">${UI.esc(n.content || '')}</div></td>
@@ -736,6 +758,21 @@ const LINEPAGE = {
     '沒有未送出的通知')}
         <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
           失敗的推播每天會自動重送，每筆最多 3 次；${d.line_enabled ? '' : '目前尚未串接 LINE，只能標記為已人工處理。'}</div>`;
+      const bulk = async (err, action) => {
+        const pre = await POST('/notifications/bulk', { error_like: err, action, preview: true });
+        const what = action === 'delete' ? '刪除' : '標記為已處理';
+        if (!await UI.confirm(`將符合「${err}」的 ${pre.count} 筆失敗通知${what}？`
+          + (action === 'delete' ? '\n刪除後無法復原（已送出與待人工發送的紀錄不受影響）。' : ''))) return;
+        const r = await POST('/notifications/bulk', { error_like: err, action });
+        UI.toast(`已${what} ${r.count} 筆`);
+        drawFailed();
+      };
+      box.querySelectorAll('[data-bulkres]').forEach(b2 => {
+        b2.onclick = () => bulk(b2.dataset.bulkres, 'resolve').catch(UI.err);
+      });
+      box.querySelectorAll('[data-bulkdel]').forEach(b2 => {
+        b2.onclick = () => bulk(b2.dataset.bulkdel, 'delete').catch(UI.err);
+      });
       box.querySelectorAll('[data-rt]').forEach(b2 => {
         b2.onclick = async () => {
           try { await POST(`/notifications/${b2.dataset.rt}/retry`, {}); UI.toast('已重送'); drawFailed(); }

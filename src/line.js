@@ -7,7 +7,7 @@
 // 推播對象靠 clients.line_user_id / users.line_user_id；綁定流程見 routes/line.js。
 
 const crypto = require('crypto');
-const { db, getSetting, nowStamp } = require('./db');
+const { db, getSetting, setSetting, nowStamp } = require('./db');
 
 const PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 const REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
@@ -410,8 +410,35 @@ async function callLine(url, body) {
 
 // 推播一則 Flex 給某個 LINE 使用者。
 // to 為空（未綁定）或未設定 token 時不對外連線，只記為待人工發送。
+// LINE 的免費月額度用完時會一直回 429「You have reached your monthly limit.」。
+// 推播是每 10 分鐘跑一次的排程，不擋的話每一輪都會把同一批提醒再試一次、
+// 每次都寫一筆失敗紀錄 —— 三天就累積了四千多筆，櫃檯根本按不完，
+// 真正該看的其他錯誤也被洗掉。
+//
+// 碰到月額度用完就記下來，當月不再嘗試（額度是按月重置，重試一萬次也沒用），
+// 訊息改記為「待人工發送」，櫃檯照樣看得到該通知誰。
+// 下個月自然解除；中途加購或升級方案的話，到「LINE 官方帳號」按「驗證連線」即可解除。
+const MONTHLY_LIMIT_KEY = 'line_monthly_limit_until';
+
+function monthlyLimitHit() {
+  const until = getSetting(MONTHLY_LIMIT_KEY, '');
+  return until && until >= new Date().toISOString().slice(0, 7);
+}
+function markMonthlyLimit() {
+  setSetting(MONTHLY_LIMIT_KEY, new Date().toISOString().slice(0, 7));
+}
+function clearMonthlyLimit() {
+  setSetting(MONTHLY_LIMIT_KEY, '');
+}
+const isMonthlyLimit = err => /monthly limit/i.test(String(err || ''));
+
 async function pushFlex({ to, flex, kind = 'line', client_id = null, appointment_id = null, user = null, summary = '' }) {
   const content = summary || (flex && flex.altText) || '';
+  if (monthlyLimitHit()) {
+    logNotification({ kind, client_id, appointment_id, channel: 'manual', target: to, content,
+      status: 'manual', error: 'LINE 本月免費訊息額度已用完，改為待人工發送' });
+    return { status: 'manual', message: 'LINE 本月額度已用完，已記錄為待人工通知' };
+  }
   if (!lineEnabled()) {
     logNotification({ kind, client_id, appointment_id, channel: 'manual', target: to, content, status: 'manual' });
     return { status: 'manual', message: '尚未設定 LINE official 帳號，已記錄為待人工通知' };
@@ -422,6 +449,8 @@ async function pushFlex({ to, flex, kind = 'line', client_id = null, appointment
     return { status: 'failed', message: '對方尚未綁定 LINE 官方帳號' };
   }
   const r = await callLine(PUSH_URL, { to, messages: [flex] });
+  // 第一次碰到月額度用完就記下來，之後整個月不再嘗試（上面會直接走「待人工發送」）
+  if (!r.ok && isMonthlyLimit(r.error)) markMonthlyLimit();
   logNotification({ kind, client_id, appointment_id, channel: 'line', target: to, content,
     status: r.ok ? 'sent' : 'failed', error: r.error, user, payload: flex });
   return r.ok ? { status: 'sent', message: '已以 LINE 推播' } : { status: 'failed', message: r.error };
@@ -488,6 +517,7 @@ module.exports = {
   lineEnabled, weekdayOf, centerInfo,
   card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
   bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, groupSessionFlex, rescheduledFlex, portalUrl,
+  monthlyLimitHit, clearMonthlyLimit,
   counselorScheduleFlex, counselorBookingFlex, receiptFlex,
   pushFlex, pushText, pushMessages, imageMessage, replyMessages, verifySignature, logNotification,
   retryNotification, retryFailedNotifications
