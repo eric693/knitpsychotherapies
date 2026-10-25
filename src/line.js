@@ -419,18 +419,57 @@ async function callLine(url, body) {
 // 訊息改記為「待人工發送」，櫃檯照樣看得到該通知誰。
 // 下個月自然解除；中途加購或升級方案的話，到「LINE 官方帳號」按「驗證連線」即可解除。
 const MONTHLY_LIMIT_KEY = 'line_monthly_limit_until';
+const QUOTA_CHECK_KEY = 'line_quota_checked_at';
 
 function monthlyLimitHit() {
   const until = getSetting(MONTHLY_LIMIT_KEY, '');
-  return until && until >= new Date().toISOString().slice(0, 7);
+  return !!until && until >= new Date().toISOString().slice(0, 7);
 }
 function markMonthlyLimit() {
   setSetting(MONTHLY_LIMIT_KEY, new Date().toISOString().slice(0, 7));
 }
 function clearMonthlyLimit() {
   setSetting(MONTHLY_LIMIT_KEY, '');
+  setSetting(QUOTA_CHECK_KEY, '');
 }
 const isMonthlyLimit = err => /monthly limit/i.test(String(err || ''));
+
+// 跟 LINE 問目前的額度與已用量。這兩支 API 不計入訊息量，問多少次都不會扣額度。
+async function fetchQuota() {
+  const token = getSetting('line_channel_token', '').trim();
+  if (!token) return null;
+  const get = async url => {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    return r.ok ? r.json().catch(() => null) : null;
+  };
+  const [limit, used] = await Promise.all([
+    get('https://api.line.me/v2/bot/message/quota'),
+    get('https://api.line.me/v2/bot/message/quota/consumption')
+  ]);
+  if (!limit) return null;
+  // type = 'none' 代表不限量（企業方案）；'limited' 才有 value
+  const total = limit.type === 'limited' ? Number(limit.value || 0) : Infinity;
+  const consumed = Number((used && used.totalUsage) || 0);
+  return { type: limit.type, total, used: consumed, remaining: total - consumed };
+}
+
+// 額度封鎖中時，定期回頭問 LINE 還剩多少 —— 所方中途加購或升級方案是常見的事，
+// 原本只認「整個月都別送了」，加購完還是發不出去，得有人想到要去按「驗證連線」才解得開。
+async function recheckQuota({ force = false } = {}) {
+  if (!monthlyLimitHit()) return { blocked: false };
+  const last = getSetting(QUOTA_CHECK_KEY, '');
+  // 沒必要每一輪都問，半小時一次就夠（加購後最多等半小時自動恢復）
+  if (!force && last && Date.now() - new Date(last).getTime() < 30 * 60 * 1000) {
+    return { blocked: true, skipped: true };
+  }
+  setSetting(QUOTA_CHECK_KEY, new Date().toISOString());
+  const q = await fetchQuota().catch(() => null);
+  if (q && q.remaining > 0) {
+    clearMonthlyLimit();
+    return { blocked: false, recovered: true, quota: q };
+  }
+  return { blocked: true, quota: q };
+}
 
 async function pushFlex({ to, flex, kind = 'line', client_id = null, appointment_id = null, user = null, summary = '' }) {
   const content = summary || (flex && flex.altText) || '';
@@ -517,7 +556,7 @@ module.exports = {
   lineEnabled, weekdayOf, centerInfo,
   card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
   bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, groupSessionFlex, rescheduledFlex, portalUrl,
-  monthlyLimitHit, clearMonthlyLimit,
+  monthlyLimitHit, clearMonthlyLimit, recheckQuota, fetchQuota,
   counselorScheduleFlex, counselorBookingFlex, receiptFlex,
   pushFlex, pushText, pushMessages, imageMessage, replyMessages, verifySignature, logNotification,
   retryNotification, retryFailedNotifications

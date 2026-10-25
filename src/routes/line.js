@@ -469,12 +469,23 @@ router.delete('/line/binding', requireStaff(), (req, res) => {
   res.json({ ok: true });
 });
 
+// 目前的訊息額度：加購或升級後用這支確認，順便自動解除封鎖。
+// LINE 的額度查詢 API 不計入訊息量，問幾次都不扣額度。
+router.get('/line/quota', requireStaff(), async (req, res) => {
+  const r = await line.recheckQuota({ force: true }).catch(() => null);
+  const q = (r && r.quota) || await line.fetchQuota().catch(() => null);
+  if (!q) return res.status(400).json({ error: '查不到額度，請確認 Channel access token 是否有效' });
+  if (r && r.recovered) audit('staff', req.user.id, req.user.name, '手動確認額度，解除推播封鎖', `剩餘 ${q.remaining} 則`);
+  res.json({ ...q, unlimited: q.type !== 'limited', blocked: line.monthlyLimitHit(), recovered: !!(r && r.recovered) });
+});
+
 router.get('/line/status', requireStaff(), (req, res) => {
   res.json({
     enabled: line.lineEnabled(),
     // 月免費額度用完時推播會全部停掉改記為待人工發送，這件事要在頁面上講明白，
     // 否則櫃檯只會看到「訊息都沒發出去」卻不知道原因
     monthly_limit: line.monthlyLimitHit(),
+    quota: null,   // 由 /line/quota 另外查，避免每次開頁都打 LINE
     official_name: getSetting('line_official_name'),
     add_friend_url: getSetting('line_add_friend_url'),
     reminder_hours: Number(getSetting('line_reminder_hours', '24')),
@@ -745,6 +756,13 @@ async function pushGroupReminders() {
 
 async function runDailyPush() {
   if (!line.lineEnabled()) return;
+  // 額度封鎖中就先回頭問 LINE 還剩多少：所方中途加購或升級方案時自動恢復，
+  // 不必等到下個月、也不必有人想到要去按「驗證連線」。
+  const q = await line.recheckQuota().catch(() => null);
+  if (q && q.recovered) {
+    audit('system', 0, 'LINE', '額度恢復，重新開始推播',
+      q.quota ? `剩餘 ${q.quota.remaining} 則` : '');
+  }
   await pushCounselorDaily();
   await pushClientReminders();
   await pushGroupReminders();

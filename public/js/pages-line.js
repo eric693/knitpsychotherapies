@@ -690,12 +690,16 @@ const LINEPAGE = {
     const s = await GET('/line/status');
     el.innerHTML = `
       ${s.monthly_limit ? `<div class="notice" style="border-left-color:var(--danger);background:var(--danger-bg)">
-        <strong>LINE 本月免費訊息額度已用完</strong>，所有推播暫停，訊息一律記為「待人工發送」。<br>
-        這是刻意停下來的：額度是按月重置，繼續重試只會不斷堆積失敗紀錄，該通知的人還是收不到。<br>
-        <strong>請改用電話或其他方式聯繫待通知的個案。</strong>
-        下個月額度重置後會自動恢復；若已在 LINE 後台加購訊息或升級方案，
-        到「串接設定」按一次「驗證連線」即可立即解除。</div>` : ''}
-      <div class="card"><h3>手動推播</h3>
+        <strong>LINE 訊息額度已用完</strong>，推播暫停中，訊息一律記為「待人工發送」。<br>
+        這是刻意停下來的：繼續每 10 分鐘重試只會堆積失敗紀錄，該通知的人還是收不到。
+        <strong>這段期間請改用電話聯繫。</strong><br>
+        <strong>已經加購或升級了嗎？</strong>按右邊「重新檢查額度」即可立即恢復
+        （系統每半小時也會自己問一次 LINE，加購後最多等半小時會自動恢復）。
+        <div class="toolbar" style="margin-top:8px">
+          <button class="btn small" id="requota">重新檢查額度</button></div></div>` : ''}
+      <div class="card"><h3>手動推播
+          <span style="font-size:13px;font-weight:400;color:var(--muted)" id="quotabox"></span>
+          <button class="btn tiny secondary" id="quotabtn" style="margin-left:6px">查看訊息額度</button></h3>
         <div style="font-size:14px;line-height:2">
           已綁定個案 <strong>${s.clients_bound}</strong> / ${s.clients_total}　已綁定員工 <strong>${s.staff_bound}</strong><br>
           晤談提醒：晤談前 ${s.reminder_hours} 小時　心理師行程：${s.daily_enabled ? `每日 ${s.daily_time} 推播隔日行程` : '未啟用'}
@@ -789,6 +793,25 @@ const LINEPAGE = {
     drawFailed();
 
     el.querySelector('#test').onclick = async () => { const o = await POST('/line/test'); UI.toast(o.message); };
+    // 訊息額度：加購或升級後用這裡確認，查詢本身不扣額度
+    const showQuota = async (announce) => {
+      const box = el.querySelector('#quotabox');
+      box.textContent = '查詢中…';
+      try {
+        const q = await GET('/line/quota');
+        box.innerHTML = q.unlimited
+          ? '　訊息額度：不限量'
+          : `　本月訊息 <strong>${q.used.toLocaleString('zh-TW')}</strong> / ${q.total.toLocaleString('zh-TW')}`
+            + `　剩餘 <strong style="color:${q.remaining > 0 ? 'var(--ok)' : 'var(--danger)'}">`
+            + `${q.remaining.toLocaleString('zh-TW')}</strong> 則`;
+        if (q.recovered) { UI.toast('額度已恢復，推播重新啟動'); App.go('line/push'); return; }
+        if (announce) UI.toast(q.remaining > 0 ? `尚餘 ${q.remaining} 則` : '額度已用完');
+      } catch (e) { box.textContent = '　額度查不到：' + e.message; }
+    };
+    el.querySelector('#quotabtn').onclick = () => showQuota(true);
+    const rq = el.querySelector('#requota');
+    if (rq) rq.onclick = () => showQuota(true);
+    showQuota(false);
     el.querySelector('#remind').onclick = async () => {
       if (!await UI.confirm('推播明日所有已預約個案的晤談提醒？')) return;
       const r = await POST('/line/remind-batch', {});

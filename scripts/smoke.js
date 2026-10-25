@@ -812,6 +812,30 @@ function startServer() {
       await admin.ok('DELETE', `/api/groups/${g.id}`).catch(() => {});
     }
   });
+  // 額度封鎖必須能自己解開 —— 所方中途加購或升級是常見的事，
+  // 封鎖整個月、要有人想到去按某顆按鈕才解得開，等於訊息白白卡住好幾天
+  await test('額度封鎖後，查到還有額度就自動解除', async () => {
+    const before = await admin.ok('GET', '/api/settings');
+    try {
+      // 模擬被 429 擋下
+      await admin.ok('PUT', '/api/settings',
+        { line_monthly_limit_until: new Date().toISOString().slice(0, 7) });
+      const st = await admin.ok('GET', '/api/line/status');
+      equal(st.monthly_limit, true, '應處於封鎖狀態');
+      // 冒煙環境打不到真的 LINE，額度查詢會失敗 —— 失敗時必須維持封鎖，不能當成有額度放行
+      const q = await admin.get('/api/line/quota');
+      if (q.status === 200) {
+        assert(typeof q.data.remaining === 'number', '查得到就要回傳剩餘數');
+      } else {
+        equal((await admin.ok('GET', '/api/line/status')).monthly_limit, true,
+          '查不到額度時要維持封鎖，不能誤判為已恢復');
+      }
+    } finally {
+      await admin.ok('PUT', '/api/settings', { line_monthly_limit_until: '' }).catch(() => {});
+    }
+    equal((await admin.ok('GET', '/api/line/status')).monthly_limit, false, '清掉設定後應解除封鎖');
+    assert(before, '前置設定應讀得到');
+  });
   // LINE 月免費額度用完時會一直回 429。推播是 10 分鐘一輪的排程，
   // 不擋的話每一輪都把同一批提醒再試一次、每次寫一筆失敗紀錄，幾天就上千筆。
   await test('失敗通知可依錯誤訊息整批標記或刪除', async () => {
