@@ -504,7 +504,12 @@ router.get('/line/status', requireStaff(), (req, res) => {
 // 未送出的推播：沒設定權杖時記成「待人工發送」，送失敗的則留下錯誤訊息。
 // 這張清單是為了「不要靜靜地漏掉提醒」，可逐筆重送或標記為已人工處理。
 router.get('/notifications/failed', requireStaff('settings'), (req, res) => {
-  const rows = db.prepare(`SELECT n.*, c.name AS client_name, c.code AS client_code
+  // payload 是整張卡片的 JSON，動輒好幾 KB，清單不需要它 ——
+  // 只回「有沒有保存卡片」，櫃檯才知道按重送會送出完整的卡還是只剩一行字
+  const rows = db.prepare(`SELECT n.id, n.kind, n.client_id, n.appointment_id, n.channel, n.target,
+      n.content, n.status, n.error, n.retry_count, n.last_retry_at, n.resolved, n.created_at,
+      (IFNULL(n.payload,'') != '') AS has_payload,
+      c.name AS client_name, c.code AS client_code
     FROM notifications n LEFT JOIN clients c ON c.id = n.client_id
     WHERE n.status IN ('failed','manual') AND n.resolved = 0
     ORDER BY n.id DESC LIMIT 200`).all();
@@ -514,6 +519,14 @@ router.get('/notifications/failed', requireStaff('settings'), (req, res) => {
     failed: rows.filter(r => r.status === 'failed').length,
     manual: rows.filter(r => r.status === 'manual').length
   });
+});
+
+// 單筆明細（含整張卡片的 JSON）：清單為了輕量不帶 payload，
+// 要預覽「按重送會送出什麼」時用這支。
+router.get('/notifications/:id', requireStaff('settings'), (req, res) => {
+  const n = db.prepare('SELECT * FROM notifications WHERE id = ?').get(req.params.id);
+  if (!n) return res.status(404).json({ error: '找不到此通知' });
+  res.json(n);
 });
 
 router.post('/notifications/:id/retry', requireStaff('settings'), async (req, res) => {
@@ -546,6 +559,31 @@ router.post('/notifications/bulk', requireStaff('settings'), (req, res) => {
     action === 'delete' ? '批次刪除失敗通知' : '批次標記通知已處理', `${n} 筆`,
     { error_like: b.error_like || '', kind: b.kind || '', before: b.before || '' });
   res.json({ count: n });
+});
+
+// 整批重送：額度補回來之後，把卡在「待人工發送／送出失敗」的那些一次補送，
+// 不必一筆一筆按。逐筆送並回報成功與失敗數，中途失敗不影響其他筆。
+router.post('/notifications/retry-all', requireStaff('settings'), async (req, res) => {
+  if (line.monthlyLimitHit()) {
+    return res.status(400).json({ error: 'LINE 訊息額度仍為用完狀態，請先按「重新檢查額度」' });
+  }
+  const b = req.body || {};
+  const where = ["status IN ('failed','manual')", "IFNULL(target,'') != ''", 'resolved = 0'];
+  const args = [];
+  if (b.kind) { where.push('kind = ?'); args.push(String(b.kind)); }
+  if (b.error_like) { where.push('error LIKE ?'); args.push(`%${String(b.error_like).slice(0, 80)}%`); }
+  const rows = db.prepare(`SELECT id FROM notifications WHERE ${where.join(' AND ')}
+    ORDER BY id LIMIT 300`).all(...args);
+  if (b.preview) return res.json({ count: rows.length, preview: true });
+  let sent = 0, failed = 0;
+  for (const r of rows) {
+    const out = await line.retryNotification(r.id, req.user).catch(() => ({ ok: false }));
+    if (out.ok) sent++; else failed++;
+    // 中途又被額度擋下就停手，不要把剩下的也全部打成失敗
+    if (line.monthlyLimitHit()) break;
+  }
+  audit('staff', req.user.id, req.user.name, '整批重送通知', `${sent} 成功／${failed} 失敗`);
+  res.json({ sent, failed, total: rows.length });
 });
 
 // 標記為已人工處理（例如已改用電話通知），不再列在待處理清單

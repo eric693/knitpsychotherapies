@@ -359,8 +359,17 @@ async function retryNotification(id, user) {
   if (n.status === 'sent') return { ok: false, error: '這筆已經送出過了' };
   if (!lineEnabled()) return { ok: false, error: '尚未設定 LINE 權杖，無法重送' };
   if (!n.target) return { ok: false, error: '沒有收件對象（對方尚未綁定 LINE）' };
+  if (monthlyLimitHit()) return { ok: false, error: 'LINE 訊息額度已用完，請先加購或等額度重置' };
   let flex = null;
   try { flex = n.payload ? JSON.parse(n.payload) : null; } catch { flex = null; }
+  // 沒留卡片的舊紀錄（額度封鎖初版沒存 payload）就現場重建一張，
+  // 這樣個案收到的仍是完整的提醒卡，而不是一行字。
+  if (!flex && n.kind === 'reminder' && n.appointment_id) {
+    const a = db.prepare(`SELECT a.*, c.name AS client_name, u.name AS counselor_name
+      FROM appointments a LEFT JOIN clients c ON c.id = a.client_id
+      LEFT JOIN users u ON u.id = a.counselor_id WHERE a.id = ?`).get(n.appointment_id);
+    if (a && a.status === 'booked') flex = reminderFlex(a);
+  }
   const message = flex || textMessage(n.content || '（原訊息內容未保存）');
   const r = await callLine(PUSH_URL, { to: n.target, messages: [message] });
   db.prepare(`UPDATE notifications SET status = ?, error = ?, retry_count = retry_count + 1,
@@ -474,9 +483,20 @@ async function recheckQuota({ force = false } = {}) {
 async function pushFlex({ to, flex, kind = 'line', client_id = null, appointment_id = null, user = null, summary = '' }) {
   const content = summary || (flex && flex.altText) || '';
   if (monthlyLimitHit()) {
-    logNotification({ kind, client_id, appointment_id, channel: 'manual', target: to, content,
-      status: 'manual', error: 'LINE 本月免費訊息額度已用完，改為待人工發送' });
-    return { status: 'manual', message: 'LINE 本月額度已用完，已記錄為待人工通知' };
+    // 卡片內容一定要留著：額度補回來之後按「重送」才送得出原本那張卡，
+    // 不然只剩一行純文字，個案看不到時間、心理師與「我會準時前往」那些按鈕。
+    //
+    // 同一筆提醒在封鎖期間不重複記：推播排程每 10 分鐘跑一輪，不擋的話同一場晤談
+    // 會留下幾十筆一模一樣的待人工發送，櫃檯照著打電話會重複打。
+    const dup = appointment_id
+      ? db.prepare(`SELECT id FROM notifications WHERE appointment_id = ? AND kind = ?
+          AND status = 'manual' AND resolved = 0 LIMIT 1`).get(appointment_id, kind)
+      : null;
+    if (!dup) {
+      logNotification({ kind, client_id, appointment_id, channel: 'manual', target: to, content,
+        status: 'manual', error: 'LINE 訊息額度已用完，改為待人工發送', payload: flex });
+    }
+    return { status: 'manual', message: 'LINE 額度已用完，已記錄為待人工通知' };
   }
   if (!lineEnabled()) {
     logNotification({ kind, client_id, appointment_id, channel: 'manual', target: to, content, status: 'manual' });

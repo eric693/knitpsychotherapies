@@ -812,6 +812,51 @@ function startServer() {
       await admin.ok('DELETE', `/api/groups/${g.id}`).catch(() => {});
     }
   });
+  // 重送必須送出原本那張卡片，而不是一行純文字 ——
+  // 個案收到的若沒有時間、心理師與「我會準時前往」按鈕，那張提醒等於沒用
+  await test('重送會帶原本的卡片；額度封鎖期間不重複記、且保留卡片', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token', line_official_id: '@smoke' });
+    const c = await admin.ok('POST', '/api/clients', { name: '重送卡片測試', phone: '0944777001' });
+    const me = await admin.ok('GET', '/api/me');
+    const day = addDays(ymd(new Date()), 1);
+    const a = await admin.ok('POST', '/api/appointments', {
+      client_id: c.id, counselor_id: me.id, date: day, start_time: '07:00',
+      mode: 'online', fee: 2000, override: true
+    });
+    try {
+      // 綁定後推提醒：冒煙環境的權杖是假的，會失敗但要留下卡片內容
+      const code = await admin.ok('POST', '/api/line/bind-code', { client_id: c.id });
+      const body = JSON.stringify({ events: [{ type: 'message', replyToken: 'rr9',
+        source: { userId: 'Ucard001' }, message: { type: 'text', text: code.code } }] });
+      const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+      await fetch(BASE + '/api/line/webhook', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+      await admin.ok('POST', `/api/line/remind/${a.id}`, {}).catch(() => {});
+      const failed = (await admin.ok('GET', '/api/notifications/failed')).rows
+        .filter(r => r.appointment_id === a.id);
+      assert(failed.length >= 1, '應留下未送出的紀錄');
+      assert(failed[0].has_payload !== false, '紀錄應保留卡片內容');
+
+      // 額度封鎖期間：同一筆提醒不該重複記，而且要保留卡片
+      await admin.ok('PUT', '/api/settings',
+        { line_monthly_limit_until: new Date().toISOString().slice(0, 7) });
+      const n0 = (await admin.ok('GET', '/api/notifications/failed')).rows.length;
+      for (let i = 0; i < 3; i++) await admin.ok('POST', `/api/line/remind/${a.id}`, {}).catch(() => {});
+      const n1 = (await admin.ok('GET', '/api/notifications/failed')).rows.length;
+      assert(n1 - n0 <= 1, `封鎖期間同一筆不該重複記，實際多了 ${n1 - n0} 筆`);
+      // 封鎖中不給重送，免得一直打一定失敗的請求
+      const first = (await admin.ok('GET', '/api/notifications/failed')).rows
+        .find(r => r.appointment_id === a.id);
+      await admin.fails('POST', `/api/notifications/${first.id}/retry`, {}, '額度');
+      await admin.fails('POST', '/api/notifications/retry-all', {}, '額度');
+    } finally {
+      await admin.ok('PUT', '/api/settings', { line_monthly_limit_until: '' }).catch(() => {});
+      await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' }).catch(() => {});
+      await admin.del(`/api/appointments/${a.id}`).catch(() => {});
+      await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
   // 額度封鎖必須能自己解開 —— 所方中途加購或升級是常見的事，
   // 封鎖整個月、要有人想到去按某顆按鈕才解得開，等於訊息白白卡住好幾天
   await test('額度封鎖後，查到還有額度就自動解除', async () => {
@@ -3941,7 +3986,10 @@ function startServer() {
       // 成立通知卡片要寫明是哪一位
       const logs = await admin.ok('GET', '/api/notifications/failed');
       const card = logs.rows.find(r => r.kind === 'booking_confirm' && r.appointment_id === appt.id);
-      assert(card && String(card.payload).includes('家庭測試二寶'), '成立卡片應寫明個案姓名');
+      assert(card, '應留下成立通知的紀錄');
+      // 清單為了輕量不帶整張卡片，卡片內容要另外取單筆明細
+      const full = await admin.ok('GET', `/api/notifications/${card.id}`);
+      assert(String(full.payload).includes('家庭測試二寶'), '成立卡片應寫明個案姓名');
     } finally {
       for (const c of [parent, kid1, kid2, other]) await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
       await admin.ok('PUT', '/api/line/settings', { line_channel_secret: '', line_channel_token: '' });

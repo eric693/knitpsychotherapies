@@ -760,7 +760,13 @@ const LINEPAGE = {
             <button class="btn tiny" data-rt="${n.id}"${d.line_enabled && n.target ? '' : ' disabled'}>重送</button>
             <button class="btn tiny secondary" data-rv="${n.id}">已人工處理</button></td></tr>`),
     '沒有未送出的通知')}
+        <div class="toolbar" style="margin-top:8px">
+          <button class="btn small" id="retryall"${d.line_enabled ? '' : ' disabled'}>整批重送</button>
+          <div class="spacer"></div>
+        </div>
         <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
+          重送會把<strong>原本那張卡片</strong>完整送出（時間、心理師、地點與「我會準時前往」按鈕都在），
+          不是只送一行文字；舊紀錄若沒留卡片，晤談提醒會依目前的預約內容重新組一張。<br>
           失敗的推播每天會自動重送，每筆最多 3 次；${d.line_enabled ? '' : '目前尚未串接 LINE，只能標記為已人工處理。'}</div>`;
       const bulk = async (err, action) => {
         const pre = await POST('/notifications/bulk', { error_like: err, action, preview: true });
@@ -770,6 +776,18 @@ const LINEPAGE = {
         const r = await POST('/notifications/bulk', { error_like: err, action });
         UI.toast(`已${what} ${r.count} 筆`);
         drawFailed();
+      };
+      const ra = box.querySelector('#retryall');
+      if (ra) ra.onclick = async () => {
+        try {
+          const pre = await POST('/notifications/retry-all', { preview: true });
+          if (!pre.count) return UI.toast('沒有可重送的通知');
+          if (!await UI.confirm(`把 ${pre.count} 筆未送出的通知重新送一次？\n`
+            + '會送出原本的卡片內容；已標記為已人工處理的不會重送。')) return;
+          const r = await POST('/notifications/retry-all', {});
+          UI.toast(`已重送 ${r.sent} 筆${r.failed ? `，${r.failed} 筆仍失敗` : ''}`);
+          drawFailed();
+        } catch (e) { UI.err(e); }
       };
       box.querySelectorAll('[data-bulkres]').forEach(b2 => {
         b2.onclick = () => bulk(b2.dataset.bulkres, 'resolve').catch(UI.err);
