@@ -812,6 +812,12 @@ function startServer() {
       await admin.ok('DELETE', `/api/groups/${g.id}`).catch(() => {});
     }
   });
+  // 模擬「舊紀錄沒存卡片」的情形：冒煙測試直接動暫存資料庫
+  const db_clearPayload = id => {
+    const sq = require('better-sqlite3')(path.join(tmp, 'data', 'mindcare.db'));
+    sq.prepare("UPDATE notifications SET payload = '' WHERE id = ?").run(id);
+    sq.close();
+  };
   // 重送必須送出原本那張卡片，而不是一行純文字 ——
   // 個案收到的若沒有時間、心理師與「我會準時前往」按鈕，那張提醒等於沒用
   await test('重送會帶原本的卡片；額度封鎖期間不重複記、且保留卡片', async () => {
@@ -850,6 +856,21 @@ function startServer() {
         .find(r => r.appointment_id === a.id);
       await admin.fails('POST', `/api/notifications/${first.id}/retry`, {}, '額度');
       await admin.fails('POST', '/api/notifications/retry-all', {}, '額度');
+      await admin.ok('PUT', '/api/settings', { line_monthly_limit_until: '' });
+
+      // 沒留卡片的舊紀錄要能依預約重建，不該退回純文字
+      db_clearPayload(first.id);
+      const bare = await admin.ok('GET', `/api/notifications/${first.id}`);
+      equal(bare.payload, '', '前置：這筆應沒有卡片');
+      await admin.ok('POST', `/api/notifications/${first.id}/retry`, {}).catch(() => {});
+      // 預約取消後就不該再送那張卡
+      await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' });
+      await admin.fails('POST', `/api/notifications/${first.id}/retry`, {}, '已取消');
+
+      // 標記已人工處理後，自動重送不會再挑到它
+      await admin.ok('POST', `/api/notifications/${first.id}/resolve`, {});
+      const left = await admin.ok('GET', '/api/notifications/failed');
+      assert(!left.rows.some(r => r.id === first.id), '已處理的不該再出現在待處理清單');
     } finally {
       await admin.ok('PUT', '/api/settings', { line_monthly_limit_until: '' }).catch(() => {});
       await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled' }).catch(() => {});

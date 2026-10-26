@@ -755,7 +755,9 @@ const LINEPAGE = {
           <td><div class="ellipsis" style="max-width:260px" title="${UI.esc(n.content || '')}">${UI.esc(n.content || '')}</div></td>
           <td>${n.status === 'manual' ? UI.tag('待人工發送', 'warn') : UI.tag('送出失敗', 'danger')}
             ${n.error ? `<br><span style="font-size:12px;color:var(--muted)">${UI.esc(n.error)}</span>` : ''}
-            ${n.retry_count ? `<br><span style="font-size:12px;color:var(--muted)">已重試 ${n.retry_count} 次</span>` : ''}</td>
+            ${n.retry_count ? `<br><span style="font-size:12px;color:var(--muted)">已重試 ${n.retry_count} 次</span>` : ''}
+            <br><span style="font-size:12px;color:var(--muted)">重送內容：${
+  n.has_payload ? '原卡片' : (n.appointment_id ? '依預約重建卡片' : '純文字（無卡片可重建）')}</span></td>
           <td style="white-space:nowrap">
             <button class="btn tiny" data-rt="${n.id}"${d.line_enabled && n.target ? '' : ' disabled'}>重送</button>
             <button class="btn tiny secondary" data-rv="${n.id}">已人工處理</button></td></tr>`),
@@ -765,9 +767,15 @@ const LINEPAGE = {
           <div class="spacer"></div>
         </div>
         <div style="font-size:12.5px;color:var(--muted);margin-top:6px">
-          重送會把<strong>原本那張卡片</strong>完整送出（時間、心理師、地點與「我會準時前往」按鈕都在），
-          不是只送一行文字；舊紀錄若沒留卡片，晤談提醒會依目前的預約內容重新組一張。<br>
-          失敗的推播每天會自動重送，每筆最多 3 次；${d.line_enabled ? '' : '目前尚未串接 LINE，只能標記為已人工處理。'}</div>`;
+          重送會把<strong>原本那張卡片</strong>完整送出（時間、心理師、地點與按鈕都在）；
+          舊紀錄若沒留卡片，會<strong>依預約目前的內容重新組一張</strong>——
+          所以中途改過期、換過心理師也不會送出過時的資訊；預約已取消的則不給重送。
+          每一列都標了按下去會送出什麼。<br>
+          <strong>按「已人工處理」之後，這一筆就不會再自動重送</strong>
+          （自動重送只挑未處理、且重試未滿 3 次的）。但那只擋這一筆紀錄：
+          晤談提醒是看預約本身有沒有成功提醒過，只要還沒送成功、而且還在提醒時間內，
+          排程仍會再送一次——真正送出去之後才會停。<br>
+          ${d.line_enabled ? '' : '目前尚未串接 LINE，只能標記為已人工處理。'}</div>`;
       const bulk = async (err, action) => {
         const pre = await POST('/notifications/bulk', { error_like: err, action, preview: true });
         const what = action === 'delete' ? '刪除' : '標記為已處理';

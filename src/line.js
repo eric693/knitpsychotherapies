@@ -362,13 +362,22 @@ async function retryNotification(id, user) {
   if (monthlyLimitHit()) return { ok: false, error: 'LINE 訊息額度已用完，請先加購或等額度重置' };
   let flex = null;
   try { flex = n.payload ? JSON.parse(n.payload) : null; } catch { flex = null; }
-  // 沒留卡片的舊紀錄（額度封鎖初版沒存 payload）就現場重建一張，
-  // 這樣個案收到的仍是完整的提醒卡，而不是一行字。
-  if (!flex && n.kind === 'reminder' && n.appointment_id) {
-    const a = db.prepare(`SELECT a.*, c.name AS client_name, u.name AS counselor_name
+  // 沒留卡片的舊紀錄（尚未串接時期、或額度封鎖初版沒存 payload）就現場重建一張，
+  // 這樣個案收到的仍是完整的卡片，而不是一行字。
+  // 依預約目前的內容重建，所以中途改過期、換過心理師也不會送出過時的資訊。
+  if (!flex && n.appointment_id && ['reminder', 'booking_confirm', 'booked'].includes(n.kind)) {
+    const a = db.prepare(`SELECT a.*, c.name AS client_name, u.name AS counselor_name,
+        sp.name AS plan_name, pt.name AS topic_name
       FROM appointments a LEFT JOIN clients c ON c.id = a.client_id
-      LEFT JOIN users u ON u.id = a.counselor_id WHERE a.id = ?`).get(n.appointment_id);
-    if (a && a.status === 'booked') flex = reminderFlex(a);
+      LEFT JOIN users u ON u.id = a.counselor_id
+      LEFT JOIN service_plans sp ON sp.id = a.plan_id
+      LEFT JOIN plan_topics pt ON pt.id = a.topic_id WHERE a.id = ?`).get(n.appointment_id);
+    // 已取消或已完成的就不要再送了 —— 那張卡現在是錯的
+    if (a && ['booked', 'arrived'].includes(a.status)) {
+      flex = n.kind === 'reminder' ? reminderFlex(a) : bookingConfirmedFlex(a);
+    } else if (a) {
+      return { ok: false, error: `這筆預約目前是「${a.status === 'cancelled' ? '已取消' : a.status}」，不應再送出通知` };
+    }
   }
   const message = flex || textMessage(n.content || '（原訊息內容未保存）');
   const r = await callLine(PUSH_URL, { to: n.target, messages: [message] });
