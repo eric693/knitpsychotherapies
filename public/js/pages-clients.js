@@ -1046,12 +1046,18 @@ App.page('client', {
           return true;
         };
         // 全部都畫出來，不適用這位個案的先隱藏；勾「顯示全部」就地顯示，不必重新載入整頁
-        // 未成年專用的同意書成人看不到，但櫃檯若明確指派了就照指派
-        const list = templates.filter(t => !t.minor_only || c.is_minor || assigned.includes(t.key));
+        // 未成年專用的同意書成人看不到，但櫃檯若明確指派了就照指派。
+        // 已經簽過的一定要列出來 —— 否則個案滿 18 歲、或範本的適用對象改掉之後，
+        // 那份簽好的同意書會整列消失，連列印與補簽都做不到。
+        const signedKey = k => c.consents.some(x => x.key === k);
+        const list = templates.filter(t => !t.minor_only || c.is_minor || assigned.includes(t.key)
+          || signedKey(t.key));
         body.innerHTML = `<div class="card">${UI.table(['同意書', '版本', '狀態', '簽署人', '簽署時間', ''],
           list.map(t => {
             const s = c.consents.find(x => x.key === t.key && x.version === t.version);
-            return `<tr data-fit="${fits(t) ? 1 : 0}"${fits(t) ? '' : ' style="display:none"'}>
+            // 已簽過的一律顯示，不因為現在不適用而被藏起來
+            const show = fits(t) || !!s;
+            return `<tr data-fit="${show ? 1 : 0}"${show ? '' : ' style="display:none"'}>
               <td>${UI.esc(t.title)}${t.required ? ' *' : ''}</td><td>v${t.version}</td>
               <td>${s ? (s.agreed ? UI.tag('已同意', 'ok') : UI.tag('不同意', 'warn')) : UI.tag('未簽署', 'danger')}</td>
               <td>${s ? UI.esc(s.signer_name) + '（' + (TW.signer_role[s.signer_role] || '') + '）' : '-'}</td>
@@ -1138,8 +1144,9 @@ App.page('client', {
               if (re) re.onchange = e => { box.hidden = !e.target.checked; if (e.target.checked) mount(); };
             },
             onSubmit: async el2 => {
-              const sig = el2._p && !el2._p.drawn() ? '' : (el2._p ? el2._p.dataUrl() : '');
-              if (!App.me.has_signature && !sig) throw new Error('請先簽名');
+              // 有沒有存檔簽名由伺服器判斷就好。前端的 App.me 是進頁面時讀的，
+              // 剛在「我的簽名檔」存完又沒重整的話會停在舊值，照它判斷會把人擋在外面。
+              const sig = el2._p && el2._p.drawn() ? el2._p.dataUrl() : '';
               const r = await POST(`/consents/${b.dataset.cs}/staff-sign`, { staff_signature: sig });
               UI.toast(`已補簽（${r.staff_name}）`);
               App.go('client/' + id);
