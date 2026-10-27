@@ -1551,6 +1551,8 @@ App.page('consents', {
   help: [
     '一覽各個案的必要同意書簽署狀況，缺哪張一目了然。',
     '實際簽署在個案總覽的同意書頁，可現場電子簽名。',
+    '「待所方補簽」是個案已簽、但還缺心理師那一側的簽名。個案在專區自己簽的都會是這個狀態，'
+      + '到該個案的同意書頁按「心理師補簽」即可，<strong>不必請個案重簽</strong>。',
   ],
   module: 'consents',
   async render(el) {
@@ -1563,8 +1565,14 @@ App.page('consents', {
         ${required.map(t => {
       if (t.minor_only && !c.is_minor) return '<td>—</td>';
       const s = c.consents.find(x => x.key === t.key && x.version === t.version);
-      return `<td>${s ? UI.tag('已簽', 'ok') : UI.tag('未簽', 'danger')}</td>`;
-    }).join('')}</tr>`), '沒有服務中的個案')}</div>`;
+      // 個案簽完、所方還沒補簽的也要看得出來 —— 兩方都簽才算完成
+      return `<td>${s
+    ? (s.staff_signed ? UI.tag('已簽', 'ok') : UI.tag('待所方補簽', 'warn'))
+    : UI.tag('未簽', 'danger')}</td>`;
+    }).join('')}</tr>`), '沒有服務中的個案')}
+        <div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+          「待所方補簽」＝個案已經簽了、但同意書上還缺心理師那一側的簽名
+          （個案在專區自己簽的都會是這個狀態）。到該個案的同意書頁按「心理師補簽」即可。</div></div>`;
   }
 });
 

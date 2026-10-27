@@ -2116,6 +2116,52 @@ function startServer() {
       await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
     }
   });
+  // 個案在專區自己簽的同意書沒有所方那一欄，後台也要補得上去 ——
+  // 不然列印出來永遠少一方的簽名，而且不該為了補簽請個案重簽一次
+  await test('個案自己在專區簽的同意書，心理師可事後補簽', async () => {
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const c = await admin.ok('POST', '/api/clients',
+      { name: '專區簽署補簽測試', phone: '0966321001', portal_enabled: 1 });
+    try {
+      // 個案在專區自己簽（挑一張專區真的列給他簽的）
+      const ps = session();
+      await ps.ok('POST', '/api/portal/login', { phone: '0966321001', password: '321001' });
+      const mine = await ps.ok('GET', '/api/portal/consents');
+      const t = (mine.templates || mine.rows || mine)[0];
+      assert(t && t.key, '專區應列得出待簽同意書：' + JSON.stringify(mine).slice(0, 200));
+      await ps.ok('POST', '/api/portal/consents',
+        { key: t.key, signer_name: '專區簽署補簽測試', signer_role: 'client', signature: png });
+      let got = await admin.ok('GET', `/api/clients/${c.id}/consents/${t.key}`);
+      assert(got.signed, '專區應簽得起來');
+      equal(got.signed.staff_signature || '', '', '專區簽的本來就沒有所方簽名');
+
+      // 沒有存檔簽名時要講清楚，而不是默默失敗
+      await admin.ok('PUT', '/api/me/signature', { signature: '' });
+      await admin.fails('POST', `/api/consents/${got.signed.id}/staff-sign`, {}, '存檔簽名');
+
+      // 存了簽名檔之後就能補簽
+      await admin.ok('PUT', '/api/me/signature', { signature: png });
+      const r = await admin.ok('POST', `/api/consents/${got.signed.id}/staff-sign`, {});
+      assert(r.staff_name, '應回報補簽的是誰');
+      got = await admin.ok('GET', `/api/clients/${c.id}/consents/${t.key}`);
+      equal(got.signed.staff_signature, png, '所方簽名要寫進同一筆，不另開一份');
+      assert(got.signed.staff_signed_at, '要記下補簽時間');
+      equal(got.signed.signature, png, '個案那一側不該被動到');
+
+      // 個案頁的清單要看得出已補簽
+      const detail = await admin.ok('GET', `/api/clients/${c.id}`);
+      const row = detail.consents.find(x => x.id === got.signed.id);
+      equal(row.staff_signed, 1, '清單要標示所方已簽');
+
+      // 列印版要印出心理師簽名
+      const pr = await admin.get(`/api/consents/${got.signed.id}/print`);
+      assert(/心理師/.test(pr.text), '列印版應有心理師欄位');
+      assert(pr.text.includes(r.staff_name), '列印版應寫出補簽的心理師');
+    } finally {
+      await admin.ok('PUT', '/api/me/signature', { signature: '' }).catch(() => {});
+      await admin.ok('DELETE', `/api/clients/${c.id}/purge`).catch(() => {});
+    }
+  });
   // 同意書要有所方簽名：心理師存一次簽名檔，之後每份自動蓋上
   await test('同意書帶心理師簽名：存檔簽名自動蓋，也可當場重簽', async () => {
     const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';

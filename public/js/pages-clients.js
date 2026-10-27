@@ -1055,9 +1055,13 @@ App.page('client', {
               <td>${UI.esc(t.title)}${t.required ? ' *' : ''}</td><td>v${t.version}</td>
               <td>${s ? (s.agreed ? UI.tag('已同意', 'ok') : UI.tag('不同意', 'warn')) : UI.tag('未簽署', 'danger')}</td>
               <td>${s ? UI.esc(s.signer_name) + '（' + (TW.signer_role[s.signer_role] || '') + '）' : '-'}</td>
-              <td>${s ? UI.esc(s.signed_at) : '-'}</td>
+              <td>${s ? UI.esc(s.signed_at) : '-'}
+                ${s ? `<br><span style="font-size:12px">${s.staff_signed
+    ? `<span style="color:var(--ok)">所方 ${UI.esc(s.staff_name || '')} 已簽</span>`
+    : '<span style="color:var(--warn)">所方尚未簽名</span>'}</span>` : ''}</td>
               <td style="white-space:nowrap">
                 <button class="btn tiny" data-c="${t.key}" data-minor="${t.minor_only}">${s ? '重新簽署' : '簽署'}</button>
+                ${s && !s.staff_signed ? `<button class="btn tiny" data-cs="${s.id}">心理師補簽</button>` : ''}
                 ${s ? `<button class="btn tiny secondary" data-cp="${s.id}">列印</button>
                       <button class="btn tiny secondary" data-cw="${s.id}">Word</button>`
     : `<button class="btn tiny secondary" data-bp="${t.key}">列印空白</button>`}</td></tr>`;
@@ -1103,6 +1107,45 @@ App.page('client', {
           b.onclick = () => consentDialog(c.id, b.dataset.c, b.dataset.minor === '1', () => App.go('client/' + id));
         });
         // 紙本流程：未簽的印空白兩聯給個案當場簽，已簽的可印出含簽名的存檔版或匯出 Word
+        // 個案自己在專區簽的同意書沒有所方那一欄，這裡補簽 —— 不必請個案重簽一次
+        body.querySelectorAll('[data-cs]').forEach(b => {
+          b.onclick = () => UI.modal({
+            title: '心理師補簽',
+            submitText: '補上簽名',
+            body: `<div style="font-size:14px;line-height:1.85">
+                在這份已簽署的同意書補上<strong>所方的簽名</strong>，個案那一側不會更動、
+                也不需要請個案重簽。<br><br>
+                ${App.me.has_signature
+    ? '會蓋上你存檔的簽名；要改存檔的簽名請到左下「我的簽名檔」。'
+    : '你還沒有存檔簽名，請在下方當場簽，或先到左下「我的簽名檔」存一次。'}
+              </div>
+              ${App.me.has_signature ? `<label style="display:block;margin-top:10px">
+                <input type="checkbox" id="resign2" style="width:auto"> 這一份改成當場簽</label>` : ''}
+              <div id="spad2"${App.me.has_signature ? ' hidden' : ''}></div>`,
+            onOpen: el2 => {
+              const box = el2.querySelector('#spad2');
+              const mount = () => {
+                if (el2._p) return;
+                box.innerHTML = `<canvas id="ss2" style="border:1px dashed var(--border);border-radius:8px;
+                    height:130px;width:100%;background:#fff;touch-action:none"></canvas>
+                  <button class="btn tiny secondary" id="sc2" type="button"
+                    style="margin-top:6px">清除簽名</button>`;
+                el2._p = UI.signaturePad(el2.querySelector('#ss2'));
+                el2.querySelector('#sc2').onclick = () => el2._p.clear();
+              };
+              if (!App.me.has_signature) mount();
+              const re = el2.querySelector('#resign2');
+              if (re) re.onchange = e => { box.hidden = !e.target.checked; if (e.target.checked) mount(); };
+            },
+            onSubmit: async el2 => {
+              const sig = el2._p && !el2._p.drawn() ? '' : (el2._p ? el2._p.dataUrl() : '');
+              if (!App.me.has_signature && !sig) throw new Error('請先簽名');
+              const r = await POST(`/consents/${b.dataset.cs}/staff-sign`, { staff_signature: sig });
+              UI.toast(`已補簽（${r.staff_name}）`);
+              App.go('client/' + id);
+            }
+          });
+        });
         body.querySelectorAll('[data-bp]').forEach(b => {
           b.onclick = () => window.open(`/api/consent-templates/${b.dataset.bp}/print`, '_blank');
         });

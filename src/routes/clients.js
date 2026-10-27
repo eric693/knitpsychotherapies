@@ -161,7 +161,9 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
     return res.status(403).json({ error: '僅能查看自己主責的個案' });
   }
   delete c.password_hash;
-  const consents = db.prepare('SELECT id, key, title, agreed, signer_name, signer_role, version, signed_at FROM consents WHERE client_id = ? ORDER BY signed_at DESC').all(c.id);
+  const consents = db.prepare(`SELECT id, key, title, agreed, signer_name, signer_role, version, signed_at,
+      staff_name, staff_signed_at, (IFNULL(staff_signature,'') != '') AS staff_signed
+    FROM consents WHERE client_id = ? ORDER BY signed_at DESC`).all(c.id);
   const templates = db.prepare('SELECT * FROM consent_templates ORDER BY sort, id').all()
     .filter(t => !t.minor_only || c.is_minor);
   res.json({
@@ -773,6 +775,35 @@ router.post('/clients/:id/consents', requireStaff('consents'), (req, res) => {
   audit('staff', req.user.id, req.user.name, '登錄同意書', `${c.code}/${t.key}`,
     { agreed: !!agreed, staff_signed: !!staffSign });
   res.json({ ok: true, staff_signed: !!staffSign, staff_name: me.name || '' });
+});
+
+// 替已簽署的同意書補上所方簽名。
+//
+// 個案在專區自己簽的同意書（最常見的路徑）本來就沒有所方那一欄，
+// 後台也沒有地方補 —— 於是列印出來永遠少一方的簽名。
+// 這支專門補簽：用心理師存檔的簽名，或這次當場簽的一張。
+// 不動個案那一側的簽名與全文快照，所以不必請個案重簽。
+router.post('/consents/:id/staff-sign', requireStaff('consents'), (req, res) => {
+  const row = db.prepare('SELECT * FROM consents WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: '找不到此簽署紀錄' });
+  const me = db.prepare('SELECT id, name, signature_image FROM users WHERE id = ?').get(req.user.id) || {};
+  const given = String((req.body || {}).staff_signature || '');
+  const png = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/;
+  let sign = '';
+  if (given) {
+    if (!png.test(given)) return res.status(400).json({ error: '簽名格式不正確，請重新簽一次' });
+    if (given.length > 400000) return res.status(400).json({ error: '簽名圖片過大，請重新簽一次' });
+    sign = given;
+  } else if (me.signature_image) {
+    sign = me.signature_image;
+  } else {
+    return res.status(400).json({ error: '你還沒有存檔簽名，請先在左下「我的簽名檔」簽一次，或在這裡當場簽' });
+  }
+  db.prepare(`UPDATE consents SET staff_id = ?, staff_name = ?, staff_signature = ?, staff_signed_at = ?
+    WHERE id = ?`).run(me.id, me.name || '', sign, nowStamp(), row.id);
+  const c = db.prepare('SELECT code FROM clients WHERE id = ?').get(row.client_id) || {};
+  audit('staff', req.user.id, req.user.name, '補簽同意書（所方）', `${c.code || row.client_id}/${row.key}`);
+  res.json({ ok: true, staff_name: me.name || '', staff_signed_at: nowStamp() });
 });
 
 router.get('/consents/:id', requireStaff('consents'), (req, res) => {
