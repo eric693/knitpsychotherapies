@@ -195,6 +195,7 @@ const App = {
             <div>${UI.esc(App.me.title || TW.role[App.me.role] || '')}</div>
             <button id="pw-btn" type="button">修改密碼</button>
             <button id="sign-btn" type="button">我的簽名檔</button>
+            <button id="install-btn" type="button">安裝成 App</button>
             <button id="logout-btn" type="button">登出</button>
           </div>
         </aside>
@@ -203,6 +204,7 @@ const App = {
     document.getElementById('logout-btn').onclick = async () => { await POST('/logout'); location.reload(); };
     document.getElementById('pw-btn').onclick = App.changePasswordDialog;
     document.getElementById('sign-btn').onclick = App.signatureDialog;
+    document.getElementById('install-btn').onclick = App.installDialog;
     const sidebar = document.getElementById('sidebar'), backdrop = document.getElementById('backdrop');
     document.getElementById('menu-btn').onclick = () => { sidebar.classList.add('open'); backdrop.classList.add('show'); };
     backdrop.onclick = () => { sidebar.classList.remove('open'); backdrop.classList.remove('show'); };
@@ -222,6 +224,60 @@ const App = {
       const n = d[sp.dataset.badge] || 0;
       sp.textContent = n > 99 ? '99+' : n;
       sp.hidden = !n;
+    });
+  },
+
+  // 安裝成 App：原本只放在「系統設定」頁，但心理師沒有 settings 權限、
+  // 根本看不到那張卡片 —— 想把系統放到桌面只能自己去翻瀏覽器選單。
+  // 改放側欄，每位同仁都點得到。
+  installDialog() {
+    const ua = navigator.userAgent;
+    const isIOS = /iphone|ipad|ipod/i.test(ua);
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    const canPrompt = window.MCInstall && window.MCInstall.available();
+    UI.modal({
+      title: '安裝成 App',
+      hideFooter: true,
+      body: `<div style="font-size:14px;line-height:1.95">
+          ${standalone ? '<div class="notice">這台裝置已經是以 App 方式開啟了。</div>' : ''}
+          裝好之後沒有網址列，從桌面或主畫面點一下就進來，跟一般 App 一樣。
+          <strong>資料仍是即時連線的</strong>（不是離線版），所以不會把個案資料留在裝置上。
+          <div style="margin-top:12px">
+            <strong>電腦（Chrome／Edge）</strong><br>
+            按下方「安裝到這台裝置」；沒有反應的話，用網址列右側的安裝圖示，
+            或瀏覽器選單的「安裝應用程式」。
+          </div>
+          <div style="margin-top:10px">
+            <strong>Android</strong><br>
+            同上，或用瀏覽器選單的「加到主畫面」。
+          </div>
+          <div style="margin-top:10px">
+            <strong>iPhone／iPad</strong><br>
+            必須用 <strong>Safari</strong> 開啟，按下方「分享」→「加入主畫面」。
+            其他瀏覽器（Chrome、Line 內建瀏覽器）沒有這個功能。
+          </div>
+          <div style="margin-top:10px;color:var(--muted);font-size:13px">
+            個案端是另一個 App：請個案用手機開
+            <code>${UI.esc(location.origin)}/portal.html</code> 後以同樣方式加入主畫面。
+          </div>
+        </div>
+        <div class="toolbar" style="margin-top:14px">
+          <button class="btn" id="doinstall"${canPrompt ? '' : ' disabled'}>安裝到這台裝置</button>
+          <span id="ihint" style="font-size:12.5px;color:var(--muted);margin-left:8px">${
+  standalone ? '已安裝' : canPrompt ? '' : (isIOS
+    ? 'iPhone／iPad 請走 Safari 的「分享 → 加入主畫面」'
+    : '這個瀏覽器沒有提供安裝按鈕，請用瀏覽器選單的「安裝應用程式」')}</span>
+          <div class="spacer"></div>
+          <button class="btn secondary" id="iclose">關閉</button>
+        </div>`,
+      onOpen: (el, close) => {
+        el.querySelector('#iclose').onclick = close;
+        const btn = el.querySelector('#doinstall');
+        btn.onclick = async () => {
+          const ok = window.MCInstall && await window.MCInstall.prompt();
+          el.querySelector('#ihint').textContent = ok ? '已送出安裝要求' : '這個瀏覽器無法由按鈕安裝，請用選單';
+        };
+      }
     });
   },
 
