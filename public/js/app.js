@@ -254,7 +254,9 @@ const App = {
           <div style="margin-top:10px">
             <strong>iPhone／iPad</strong><br>
             必須用 <strong>Safari</strong> 開啟，按下方「分享」→「加入主畫面」。
-            其他瀏覽器（Chrome、Line 內建瀏覽器）沒有這個功能。
+            其他瀏覽器（Chrome、Line 內建瀏覽器）沒有這個功能。<br>
+            分享選單裡找不到「加入主畫面」，就捲到最下面按「編輯動作」，
+            把「加入主畫面」打開（有些手機預設是關的）。
           </div>
           <div style="margin-top:10px;color:var(--muted);font-size:13px">
             個案端是另一個 App：請個案用手機開
