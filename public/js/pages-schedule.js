@@ -105,12 +105,39 @@ async function apptDialog(appt, onDone, defaults) {
           };
         } catch { hintBox.style.display = 'none'; }
       };
-      planSel.onchange = () => { fillTopics(); quote(); };
+      // 通訊諮商方案排成「到所」是最常見的漏接：約成立了、提醒也發了，卻沒有視訊連結，
+      // 當天兩邊各等各的。方案設了「預設形式＝線上視訊」、或名稱裡就有通訊／視訊／遠距，
+      // 選到方案時直接把形式跳到視訊並帶出該心理師的固定會議室連結。
+      // 只在「使用者自己挑方案」時動，不覆蓋開修改視窗時既有的設定。
+      const ONLINE_PLAN = /通訊|視訊|遠距|線上/;
+      const autoOnline = () => {
+        const plan = (App.meta.plans || []).find(p => String(p.id) === String(planSel.value));
+        if (!plan) return;
+        if (plan.default_mode !== 'online' && !ONLINE_PLAN.test(plan.name || '')) return;
+        const modeSel = el.querySelector('[name=mode]');
+        if (modeSel.value !== 'online') {
+          modeSel.value = 'online';
+          modeSel.dispatchEvent(new Event('change'));
+        }
+        const mu = el.querySelector('[name=meeting_url]');
+        if (mu && !mu.value.trim()) {
+          mu.value = App.counselorMeetingUrl(el.querySelector('[name=counselor_id]').value);
+        }
+      };
+      planSel.onchange = () => { fillTopics(); autoOnline(); quote(); };
       topicSel.onchange = quote;
       el.querySelector('[name=client_id]').addEventListener('change', quote);
       fillTopics(a.topic_id);
       quote();
-      el.querySelector('[name=counselor_id]').onchange = () => { refresh(); quote(); };
+      el.querySelector('[name=counselor_id]').onchange = e => {
+        // 換了心理師，視訊連結要跟著換成新這位的會議室；已經手動貼過的就不動
+        const mu = el.querySelector('[name=meeting_url]');
+        if (mu && el.querySelector('[name=mode]').value === 'online'
+          && (!mu.value.trim() || App.isCounselorMeetingUrl(mu.value))) {
+          mu.value = App.counselorMeetingUrl(e.target.value);
+        }
+        refresh(); quote();
+      };
       el.querySelector('[name=date]').onchange = () => { refresh(); quote(); };
       el.querySelector('[name=client_id]').onchange = async e => {
         const sel = el.querySelector('[name=package_id]');
@@ -146,6 +173,10 @@ async function apptDialog(appt, onDone, defaults) {
       el.querySelector('[name=mode]').onchange = e => {
         el.querySelector('#mu-row').style.display = e.target.value === 'online' ? '' : 'none';
         syncRoom(e.target.value);
+        const mu = el.querySelector('[name=meeting_url]');
+        if (e.target.value === 'online' && mu && !mu.value.trim()) {
+          mu.value = App.counselorMeetingUrl(el.querySelector('[name=counselor_id]').value);
+        }
       };
       el.querySelector('[name=type]').onchange = e => {
         el.querySelector('[name=fee]').value = e.target.value === 'intake' ? (App.meta.intake_fee || 2500) : (App.meta.default_fee || 2000);
@@ -279,10 +310,13 @@ App.page('schedule', {
   sub: '週檢視：同一心理師或諮商室時段衝突會即時擋下；下方為諮商室使用表',
   help: [
     '<strong>週檢視</strong>：點任一張預約卡可看明細，並做「狀態異動／修改／刪除」。'
-      + '卡片顏色＝預約狀態：<span class="appt-chip booked">已預約</span>'
-      + '<span class="appt-chip arrived">已報到</span><span class="appt-chip done">已完成</span>'
-      + '<span class="appt-chip no_show">未到</span><span class="appt-chip cancelled">已取消</span>'
-      + '<span class="appt-chip group">團體</span><span class="appt-chip off">請假</span>',
+      + '卡片顏色＝<strong>帶這位個案的心理師</strong>（顏色在「帳號管理」每個人的資料裡設定），'
+      + '排一整週時一眼看得出哪幾格是誰的時間。狀態改看卡片上的文字標籤：'
+      + '<span class="state-tag">已報到</span><span class="state-tag">已完成</span>'
+      + '<span class="state-tag">未到</span><span class="state-tag">已取消</span>'
+      + '<span class="state-tag moved">已改期</span>，沒有標籤就是單純「已預約」。'
+      + '還沒設顏色的心理師，卡片仍沿用原本的狀態配色。'
+      + '團體<span class="appt-chip group">團體</span>與請假<span class="appt-chip off">請假</span>維持原樣。',
     '左欄是時間刻度（起訖與每格分鐘數在「系統設定 → 排班表格線」調整）。'
       + '預設<strong>只顯示有排程的時段</strong>，整週一頁看得完；要在空時段開新預約，'
       + '按「展開完整時段」把格線全部攤開，點任一空格就用那天那個時間開新預約。',
@@ -356,18 +390,21 @@ App.page('schedule', {
             + `${a.confirmed_at ? '✅' : ''}${a.cancel_requested_at ? '🕓' : ''}`;
           // 已取消／未到用文字講明白，不靠劃線 —— 劃線會被看成「這格沒有預約」。
           // 還在的預約若改過期，標「已改期」：櫃檯一眼知道這筆動過，不會與取消混淆。
-          const label = { cancelled: '已取消', no_show: '未到' }[a.status]
+          // 卡片顏色改成代表心理師之後，狀態就只剩這個標籤在講，所以已報到／已完成也要標出來。
+          const label = { cancelled: '已取消', no_show: '未到', arrived: '已報到', done: '已完成' }[a.status]
             || (a.reschedule_count > 0 ? '已改期' : '');
           const stateTag = label
             ? `<span class="state-tag${label === '已改期' ? ' moved' : ''}">${label}</span>` : '';
+          const tint = App.counselorColor(a.counselor_id);
+          const tintAttr = tint ? ` data-tint style="--tint:${tint}"` : '';
           return {
             time: mins(a.start_time) === null ? null : a.start_time,
             // 精簡時擠成一行：個案用正常字重、心理師與空間用淡色，還是分得出誰是誰
             html: compact
-              ? `<div class="appt-chip one ${a.status}" data-appt="${a.id}">
+              ? `<div class="appt-chip one ${a.status}" data-appt="${a.id}"${tintAttr}>
                   <strong>${a.start_time}</strong> ${UI.esc(a.client_name)}${flags}${stateTag}
                   <span class="sub">${UI.esc(a.counselor_name)}${where ? '／' + where : ''}</span></div>`
-              : `<div class="appt-chip ${a.status}" data-appt="${a.id}">
+              : `<div class="appt-chip ${a.status}" data-appt="${a.id}"${tintAttr}>
                   <strong>${a.start_time}</strong>${stateTag}
                   <span class="who who-client">個案</span> ${UI.esc(a.client_name)}
                   ${a.risk_level === 'high' ? '⚠' : ''}${a.confirmed_at ? '　✅已確認' : ''}${a.cancel_requested_at ? '　🕓申請取消' : ''}<br>

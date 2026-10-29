@@ -381,6 +381,27 @@ table.list tr:hover td { background: #f8fbfb; }
 .appt-chip.off { border-left-color: #90a4ae; background: #eceff1; color: var(--muted); cursor: default; }
 .appt-chip.group { border-left-color: var(--accent); background: #fdf3e0; }
 
+/* 晤談歷程裡「已從排程刪除」的場次：留著可讀，但壓淡以免和現存的約混為一談 */
+.list tr.gone td { background: #fafbfc; }
+
+/* 帳號頁挑排程卡片顏色用的色票 */
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.swatches .swatch {
+  width: 26px; height: 26px; border-radius: 6px; border: 2px solid transparent;
+  cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
+}
+.swatches .swatch.on { border-color: #222; }
+.swatches .swatch.none { background: #fff; color: var(--muted); font-size: 14px; line-height: 1; }
+
+/* 心理師個人色：卡片底色由主色調淡，左邊框用主色本身。
+   指定了顏色就蓋掉狀態配色，但「已取消」仍要看得出來，故另外壓淡並劃上灰邊。 */
+.appt-chip[data-tint] {
+  background: color-mix(in srgb, var(--tint) 16%, #fff);
+  border-left-color: var(--tint);
+}
+.appt-chip[data-tint].cancelled { background: #eef2f5; border-left-color: #90a4ae; color: var(--muted); }
+.appt-chip[data-tint].no_show { background: color-mix(in srgb, var(--tint) 10%, #fff); }
+
 /* 週檢視上方的顏色圖例：同一組 .appt-chip 樣式，排成一列不換行 */
 .chip-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   margin: 2px 0 10px; font-size: 12.5px; color: var(--muted); }

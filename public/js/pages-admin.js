@@ -989,6 +989,7 @@ App.page('users', {
   })}
         ${UI.input('phone', '電話', { value: u ? u.phone : '' })}
         ${UI.input('email', 'Email', { value: u ? u.email : '' })}
+        ${App.colorPicker('color', '排程卡片顏色', u ? (u.color || '') : '')}
         <div class="form-row full" style="margin-top:4px"><label>領款人資料（列印勞務報酬單、申報扣繳憑單用）</label></div>
         ${UI.input('id_no', '身分證字號', { value: u ? (u.id_no || '') : '' })}
         ${UI.input('passport_no', '居留證／護照號碼', { value: u ? (u.passport_no || '') : '' })}

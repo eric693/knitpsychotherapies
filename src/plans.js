@@ -423,7 +423,7 @@ function counselorMonthSessions(counselorId, month) {
     WHERE a.counselor_id = ? AND substr(a.date,1,7) = ? AND a.status IN ('done','no_show')
     ORDER BY a.date, a.start_time`).all(Number(counselorId) || 0, month);
 
-  return rows.map(r => {
+  const sessions = rows.map(r => {
     const q = resolveFee({ plan_id: r.plan_id, topic_id: r.topic_id, counselor_id: Number(counselorId) || 0,
       fee_override: r.fee, client_id: r.client_id });
     // 未到只收部分費用：自付、方案給付、場地費與報酬都按同一比例縮放，各項才一致
@@ -436,6 +436,41 @@ function counselorMonthSessions(counselorId, month) {
     return { ...r, self_pay, subsidy, venue, share, gross: self_pay + subsidy,
       funding_channel: f.channel, funding_status: f.status, settled: f.settled };
   });
+
+  // 團體：報酬原本只算一對一晤談，帶了一整期團體卻一毛都不進報酬單。
+  // 已結束（點完名）的場次，依團體上設定的每場報酬計入帶領者與協同帶領者。
+  // 團體費用是按人向個案收的，心理師拿的是帶領費，與那些收費單無關，
+  // 所以撥款狀態一律視為已確定，不會卡在「機構還沒撥款」而被排除。
+  return sessions.concat(groupMonthSessions(counselorId, month));
+}
+
+function groupMonthSessions(counselorId, month) {
+  const id = Number(counselorId) || 0;
+  return db.prepare(`SELECT s.id, s.date, s.start_time, s.end_time, s.session_no,
+      g.id AS group_id, g.name AS group_name, g.counselor_id, g.co_counselor_id,
+      g.lead_fee, g.co_lead_fee,
+      (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.status = 'active') AS member_count
+    FROM group_sessions s JOIN groups g ON g.id = s.group_id
+    WHERE s.status = 'done' AND substr(s.date,1,7) = ?
+      AND (g.counselor_id = ? OR g.co_counselor_id = ?)
+    ORDER BY s.date, s.start_time`).all(month, id, id)
+    .map(r => {
+      const isCo = r.co_counselor_id === id && r.counselor_id !== id;
+      const share = Number(isCo ? r.co_lead_fee : r.lead_fee) || 0;
+      return {
+        id: r.id, group_session: true, group_id: r.group_id,
+        date: r.date, start_time: r.start_time, end_time: r.end_time,
+        status: 'done', plan_id: null, topic_id: null, client_id: null,
+        client_code: '', client_name: `團體 ${r.group_name}（第 ${r.session_no} 場，${r.member_count} 人）`,
+        plan_name: `團體：${r.group_name}`, plan_kind: 'group',
+        topic_name: isCo ? '協同帶領' : '帶領',
+        fee: 0, subsidy_amount: 0, self_pay: 0, subsidy: 0, venue: 0, gross: 0,
+        counselor_share: share, share,
+        partner_name: '', invoice_status: '', settlement_status: '',
+        funding_channel: 'group', funding_status: 'none', settled: true
+      };
+    })
+    .filter(r => r.share > 0);
 }
 
 // 方案別彙總（心理師本人看的版本：重點在自己的報酬，所方淨收仍列出以便對帳）
@@ -475,5 +510,5 @@ module.exports = {
   COUNTED_STATUSES, getPlan, getTopic, getRate, parseOptions, resolveFee, resolveAssignType, shareOf,
   clientUsage, clientUsageAll, counselorLoad, nextWeekHint, weekRange, checkBooking, pickRoom, noShowCharge,
   earliestBookableDate, bookingCutoffReason,
-  fundingState, counselorMonthSessions, sumByPlan, sumTotals
+  fundingState, counselorMonthSessions, groupMonthSessions, sumByPlan, sumTotals
 };

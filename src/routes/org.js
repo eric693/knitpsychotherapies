@@ -276,7 +276,8 @@ router.get('/meta', requireStaff(), (req, res) => {
     modules: MODULES,
     role_default_modules: ROLE_DEFAULT_MODULES,   // 帳號頁的「套用角色預設」用
     scales: SCALE_KEYS,
-    counselors: db.prepare("SELECT id, name, role, license_type FROM users WHERE active = 1 AND role IN ('counselor','supervisor','admin') ORDER BY id").all(),
+    // color：週檢視卡片用心理師的顏色；meeting_room_url：排視訊時自動帶入連結
+    counselors: db.prepare("SELECT id, name, role, license_type, color, meeting_room_url FROM users WHERE active = 1 AND role IN ('counselor','supervisor','admin') ORDER BY id").all(),
     rooms: db.prepare('SELECT id, name FROM rooms WHERE active = 1 ORDER BY id').all(),
     // 排約視窗要知道能不能留「自動指派」這個選項，以及沒選空間會不會被擋
     room_auto_assign: getSetting('room_auto_assign', '1') === '1',
@@ -311,6 +312,7 @@ router.get('/meta', requireStaff(), (req, res) => {
     // 方案別：預約表單、收費與統計都要用，一次帶齊方案與其主題
     plans: db.prepare('SELECT * FROM service_plans WHERE active = 1 ORDER BY sort, id').all().map(p => ({
       id: p.id, name: p.name, kind: p.kind, appt_type: p.appt_type, fee: p.fee, fee_mode: p.fee_mode,
+      default_mode: p.default_mode,
       fee_options: String(p.fee_options || '').split(',').map(Number).filter(Boolean),
       subsidy_amount: p.subsidy_amount, quota_per_year: p.quota_per_year,
       session_minutes: require('../plans').sessionMinutes(p),
@@ -333,7 +335,7 @@ router.get('/meta', requireStaff(), (req, res) => {
 // ---- 帳號 ----
 router.get('/users', requireStaff('users'), (req, res) => {
   res.json(db.prepare(`SELECT id, username, name, role, title, license_type, license_no, license_expiry,
-      specialty, phone, email, meeting_room_url, is_intern, supervisor_id, permissions, active,
+      specialty, phone, email, meeting_room_url, color, is_intern, supervisor_id, permissions, active,
       portal_bookable, online_only, intro,
       id_no, passport_no, residency, household_address, mailing_address,
       bank_name, bank_account, bank_holder,
@@ -344,7 +346,7 @@ router.get('/users', requireStaff('users'), (req, res) => {
 });
 
 const USER_FIELDS = ['name', 'role', 'title', 'license_type', 'license_no', 'license_expiry', 'specialty',
-  'phone', 'email', 'meeting_room_url', 'is_intern', 'supervisor_id',
+  'phone', 'email', 'meeting_room_url', 'color', 'is_intern', 'supervisor_id',
   // 線上預約表單相關：是否列入表單的心理師清單、是否只接線上通訊諮商、表單上的簡介
   'portal_bookable', 'online_only', 'intro',
   // 勞務報酬單／扣繳憑單需載明的領款人資料

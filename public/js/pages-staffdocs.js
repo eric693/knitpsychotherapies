@@ -175,9 +175,13 @@ App.page('my-payout', {
         <div style="overflow-x:auto">
         ${UI.table(['日期', '時間', '個案', '方案／主題', '狀態', '個案自付', '方案給付', '我的報酬', '撥款'],
     inc.rows.map(r => {
-      const label = r.funding_channel === 'partner'
-        ? (r.funding_status === 'none' ? '未開請款單' : (TW.settle_status[r.funding_status] || r.funding_status))
-        : (r.funding_status === 'none' ? '未開收費單' : (TW.inv_status[r.funding_status] || r.funding_status));
+      // 團體帶領費由所方直接給付，沒有對應的收費單或請款單，撥款欄要講這件事，
+      // 否則會被標成「未開收費單」而被誤以為這筆還不能付。
+      const label = r.funding_channel === 'group'
+        ? '團體帶領費'
+        : r.funding_channel === 'partner'
+          ? (r.funding_status === 'none' ? '未開請款單' : (TW.settle_status[r.funding_status] || r.funding_status))
+          : (r.funding_status === 'none' ? '未開收費單' : (TW.inv_status[r.funding_status] || r.funding_status));
       return `<tr><td>${r.date}</td><td>${(r.start_time || '').slice(0, 5)}</td>
           <td>${UI.esc(r.client_code || '')} ${UI.esc(r.client_name || '')}</td>
           <td>${UI.esc(r.plan_name || '－')}${r.topic_name ? '／' + UI.esc(r.topic_name) : ''}

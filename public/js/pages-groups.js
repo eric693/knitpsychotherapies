@@ -14,6 +14,11 @@ function groupDialog(g, onDone) {
       ${UI.input('capacity', '人數上限', { type: 'number', value: d.capacity })}
       ${UI.input('sessions_total', '總場次', { type: 'number', value: d.sessions_total })}
       ${UI.input('fee_per_session', '每次費用', { type: 'number', value: d.fee_per_session })}
+      ${UI.input('lead_fee', '帶領者每場報酬', { type: 'number', value: d.lead_fee || 0 })}
+      ${UI.input('co_lead_fee', '協同帶領者每場報酬', { type: 'number', value: d.co_lead_fee || 0 })}
+      <div class="form-row full" style="font-size:12.5px;color:var(--muted);margin-top:-4px">
+        填了金額，這個團體每一場點名結束後就會自動進帶領者與協同帶領者的「我的報酬確認」與當月報酬單。
+        團體不套方案費率（方案費率算的是一位個案一次晤談，套到團體會算錯），所以兩個人的金額在這裡各填各的。</div>
       ${UI.input('start_date', '開始日期', { type: 'date', value: d.start_date || '' })}
       ${UI.input('end_date', '結束日期', { type: 'date', value: d.end_date || '' })}
       ${g ? UI.select('status', '狀態', [['open', '招募中'], ['running', '進行中'], ['done', '已結束']], { value: d.status }) : ''}

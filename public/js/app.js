@@ -118,6 +118,43 @@ const App = {
     return withAll ? [['', '全部心理師']].concat(opts) : opts;
   },
   roomOptions() { return [['', '未指定']].concat((App.meta.rooms || []).map(r => [r.id, r.name])); },
+
+  // 週檢視卡片的配色盤。十色色相拉得夠開，列印成灰階或投影出來也還分得出深淺；
+  // 卡片用淡底＋同色左邊框，所以這裡存的是主色，淡底由 color-mix 當場調。
+  COLORS: [
+    ['#FF6B6B', '珊瑚粉'], ['#FFA726', '活力橙'], ['#FFD93D', '陽光黃'],
+    ['#4CAF50', '青草綠'], ['#00BCD4', '湖水藍'], ['#3F8EFC', '晴空藍'],
+    ['#9C6ADE', '薰衣草紫'], ['#F06292', '柔和粉'], ['#607D8B', '霧藍灰'],
+    ['#A67C52', '暖咖啡']
+  ],
+  // 色票用隱藏欄位存值：UI.formData 會把同名 radio 互相覆蓋掉，單選鈕在這裡不能用。
+  colorPicker(name, label, value) {
+    const sw = App.COLORS.map(([hex, cname]) => `<button type="button" class="swatch${hex === value ? ' on' : ''}"
+      data-colorpick="${name}" data-hex="${hex}" title="${UI.esc(cname)}" style="background:${hex}"></button>`).join('');
+    return `<div class="form-row full">
+      <label>${UI.esc(label)}</label>
+      <input type="hidden" name="${name}" value="${UI.esc(value || '')}">
+      <div class="swatches">
+        <button type="button" class="swatch none${value ? '' : ' on'}" data-colorpick="${name}" data-hex="" title="不指定">×</button>
+        ${sw}
+      </div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:4px">
+        週檢視與今日看板的預約卡會用這個顏色，一眼看出哪幾格是誰的時間。不指定就沿用原本的狀態配色。</div>
+    </div>`;
+  },
+  counselorColor(id) {
+    const c = (App.meta.counselors || []).find(x => String(x.id) === String(id));
+    return (c && c.color) || '';
+  },
+  counselorMeetingUrl(id) {
+    const c = (App.meta.counselors || []).find(x => String(x.id) === String(id));
+    return (c && c.meeting_room_url) || '';
+  },
+  // 欄位裡那串是某位心理師的固定會議室（可以安心換掉），還是櫃檯這次手打的臨時連結？
+  isCounselorMeetingUrl(url) {
+    const u = String(url || '').trim();
+    return !!u && (App.meta.counselors || []).some(c => (c.meeting_room_url || '') === u);
+  },
   enumOptions(kind) { return Object.entries(TW[kind]).map(([k, v]) => [k, v]); },
 
   async clientOptions(includeClosed) {
@@ -165,9 +202,11 @@ const App = {
   },
 
   navGroups: [
-    { label: '每日作業', keys: ['dashboard', 'my', 'schedule', 'shift', 'bookings', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review'] },
+    // 收費管理原本在「專業與營運」，但櫃檯是排完約就接著收費，兩頁要連著點；
+    // 隔了一整組選單等於每次都要找。放在預約排程下面，照實際動線走。
+    { label: '每日作業', keys: ['dashboard', 'my', 'schedule', 'billing', 'shift', 'bookings', 'waitlist', 'today', 'reminders', 'notes-pending', 'notes-review'] },
     { label: '個案服務', keys: ['intake', 'intake-forms', 'clients', 'groups', 'assessments', 'risk', 'safety', 'follow-ups', 'consents'] },
-    { label: '專業與營運', keys: ['supervision', 'hr', 'payouts', 'my-payout', 'documents', 'billing', 'receipts', 'certificates', 'overdue', 'packages', 'partners', 'plan-board', 'income', 'annual', 'announcements', 'reports'] },
+    { label: '專業與營運', keys: ['supervision', 'hr', 'payouts', 'my-payout', 'documents', 'receipts', 'certificates', 'overdue', 'packages', 'partners', 'plan-board', 'income', 'annual', 'announcements', 'reports'] },
     { label: '系統', keys: ['users', 'plans', 'line', 'gform', 'settings', 'imports', 'retention', 'audit'] }
   ],
 
@@ -657,4 +696,15 @@ App.page('my', {
       try { await DEL('/my/line'); UI.toast('已解除綁定'); App.go('my'); } catch (e) { UI.err(e); }
     };
   }
+});
+
+// 色票是動態插在各個對話框裡的，逐個綁事件容易漏；統一用事件代理處理。
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-colorpick]');
+  if (!b) return;
+  const box = b.closest('.form-row');
+  const input = box && box.querySelector(`input[name="${b.dataset.colorpick}"]`);
+  if (!input) return;
+  input.value = b.dataset.hex;
+  box.querySelectorAll('.swatch').forEach(s => s.classList.toggle('on', s === b));
 });

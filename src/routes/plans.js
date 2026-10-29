@@ -426,11 +426,18 @@ router.put('/service-plans/:id/counselors', requireStaff('settings'), (req, res)
 router.get('/plan-income', requireStaff('reports'), (req, res) => {
   const month = String(req.query.month || today().slice(0, 7));
   const counselorFilter = Number(req.query.counselor_id) || 0;
-  const counselors = db.prepare(`SELECT DISTINCT u.id, u.name
-    FROM appointments a JOIN users u ON u.id = a.counselor_id
-    WHERE substr(a.date,1,7) = ? AND a.status IN ('done','no_show')
-      ${counselorFilter ? 'AND a.counselor_id = ?' : ''}`)
-    .all(...(counselorFilter ? [month, counselorFilter] : [month]));
+  // 團體帶領費也算報酬，所以當月只帶了團體、沒有個別晤談的人也要列進來
+  const counselors = db.prepare(`SELECT DISTINCT u.id, u.name FROM users u WHERE u.id IN (
+      SELECT a.counselor_id FROM appointments a
+        WHERE substr(a.date,1,7) = ? AND a.status IN ('done','no_show')
+      UNION
+      SELECT g.counselor_id FROM group_sessions s JOIN groups g ON g.id = s.group_id
+        WHERE s.status = 'done' AND substr(s.date,1,7) = ? AND g.lead_fee > 0
+      UNION
+      SELECT g.co_counselor_id FROM group_sessions s JOIN groups g ON g.id = s.group_id
+        WHERE s.status = 'done' AND substr(s.date,1,7) = ? AND g.co_lead_fee > 0
+    ) ${counselorFilter ? 'AND u.id = ?' : ''}`)
+    .all(...(counselorFilter ? [month, month, month, counselorFilter] : [month, month, month]));
 
   const payouts = db.prepare('SELECT * FROM payouts WHERE month = ?').all(month);
 

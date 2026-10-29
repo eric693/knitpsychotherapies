@@ -262,9 +262,19 @@ router.get('/payouts/suggest', requireStaff('payouts'), (req, res) => {
   const onlySettled = ['1', 'true', 'yes'].includes(String(req.query.only_settled || ''));
   // 把前幾個月「已撥款但報酬還沒付足」的部分一起帶進來
   const catchUp = ['1', 'true', 'yes'].includes(String(req.query.catch_up || ''));
+  // 名單原本只從晤談撈，只帶團體、沒有個別晤談的人整個月都不會出現在建議名單裡，
+  // 他的帶領費就沒人想得起來要發。團體場次的帶領者與協同帶領者一併納入。
   const users = db.prepare(`SELECT DISTINCT u.id AS user_id, u.name AS user_name, u.license_type
-    FROM appointments a JOIN users u ON u.id = a.counselor_id
-    WHERE a.status = 'done' AND substr(a.date,1,7) = ? ORDER BY u.name`).all(month);
+    FROM users u WHERE u.id IN (
+      SELECT a.counselor_id FROM appointments a
+        WHERE a.status = 'done' AND substr(a.date,1,7) = ?
+      UNION
+      SELECT g.counselor_id FROM group_sessions s JOIN groups g ON g.id = s.group_id
+        WHERE s.status = 'done' AND substr(s.date,1,7) = ? AND g.lead_fee > 0
+      UNION
+      SELECT g.co_counselor_id FROM group_sessions s JOIN groups g ON g.id = s.group_id
+        WHERE s.status = 'done' AND substr(s.date,1,7) = ? AND g.co_lead_fee > 0
+    ) ORDER BY u.name`).all(month, month, month);
   // 本月沒場次、但前幾個月有待補的人也要列出來，否則那筆錢永遠沒人想起
   const extra = catchUp
     ? db.prepare(`SELECT DISTINCT u.id AS user_id, u.name AS user_name, u.license_type

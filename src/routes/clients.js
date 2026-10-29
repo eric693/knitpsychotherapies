@@ -185,6 +185,14 @@ router.get('/clients/:id', requireStaff('clients'), (req, res) => {
       LEFT JOIN users u ON u.id = a.counselor_id
       LEFT JOIN service_plans sp ON sp.id = a.plan_id
       WHERE a.client_id = ? ORDER BY a.date DESC, a.start_time DESC LIMIT 30`).all(c.id),
+    // 取消不另外收費，所以櫃檯的做法是「取消 → 之後把那筆從排程上刪掉」。
+    // 刪掉之後歷程就整筆消失，看起來像從來沒約過這一次 —— 可是歷程正是他們要留的東西。
+    // 預約刪除前都會寫一筆 appointment_events，從那裡把被刪掉的場次補回歷程。
+    deleted_appointments: db.prepare(`SELECT e.appointment_id, e.date, e.start_time, e.note,
+        e.actor_name, e.created_at, u.name AS counselor_name
+      FROM appointment_events e LEFT JOIN users u ON u.id = e.counselor_id
+      WHERE e.client_id = ? AND e.kind = 'deleted'
+      ORDER BY e.date DESC, e.start_time DESC LIMIT 30`).all(c.id),
     // 可代訂的家人，以及「誰可以替這位個案訂」——兩個方向櫃檯都要看得到
     family: familyOf(c.id),
     family_of: db.prepare(`SELECT f.id, f.relationship, f.can_book, c.id AS client_id, c.name, c.code

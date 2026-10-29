@@ -797,11 +797,28 @@ App.page('client', {
             : '',
           a.cancel_reason ? UI.esc(a.cancel_reason) : ''
         ].filter(Boolean).join('<br>');
-        body.innerHTML = `<div class="card">${UI.table(['日期', '時間', '類型', '心理師', '狀態', '費用', '異動／備註'],
-          c.appointments.map(a => `<tr><td>${a.date}</td><td>${a.start_time}</td>
+        // 已從排程刪掉的場次照樣列出來：歷程要留，只是那筆約已經不在排程上了。
+        // 兩份資料合在一起依日期排，才讀得出這位個案實際的來往順序。
+        const rows = [
+          ...c.appointments.map(a => ({ sort: `${a.date} ${a.start_time}`, html: `<tr>
+            <td>${a.date}</td><td>${a.start_time}</td>
             <td>${UI.esc(TW.appt_type[a.type] || a.type)}</td><td>${UI.esc(a.counselor_name || '')}</td>
             <td>${stateTag('appt_status', a.status)}</td><td>${UI.fmtMoney(a.fee)}</td>
-            <td style="font-size:12.5px">${change(a)}</td></tr>`), '尚無晤談紀錄')}</div>`;
+            <td style="font-size:12.5px">${change(a)}</td></tr>` })),
+          ...(c.deleted_appointments || []).map(e => ({ sort: `${e.date} ${e.start_time}`, html: `<tr class="gone">
+            <td>${e.date}</td><td>${e.start_time}</td>
+            <td style="color:var(--muted)">—</td><td>${UI.esc(e.counselor_name || '')}</td>
+            <td>${UI.tag('已從排程刪除', 'warn')}</td><td style="color:var(--muted)">—</td>
+            <td style="font-size:12.5px;color:var(--muted)">
+              ${UI.esc(e.created_at || '').slice(0, 16)} 由 ${UI.esc(e.actor_name || '所方')} 刪除
+              ${e.note ? '<br>' + UI.esc(e.note) : ''}</td></tr>` }))
+        ].sort((a, b) => b.sort.localeCompare(a.sort));
+        body.innerHTML = `<div class="card">
+          ${UI.table(['日期', '時間', '類型', '心理師', '狀態', '費用', '異動／備註'],
+    rows.map(r => r.html), '尚無晤談紀錄')}
+          ${(c.deleted_appointments || []).length ? `<div style="font-size:12.5px;color:var(--muted);margin-top:8px">
+            「已從排程刪除」的是曾經約過、後來整筆從排程移除的場次。
+            排程上已經看不到，但歷程保留，才知道這位個案實際來往過幾次。</div>` : ''}</div>`;
       }
 
       if (key === 'notes') {

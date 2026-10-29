@@ -52,7 +52,10 @@ ensureColumns('users', {
   calendar_token: "TEXT NOT NULL DEFAULT ''",
   // 實習心理師：晤談紀錄需經指定督導覆核後才定稿（心理師法第 2 條實習制度）
   is_intern: 'INTEGER NOT NULL DEFAULT 0',
-  supervisor_id: 'INTEGER REFERENCES users(id)'
+  supervisor_id: 'INTEGER REFERENCES users(id)',
+  // 週檢視卡片的顏色。原本卡片顏色＝預約狀態，但櫃檯排一整週時真正要一眼認出的是
+  // 「這格是誰的時間」，狀態反而看文字標籤就好。空字串＝沿用舊的狀態配色。
+  color: "TEXT NOT NULL DEFAULT ''"
 });
 // 在職／離職證明書會用到的人事欄位（性別、生日、到職與離職日）
 ensureColumns('users', {
@@ -271,6 +274,13 @@ ensureColumns('intakes', {
 });
 ensureColumns('group_sessions', {
   reminded_at: "TEXT NOT NULL DEFAULT ''"
+});
+// 團體的帶領費：報酬只算得到個人晤談，團體帶了一整期卻一毛都不進報酬單。
+// 帶領者與協同帶領者常常拆法不同（協同多半領一半），所以兩個金額分開存，
+// 不套方案費率 —— 方案費率是「一位個案一次晤談」的拆法，套到團體會算錯。
+ensureColumns('groups', {
+  lead_fee: 'INTEGER NOT NULL DEFAULT 0',            // 帶領者每場給付
+  co_lead_fee: 'INTEGER NOT NULL DEFAULT 0'          // 協同帶領者每場給付
 });
 ensureColumns('payouts', {
   pay_date: "TEXT NOT NULL DEFAULT ''",              // 支領日期（列印勞務報酬單用）

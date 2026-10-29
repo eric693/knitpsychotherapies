@@ -3810,6 +3810,64 @@ function startServer() {
     await admin.fails('POST', '/api/report-snapshots', { month: '亂填' }, '請指定月份');
   });
 
+  section('艾瑞克 1029 回饋：團體帶領費、歷程保留、心理師配色');
+  await test('團體帶領者與協同帶領者各自依場次拿到帶領費', async () => {
+    const month = ymd(new Date()).slice(0, 7);
+    const g = await admin.ok('POST', '/api/groups', {
+      name: '冒煙測試團體', counselor_id: 2, co_counselor_id: 3,
+      capacity: 8, sessions_total: 2, fee_per_session: 800,
+      lead_fee: 1600, co_lead_fee: 800, status: 'running'
+    });
+    const s1 = await admin.ok('POST', `/api/groups/${g.id}/sessions`,
+      { date: ymd(new Date()), start_time: '10:00', end_time: '12:00', session_no: 1 });
+    // 還沒結束的場次不該先進報酬
+    const before = await lin.ok('GET', `/api/my/income?month=${month}`);
+    assert(!before.rows.some(r => r.group_id === g.id), '未完成的團體場次不應計入報酬');
+    await admin.ok('POST', `/api/group-sessions/${s1.id}/complete`, { attendance: [] });
+
+    const lead = await lin.ok('GET', `/api/my/income?month=${month}`);
+    const leadRow = lead.rows.find(r => r.group_id === g.id);
+    assert(leadRow, '帶領者應在「我的報酬確認」看到這場團體');
+    equal(leadRow.share, 1600, '帶領者應拿帶領者費率');
+    assert(leadRow.settled, '團體帶領費由所方給付，不應卡在未撥款');
+
+    const inc = await admin.ok('GET', `/api/plan-income?month=${month}`);
+    const coSum = inc.rows.find(r => r.counselor_id === 3);
+    assert(coSum, '只帶團體的協同帶領者也要出現在心理師收支');
+    const sug = await admin.ok('GET', `/api/payouts/suggest?month=${month}`);
+    const coPay = sug.find(r => r.user_id === 3);
+    assert(coPay, '協同帶領者要出現在報酬建議名單，否則這筆錢沒人想得起來');
+    // 沒填帶領費的團體不應憑空生出報酬
+    const g2 = await admin.ok('POST', '/api/groups',
+      { name: '冒煙測試團體（未設報酬）', counselor_id: 2, capacity: 8, sessions_total: 1, status: 'running' });
+    const s2 = await admin.ok('POST', `/api/groups/${g2.id}/sessions`,
+      { date: ymd(new Date()), start_time: '14:00', end_time: '16:00', session_no: 1 });
+    await admin.ok('POST', `/api/group-sessions/${s2.id}/complete`, { attendance: [] });
+    const after = await lin.ok('GET', `/api/my/income?month=${month}`);
+    assert(!after.rows.some(r => r.group_id === g2.id), '沒設帶領費的團體不應產生報酬列');
+  });
+  await test('預約從排程刪掉後，晤談歷程仍留著那一場', async () => {
+    const day = addDays(ymd(new Date()), 6);
+    const a = await admin.ok('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 2, date: day, start_time: '09:00' });
+    await admin.ok('POST', `/api/appointments/${a.id}/status`, { status: 'cancelled', cancel_reason: '個案請假' });
+    await admin.ok('DELETE', `/api/appointments/${a.id}`);
+    const c = await admin.ok('GET', `/api/clients/${clientId}`);
+    assert(!c.appointments.some(x => x.id === a.id), '排程上應該已經沒有這一筆');
+    const gone = (c.deleted_appointments || []).find(x => x.appointment_id === a.id);
+    assert(gone, '晤談歷程仍應留下這一場（取消不收費，但歷程要在）');
+    equal(gone.date, day, '留下的歷程要記得原本約在哪一天');
+  });
+  await test('心理師的排程卡片顏色存得起來，且排程頁取得到', async () => {
+    await admin.ok('PUT', '/api/users/2', { color: '#3F8EFC' });
+    const meta = await admin.ok('GET', '/api/meta');
+    const u = meta.counselors.find(x => x.id === 2);
+    equal(u.color, '#3F8EFC', '排程頁要從 meta 拿得到心理師的顏色');
+    assert('meeting_room_url' in u, '排視訊要自動帶連結，meta 必須附上固定會議室');
+    const plan = (meta.plans || [])[0];
+    assert(plan && 'default_mode' in plan, '方案要帶出預設形式，排到通訊方案才跳得動視訊');
+  });
+
   section('Google 表單同步與 LINE 預約入口');
   await test('未設定密鑰時拒收表單資料', async () => {
     const r = await fetch(BASE + '/api/integrations/google-form', {

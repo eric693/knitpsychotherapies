@@ -35,7 +35,7 @@ async function pushGroupSession(sessionId, kind) {
 // 團體聚會不放進 appointments（那是一對一模型），但週檢視會一併顯示、諮商室也會檢查衝突。
 
 const FIELDS = ['name', 'counselor_id', 'co_counselor_id', 'partner_id', 'capacity', 'sessions_total',
-  'fee_per_session', 'start_date', 'end_date', 'status', 'description'];
+  'fee_per_session', 'lead_fee', 'co_lead_fee', 'start_date', 'end_date', 'status', 'description'];
 
 router.get('/groups', requireStaff('groups'), (req, res) => {
   const { status = '' } = req.query;
@@ -80,7 +80,7 @@ router.post('/groups', requireStaff('groups'), (req, res) => {
   const cols = FIELDS.filter(f => b[f] !== undefined);
   const info = db.prepare(`INSERT INTO groups (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`)
     .run(...cols.map(f => ['counselor_id', 'co_counselor_id', 'partner_id'].includes(f) ? (Number(b[f]) || null)
-      : ['capacity', 'sessions_total', 'fee_per_session'].includes(f) ? (Number(b[f]) || 0) : String(b[f] ?? '')));
+      : ['capacity', 'sessions_total', 'fee_per_session', 'lead_fee', 'co_lead_fee'].includes(f) ? (Number(b[f]) || 0) : String(b[f] ?? '')));
   audit('staff', req.user.id, req.user.name, '新增團體', b.name);
   res.json({ id: info.lastInsertRowid });
 });
@@ -93,7 +93,7 @@ router.put('/groups/:id', requireStaff('groups'), (req, res) => {
   for (const f of FIELDS) {
     if (b[f] === undefined) continue;
     data[f] = ['counselor_id', 'co_counselor_id', 'partner_id'].includes(f) ? (Number(b[f]) || null)
-      : ['capacity', 'sessions_total', 'fee_per_session'].includes(f) ? (Number(b[f]) || 0) : String(b[f] ?? '');
+      : ['capacity', 'sessions_total', 'fee_per_session', 'lead_fee', 'co_lead_fee'].includes(f) ? (Number(b[f]) || 0) : String(b[f] ?? '');
   }
   if (!Object.keys(data).length) return res.json({ ok: true });
   db.prepare(`UPDATE groups SET ${Object.keys(data).map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
