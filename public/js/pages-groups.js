@@ -110,12 +110,14 @@ App.page('group', {
       <div class="card"><h3>場次</h3>
         ${UI.table(['場次', '日期', '時間', '諮商室', '主題', '出席', '狀態', ''], g.sessions.map(s => `<tr>
           <td>第 ${s.session_no} 次</td><td>${s.date}</td><td>${s.start_time}-${s.end_time}</td>
-          <td>${UI.esc(s.room_name || '-')}</td><td>${UI.esc(s.topic || '-')}</td>
+          <td>${s.room_name ? UI.esc(s.room_name)
+    : '<span style="color:var(--warn,#b8860b)">未指定</span>'}</td><td>${UI.esc(s.topic || '-')}</td>
           <td>${s.status === 'done' ? s.present + ' 人' : '-'}</td>
           <td>${UI.tag(TW.gs_status[s.status] || s.status, s.status === 'done' ? 'ok' : 'warn')}</td>
           <td><button class="btn tiny ${s.status === 'done' ? 'secondary' : ''}" data-s="${s.id}">
             ${s.status === 'done' ? '檢視紀錄' : '點名／紀錄'}</button>
-            ${s.status !== 'done' ? `<button class="btn tiny danger" data-ds="${s.id}">刪除</button>` : ''}</td></tr>`), '尚未排定場次')}</div>`;
+            ${s.status !== 'done' ? `<button class="btn tiny secondary" data-es="${s.id}">修改</button>
+            <button class="btn tiny danger" data-ds="${s.id}">刪除</button>` : ''}</td></tr>`), '尚未排定場次')}</div>`;
 
     el.querySelector('#edit').onclick = () => groupDialog(g, () => App.go('group/' + id));
     el.querySelector('#addm').onclick = async () => {
@@ -126,15 +128,33 @@ App.page('group', {
         onSubmit: async e => { await POST(`/groups/${id}/members`, UI.formData(e)); UI.toast('已加入'); App.go('group/' + id); }
       });
     };
+    // 新增與修改用同一組欄位：場次要改的就是時間與諮商室這幾項
+    const sessionForm = (d = {}) => `<div class="form-grid">
+        ${UI.input('date', '日期', { type: 'date', value: d.date || UI.today() })}
+        ${UI.input('start_time', '開始', { type: 'time', value: d.start_time || '19:00' })}
+        ${UI.input('end_time', '結束', { type: 'time', value: d.end_time || '21:00' })}
+        ${UI.select('room_id', '諮商室', App.roomOptions(), { value: d.room_id || '' })}
+        ${UI.inputList('topic', '主題', App.meta.group_topics || [], { value: d.topic || '', full: true })}
+        <div class="form-row full" style="font-size:12.5px;color:var(--muted)">
+          選了諮商室，預約排程的週檢視就會標出這個團體用哪一間，櫃檯排一對一時才知道那個時段這間已經被占走。
+          同時段撞到其他預約或團體會直接擋下。</div></div>`;
     el.querySelector('#adds').onclick = () => UI.modal({
       title: '新增場次',
-      body: `<div class="form-grid">
-        ${UI.input('date', '日期', { type: 'date', value: UI.today() })}
-        ${UI.input('start_time', '開始', { type: 'time', value: '19:00' })}
-        ${UI.input('end_time', '結束', { type: 'time', value: '21:00' })}
-        ${UI.select('room_id', '諮商室', App.roomOptions())}
-        ${UI.inputList('topic', '主題', App.meta.group_topics || [], { full: true })}</div>`,
+      body: sessionForm(),
       onSubmit: async e => { await POST(`/groups/${id}/sessions`, UI.formData(e)); UI.toast('已新增'); App.go('group/' + id); }
+    });
+    el.querySelectorAll('[data-es]').forEach(b => {
+      b.onclick = () => {
+        const s = g.sessions.find(x => String(x.id) === b.dataset.es);
+        UI.modal({
+          title: `修改第 ${s.session_no} 次場次`,
+          body: sessionForm(s),
+          onSubmit: async e => {
+            await PUT(`/group-sessions/${s.id}`, UI.formData(e));
+            UI.toast('已修改'); App.go('group/' + id);
+          }
+        });
+      };
     });
     el.querySelector('#delg').onclick = async () => {
       if (!await UI.confirm(`確定刪除團體「${g.name}」？成員名單與未進行的場次會一併移除。`)) return;

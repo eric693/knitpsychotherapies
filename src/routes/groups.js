@@ -168,6 +168,36 @@ router.post('/groups/:id/sessions', requireStaff('groups'), async (req, res) => 
   res.json({ id: info.lastInsertRowid, notify });
 });
 
+// 修改場次：原本排定後只能刪掉重排，換個時間或補一間諮商室都得先砍掉，
+// 連帶把已寫的主題一起弄丟。已完成（點過名）的場次不給改，以免動到已經計費的那一場。
+router.put('/group-sessions/:id', requireStaff('groups'), (req, res) => {
+  const s = db.prepare('SELECT * FROM group_sessions WHERE id = ?').get(req.params.id);
+  if (!s) return res.status(404).json({ error: '找不到此場次' });
+  if (s.status === 'done') return res.status(400).json({ error: '已完成的場次不可修改（請先取消點名）' });
+  const b = req.body || {};
+  const date = b.date || s.date;
+  const start = b.start_time || s.start_time;
+  const end = b.end_time || s.end_time;
+  const roomId = b.room_id === undefined ? s.room_id : (Number(b.room_id) || null);
+  if (end <= start) return res.status(400).json({ error: '結束時間要晚於開始時間' });
+  // 諮商室衝突：同時比對一對一預約與其他團體場次（排除自己這一筆）
+  if (roomId) {
+    const hit = db.prepare(`SELECT 1 FROM appointments WHERE room_id = ? AND date = ?
+        AND status IN ('booked','arrived') AND start_time < ? AND end_time > ?`)
+      .get(roomId, date, end, start)
+      || db.prepare(`SELECT 1 FROM group_sessions WHERE room_id = ? AND date = ? AND id != ?
+        AND status != 'cancelled' AND start_time < ? AND end_time > ?`)
+        .get(roomId, date, s.id, end, start);
+    if (hit) return res.status(400).json({ error: '該時段諮商室已被使用' });
+  }
+  db.prepare(`UPDATE group_sessions SET date = ?, start_time = ?, end_time = ?, room_id = ?, topic = ?
+    WHERE id = ?`).run(date, start, end, roomId, b.topic === undefined ? s.topic : String(b.topic || ''), s.id);
+  const g = db.prepare('SELECT name FROM groups WHERE id = ?').get(s.group_id);
+  audit('staff', req.user.id, req.user.name, '修改團體場次', g ? g.name : String(s.group_id),
+    { from: `${s.date} ${s.start_time}`, to: `${date} ${start}` });
+  res.json({ ok: true });
+});
+
 // 點名 + 歷程紀錄；完成時依團體收費為出席者產生收費單
 router.post('/group-sessions/:id/complete', requireStaff('groups'), (req, res) => {
   const s = db.prepare('SELECT * FROM group_sessions WHERE id = ?').get(req.params.id);

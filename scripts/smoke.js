@@ -3846,6 +3846,33 @@ function startServer() {
     const after = await lin.ok('GET', `/api/my/income?month=${month}`);
     assert(!after.rows.some(r => r.group_id === g2.id), '沒設帶領費的團體不應產生報酬列');
   });
+  await test('團體場次可改時間與諮商室，排程週檢視帶得出用哪一間', async () => {
+    const day = addDays(ymd(new Date()), 8);
+    const rooms = await admin.ok('GET', '/api/rooms');
+    const room = rooms.find(r => r.active);
+    const g = await admin.ok('POST', '/api/groups',
+      { name: '冒煙場次測試團體', counselor_id: 2, capacity: 6, sessions_total: 1, status: 'running' });
+    const s1 = await admin.ok('POST', `/api/groups/${g.id}/sessions`,
+      { date: day, start_time: '19:00', end_time: '21:00' });
+    // 週檢視要帶出諮商室欄位，前端才有東西可顯示
+    const w0 = await admin.ok('GET', `/api/schedule/week?start=${day}`);
+    const row0 = w0.group_sessions.find(x => x.group_id === g.id);
+    assert(row0, '週檢視應看得到這個團體場次');
+    assert('room_name' in row0, '週檢視必須帶出 room_name，否則畫面無從顯示使用空間');
+    // 排定後補指定諮商室（原本只能刪掉重排）
+    await admin.ok('PUT', `/api/group-sessions/${s1.id}`, { room_id: room.id, start_time: '18:30', end_time: '20:30' });
+    const w1 = await admin.ok('GET', `/api/schedule/week?start=${day}`);
+    const row1 = w1.group_sessions.find(x => x.group_id === g.id);
+    equal(row1.room_name, room.name, '改過之後週檢視要顯示新的諮商室');
+    equal(row1.start_time, '18:30', '時間也要改得動');
+    // 同一間、同時段的一對一預約要被擋下（團體已經占住那間）
+    await admin.fails('POST', '/api/appointments',
+      { client_id: clientId, counselor_id: 3, date: day, start_time: '19:00', room_id: room.id },
+      '諮商室');
+    // 已完成的場次不給改，以免動到已經計費的那一場
+    await admin.ok('POST', `/api/group-sessions/${s1.id}/complete`, { attendance: [] });
+    await admin.fails('PUT', `/api/group-sessions/${s1.id}`, { start_time: '09:00' }, '已完成');
+  });
   await test('預約從排程刪掉後，晤談歷程仍留著那一場', async () => {
     const day = addDays(ymd(new Date()), 6);
     const a = await admin.ok('POST', '/api/appointments',

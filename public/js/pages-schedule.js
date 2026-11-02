@@ -370,16 +370,19 @@ App.page('schedule', {
             <span style="font-size:11.5px">${o.all_day ? '全天' : o.start_time + '-' + o.end_time}
             ${o.reason ? '／' + UI.esc(o.reason) : ''}</span></div>`
         })),
+        // 團體也要看得到用哪一間 —— 精簡模式原本只寫人數與帶領者，
+        // 櫃檯排一對一時無從得知那個時段哪間已經被團體占走，得另外去翻諮商室使用表。
         ...groups.map(g => ({
           time: mins(g.start_time) === null ? null : g.start_time,
           html: compact
             ? `<div class="appt-chip one group" data-gs="${g.group_id}">
                 <strong>${g.start_time}</strong> ${UI.esc(g.group_name)}
-                <span class="sub">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}</span></div>`
+                <span class="sub">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}${
+  g.room_name ? '／' + UI.esc(g.room_name) : '／未指定空間'}</span></div>`
             : `<div class="appt-chip group" data-gs="${g.group_id}">
                 <strong>${g.start_time}</strong> ${UI.esc(g.group_name)}<br>
                 <span style="font-size:11.5px">團體 ${g.member_count} 人／${UI.esc(g.counselor_name || '')}
-                ${g.room_name ? '／' + UI.esc(g.room_name) : ''}</span></div>`
+                ${g.room_name ? '／' + UI.esc(g.room_name) : '／<span style="color:var(--warn,#b8860b)">未指定空間</span>'}</span></div>`
         })),
         // 個案與心理師分行並各自加標籤，避免兩個名字擠在一起看不出誰是誰
         ...appts.map(a => {
