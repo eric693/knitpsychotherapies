@@ -118,6 +118,26 @@ function loadPlaywright() {
         else if (c.includes('載入中')) problems.push(`${acct.label} / 個案頁 ${t}：卡在載入中`);
       }
     }
+    // 新增方案後，同一個分頁裡的排約下拉要立刻看得到（App.meta 只在登入當下抓一次，
+    // 不自動重抓的話櫃檯會以為方案沒建成功，跑去個案資料裡硬改）
+    if (acct.user === 'admin') {
+      const r = await page.evaluate(async () => {
+        const name = 'UI冒煙方案-' + Date.now().toString().slice(-6);
+        const before = (App.meta.plans || []).length;
+        try { await POST('/service-plans', { name, fee: 1500, kind: 'self', active: 1 }); }
+        catch (e) { return { error: e.message }; }
+        return { name, before, after: (App.meta.plans || []).length };
+      });
+      if (r.error) problems.push(`方案建立失敗：${r.error}`);
+      else if (r.after <= r.before) problems.push('新增方案後 App.meta 沒有自動更新，排約下拉會看不到新方案');
+      else {
+        await page.goto(`${BASE}/#schedule`, { waitUntil: 'load' });
+        await page.waitForTimeout(1200);
+        const inList = await page.evaluate(n => (App.meta.plans || []).some(p => p.name === n), r.name);
+        if (!inList) problems.push('新方案沒出現在排約可用的方案清單');
+        checked++;
+      }
+    }
     errs.forEach(e => problems.push(`${acct.label}：${e}`));
     console.log(`  ${problems.length ? '·' : '✓'} ${acct.label}：導覽 ${navs.length} 頁`);
     await page.close();
