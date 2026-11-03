@@ -196,7 +196,8 @@ async function handleEvent(ev) {
 // 綁定與自動回覆就會生效，不必自己到 LINE 後台貼網址。
 
 const LINE_SETTING_KEYS = ['line_official_name', 'line_official_id', 'line_add_friend_url', 'line_reminder_hours',
-  'line_counselor_daily_enabled', 'line_counselor_daily_time', 'line_flex_color', 'booking_public_url',
+  'line_counselor_daily_enabled', 'line_counselor_daily_time', 'line_counselor_booking_notify',
+  'line_flex_color', 'booking_public_url',
   // 個案隨手打字時要回什麼：card 完整卡片／text 一行文字加連結／none 不回覆
   'line_reply_mode',
   ...Object.keys(line.TEXT_DEFAULTS)];

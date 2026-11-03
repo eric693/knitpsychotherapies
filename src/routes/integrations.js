@@ -42,8 +42,9 @@ router.post('/integrations/google-form', ingestLimit, async (req, res) => {
   const planText = out.matched.plan || '';
   const topicText = out.matched.topic || '';
 
-  // 指名的心理師若已綁定 LINE，同步推一張卡片讓他知道有人預約
-  if (counselor && counselor.line_user_id) {
+  // 指名的心理師若已綁定 LINE，同步推一張卡片讓他知道有人預約。
+  // 櫃檯統一派案時可在「LINE 通知設定」關掉，改由櫃檯確認成立後才通知。
+  if (counselor && counselor.line_user_id && line.counselorBookingNotify()) {
     await line.pushFlex({
       to: counselor.line_user_id, kind: 'booking_staff',
       flex: line.counselorBookingFlex({

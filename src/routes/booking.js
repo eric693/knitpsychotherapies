@@ -245,8 +245,10 @@ router.post('/public/bookings', publicWrite, async (req, res) => {
     await line.pushFlex({ to: lineUserId, flex: line.bookingReceivedFlex(payload),
       kind: 'booking', client_id: client ? client.id : null });
   }
-  // 心理師端提醒：有人指名預約你
-  if (counselor && counselor.line_user_id) {
+  // 心理師端提醒：有人指名預約你。
+  // 由櫃檯統一派案的所方可在「LINE 通知設定」關掉這一封 —— 申請都還沒確認，
+  // 先通知等於讓心理師以為接了這個案，櫃檯要改派就難了。關掉後改在確認成立時通知。
+  if (counselor && counselor.line_user_id && line.counselorBookingNotify()) {
     await line.pushFlex({
       to: counselor.line_user_id,
       flex: line.counselorBookingFlex({ counselor_name: counselor.name, b: payload }),

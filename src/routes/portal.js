@@ -316,7 +316,8 @@ router.post('/appointments', requireClient, async (req, res) => {
     logApptEvent({ client_id: forClient.id, counselor_id: cid, booking_request_id: reqInfo.lastInsertRowid,
       kind: 'request', date, start_time, actor_type: 'client', actor_name: req.client.name, via: '個案專區',
       note: `${plan.name}${proxy ? `（由${req.client.name}代訂）` : ''}` });
-    if (counselor && counselor.line_user_id) {
+    // 同對外表單：櫃檯統一派案時可關掉申請階段的通知（確認成立後仍會通知）
+    if (counselor && counselor.line_user_id && line.counselorBookingNotify()) {
       try {
         await line.pushFlex({
           to: counselor.line_user_id, kind: 'booking_staff',

@@ -13,6 +13,12 @@ const PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 const REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
 
 function lineEnabled() { return !!getSetting('line_channel_token', '').trim(); }
+// 線上預約指名某位心理師時，要不要在「申請送出的當下」就通知他。
+// 由櫃檯統一派案的所方要關掉：預約還沒確認就先通知，個案會以為約已經談定，
+// 心理師也等於先接了案，櫃檯要改派就變成人情問題。關掉後改在櫃檯確認成立時才通知。
+function counselorBookingNotify() {
+  return getSetting('line_counselor_booking_notify', '1') === '1';
+}
 function brandColor() {
   const c = getSetting('line_flex_color', '#0e7c7b').trim();
   return /^#[0-9a-fA-F]{6}$/.test(c) ? c : '#0e7c7b';
@@ -582,7 +588,7 @@ function verifySignature(rawBody, signature) {
 }
 
 module.exports = {
-  lineEnabled, weekdayOf, centerInfo,
+  lineEnabled, counselorBookingNotify, weekdayOf, centerInfo,
   card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
   bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, groupSessionFlex, rescheduledFlex, portalUrl,
   monthlyLimitHit, clearMonthlyLimit, recheckQuota, fetchQuota,

@@ -3810,6 +3810,66 @@ function startServer() {
     await admin.fails('POST', '/api/report-snapshots', { month: '亂填' }, '請指定月份');
   });
 
+  section('指名預約的通知時機（由櫃檯派案）');
+  await test('關掉「當下通知」後，被指名的心理師要等櫃檯確認成立才收到卡片', async () => {
+    await admin.ok('PUT', '/api/line/settings',
+      { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token' });
+    // 心理師 2 綁定 LINE（走正式流程：產碼 → 以合法簽章送進 webhook）
+    const code = await admin.ok('POST', '/api/line/bind-code', { user_id: 2 });
+    const body = JSON.stringify({ events: [{ type: 'message', replyToken: 'rc1',
+      source: { userId: 'Ucounselor-dispatch' }, message: { type: 'text', text: code.code } }] });
+    const sig = require('crypto').createHmac('sha256', 'smoke-secret').update(body).digest('base64');
+    await fetch(BASE + '/api/line/webhook', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-line-signature': sig }, body });
+
+    const staffPush = async () => (await admin.ok('GET', '/api/line/status')).recent
+      .filter(n => n.kind === 'booking_staff').length;
+    const cfg = await session().ok('GET', '/api/public/booking-config');
+    const plan = (cfg.plans || []).find(p => p.require_review) || (cfg.plans || [])[0];
+    // 直接向系統要這位心理師真正還空著的時段，否則會撞到展示資料裡既有的約
+    const slotInfo = await (await fetch(
+      `${BASE}/api/public/booking-slots?counselor_id=2&plan_id=${plan ? plan.id : ''}&days=40`)).json();
+    const open = [];
+    for (const d of (slotInfo.days || [])) for (const t of (d.slots || [])) open.push({ date: d.date, time: t.start_time || t });
+    assert(open.length >= 2, `需要至少兩個空時段來測試，實際 ${open.length} 個`);
+    const send = async (phone, slot) => {
+      const r = await fetch(BASE + '/api/public/bookings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-real-ip': '10.9.9.9' },
+        body: JSON.stringify({ name: '派案測試' + phone.slice(-3), phone, consent: true,
+          plan_id: plan && plan.id, birth_date: '1990-01-01',
+          counselor_id: 2, date: slot.date, start_time: slot.time })
+      });
+      return { status: r.status, data: await r.json() };
+    };
+
+    // 1) 預設（當下通知）
+    await admin.ok('PUT', '/api/line/settings', { line_counselor_booking_notify: '1' });
+    const n0 = await staffPush();
+    const a = await send('0911000111', open[0]);
+    equal(a.status, 200, '申請應送得出去：' + JSON.stringify(a.data));
+    assert(await staffPush() > n0, '開啟時，申請當下就該通知被指名的心理師');
+
+    // 2) 關掉之後，申請階段不通知
+    await admin.ok('PUT', '/api/line/settings', { line_counselor_booking_notify: '0' });
+    const n1 = await staffPush();
+    const b = await send('0911000222', open[1]);
+    equal(b.status, 200, '申請應送得出去：' + JSON.stringify(b.data));
+    assert(b.data.ok, '個案端仍要立刻拿到受理回覆，不受這個設定影響');
+    equal(await staffPush(), n1, '關掉時，申請階段不應通知心理師');
+
+    // 3) 櫃檯確認成立時仍要通知，否則心理師永遠不知道自己被派了案
+    const reqs = await admin.ok('GET', '/api/bookings?status=new');
+    const mine = reqs.find(x => x.phone === '0911000222');
+    assert(mine, '這筆申請應留在「線上預約申請」等櫃檯處理');
+    const made = await admin.ok('POST', `/api/bookings/${mine.id}/create-client`, {});
+    await admin.ok('POST', `/api/bookings/${mine.id}/confirm`,
+      { client_id: made.id || made.client_id, counselor_id: 2, date: open[1].date, start_time: open[1].time });
+    assert(await staffPush() > n1, '櫃檯確認成立後仍要通知心理師');
+
+    await admin.ok('PUT', '/api/line/settings',
+      { line_counselor_booking_notify: '1', line_channel_token: '', line_channel_secret: '' });
+  });
+
   section('艾瑞克 1029 回饋：團體帶領費、歷程保留、心理師配色');
   await test('團體帶領者與協同帶領者各自依場次拿到帶領費', async () => {
     const month = ymd(new Date()).slice(0, 7);

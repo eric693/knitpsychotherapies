@@ -1555,6 +1555,10 @@ if (getSetting('military_urls_seeded', '') !== '1') {
     line_reminder_hours: '24',          // 晤談前幾小時推提醒
     line_counselor_daily_time: '20:00', // 每日推播心理師隔日行程的時間
     line_counselor_daily_enabled: '1',
+    // 線上預約指名某位心理師時，要不要當下就通知他。
+    // 關掉的話，被指名的心理師要等櫃檯在「線上預約申請」確認成立後才會收到通知 ——
+    // 所方若是由櫃檯統一派案，當下就通知會讓個案以為約已經談定、心理師也先接了案。
+    line_counselor_booking_notify: '1',
     line_flex_color: '#0e7c7b',         // Flex 卡片主色
     // 卡片上的說明文字：所方會想改口氣、加自家規定，因此全部做成設定，
     // 留空即用系統預設。可用代入值：{center} 機構名稱、{phone} 電話、{hours} 取消期限時數、{name} 對方姓名。
