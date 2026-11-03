@@ -353,7 +353,7 @@ router.post('/appointments', requireClient, async (req, res) => {
     actor_name: req.client.name, via: '個案專區',
     note: `${plan ? plan.name : ''}${proxy ? `（由${req.client.name}代訂）` : ''}` });
   // 心理師端通知：個案自己在專區排進來的，跟線上申請成立時一樣要讓心理師知道
-  if (counselor && counselor.line_user_id) {
+  if (counselor && counselor.line_user_id && line.counselorBookingNotify('confirm')) {
     try {
       await line.pushFlex({
         to: counselor.line_user_id, kind: 'booking_staff',

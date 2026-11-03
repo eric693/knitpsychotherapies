@@ -3810,8 +3810,8 @@ function startServer() {
     await admin.fails('POST', '/api/report-snapshots', { month: '亂填' }, '請指定月份');
   });
 
-  section('指名預約的通知時機（由櫃檯派案）');
-  await test('關掉「當下通知」後，被指名的心理師要等櫃檯確認成立才收到卡片', async () => {
+  section('預約推給心理師的時機（由櫃檯派案／完全不推）');
+  await test('三種推播時機：當下就推／只在成立時推／兩種都不推', async () => {
     await admin.ok('PUT', '/api/line/settings',
       { line_channel_secret: 'smoke-secret', line_channel_token: 'smoke-token' });
     // 心理師 2 綁定 LINE（走正式流程：產碼 → 以合法簽章送進 webhook）
@@ -3826,33 +3826,39 @@ function startServer() {
       .filter(n => n.kind === 'booking_staff').length;
     const cfg = await session().ok('GET', '/api/public/booking-config');
     const plan = (cfg.plans || []).find(p => p.require_review) || (cfg.plans || [])[0];
-    // 直接向系統要這位心理師真正還空著的時段，否則會撞到展示資料裡既有的約
-    const slotInfo = await (await fetch(
-      `${BASE}/api/public/booking-slots?counselor_id=2&plan_id=${plan ? plan.id : ''}&days=40`)).json();
-    const open = [];
-    for (const d of (slotInfo.days || [])) for (const t of (d.slots || [])) open.push({ date: d.date, time: t.start_time || t });
-    assert(open.length >= 2, `需要至少兩個空時段來測試，實際 ${open.length} 個`);
-    const send = async (phone, slot) => {
+    // 每次都現查這位心理師還空著的時段：前一輪送出的申請會把時段佔走，
+    // 一次撈完再分配會撞到自己剛剛排的那一筆
+    const nextSlot = async () => {
+      const info = await (await fetch(
+        `${BASE}/api/public/booking-slots?counselor_id=2&plan_id=${plan ? plan.id : ''}&days=40`)).json();
+      for (const d of (info.days || [])) {
+        for (const t of (d.slots || [])) return { date: d.date, time: t.start_time || t };
+      }
+      return null;
+    };
+    const send = async phone => {
+      const slot = await nextSlot();
+      assert(slot, '找不到可預約的空時段，無法測試');
       const r = await fetch(BASE + '/api/public/bookings', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-real-ip': '10.9.9.9' },
         body: JSON.stringify({ name: '派案測試' + phone.slice(-3), phone, consent: true,
           plan_id: plan && plan.id, birth_date: '1990-01-01',
           counselor_id: 2, date: slot.date, start_time: slot.time })
       });
-      return { status: r.status, data: await r.json() };
+      return { status: r.status, data: await r.json(), slot };
     };
 
     // 1) 預設（當下通知）
     await admin.ok('PUT', '/api/line/settings', { line_counselor_booking_notify: '1' });
     const n0 = await staffPush();
-    const a = await send('0911000111', open[0]);
+    const a = await send('0911000111');
     equal(a.status, 200, '申請應送得出去：' + JSON.stringify(a.data));
     assert(await staffPush() > n0, '開啟時，申請當下就該通知被指名的心理師');
 
     // 2) 關掉之後，申請階段不通知
     await admin.ok('PUT', '/api/line/settings', { line_counselor_booking_notify: '0' });
     const n1 = await staffPush();
-    const b = await send('0911000222', open[1]);
+    const b = await send('0911000222');
     equal(b.status, 200, '申請應送得出去：' + JSON.stringify(b.data));
     assert(b.data.ok, '個案端仍要立刻拿到受理回覆，不受這個設定影響');
     equal(await staffPush(), n1, '關掉時，申請階段不應通知心理師');
@@ -3863,8 +3869,27 @@ function startServer() {
     assert(mine, '這筆申請應留在「線上預約申請」等櫃檯處理');
     const made = await admin.ok('POST', `/api/bookings/${mine.id}/create-client`, {});
     await admin.ok('POST', `/api/bookings/${mine.id}/confirm`,
-      { client_id: made.id || made.client_id, counselor_id: 2, date: open[1].date, start_time: open[1].time });
+      { client_id: made.id || made.client_id, counselor_id: 2, date: b.slot.date, start_time: b.slot.time });
     assert(await staffPush() > n1, '櫃檯確認成立後仍要通知心理師');
+
+    // 4) 選「兩種都不送」：申請與成立都不推給心理師
+    await admin.ok('PUT', '/api/line/settings', { line_counselor_booking_notify: 'never' });
+    const n2 = await staffPush();
+    const c = await send('0911000333');
+    equal(c.status, 200, '申請應送得出去：' + JSON.stringify(c.data));
+    equal(await staffPush(), n2, '設成 never 時，申請階段不該推給心理師');
+    const reqs2 = await admin.ok('GET', '/api/bookings?status=new');
+    const mine2 = reqs2.find(x => x.phone === '0911000333');
+    assert(mine2, '申請仍要留在「線上預約申請」等櫃檯處理');
+    const made2 = await admin.ok('POST', `/api/bookings/${mine2.id}/create-client`, {});
+    await admin.ok('POST', `/api/bookings/${mine2.id}/confirm`,
+      { client_id: made2.id || made2.client_id, counselor_id: 2,
+        date: c.slot.date, start_time: c.slot.time });
+    equal(await staffPush(), n2, '設成 never 時，成立時也不該推給心理師');
+    // 但個案端的「預約已成立」照送 —— 這個設定只管心理師那一側
+    const toClient = (await admin.ok('GET', '/api/line/status')).recent
+      .filter(n => n.kind === 'booking_confirm').length;
+    assert(toClient > 0, '個案端的預約成立通知不受影響');
 
     await admin.ok('PUT', '/api/line/settings',
       { line_counselor_booking_notify: '1', line_channel_token: '', line_channel_secret: '' });

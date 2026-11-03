@@ -478,9 +478,12 @@ const LINEPAGE = {
           ${UI.select('line_counselor_daily_enabled', '每日推播心理師隔日行程',
     [['1', '啟用'], ['0', '關閉']], { value: s.line_counselor_daily_enabled })}
           ${UI.input('line_counselor_daily_time', '每日推播時間', { type: 'time', value: s.line_counselor_daily_time })}
-          ${UI.select('line_counselor_booking_notify', '個案指名某位心理師時',
-    [['1', '申請送出當下就通知該心理師'], ['0', '不通知，等櫃檯確認成立後才通知（由櫃檯派案）']],
-    { value: s.line_counselor_booking_notify || '1', full: true })}
+          ${UI.select('line_counselor_booking_notify', '預約要不要推給心理師',
+    [['1', '申請送出當下就通知，成立時再通知一次（預設）'],
+      ['on_confirm', '申請階段不通知，等櫃檯確認成立後才通知（由櫃檯派案）'],
+      ['never', '兩種都不送（心理師自己看系統裡的行程）']],
+    { value: ({ 0: 'on_confirm', 1: '1' })[s.line_counselor_booking_notify]
+      || s.line_counselor_booking_notify || '1', full: true })}
           ${UI.input('line_flex_color', 'Flex 卡片主色', { value: s.line_flex_color })}
           ${UI.select('line_reply_mode', '個案隨手打字時要回什麼',
     [['card', '完整卡片（含開始預約、打電話按鈕）'], ['text', '一行文字加連結'], ['none', '不回覆（圖文選單已有入口）']],
@@ -488,11 +491,13 @@ const LINEPAGE = {
           ${UI.input('booking_public_url', '線上預約表單網址', { value: s.booking_public_url, full: true })}
         </div>
         <div style="font-size:12.5px;color:var(--muted);line-height:1.9;margin-top:8px">
-          <strong>指名預約的通知時機</strong>：線上預約表單、個案專區與 Google 表單都可以指名心理師。
-          選「申請送出當下就通知」時，那位心理師在櫃檯還沒確認之前就會收到卡片；
-          所方若是由櫃檯統一派案，建議選<strong>等櫃檯確認成立後才通知</strong> ——
-          否則個案以為約已經談定、心理師也等於先接了這個案，櫃檯要改派就變成人情問題。
-          兩種設定都不影響個案端：個案一樣會立刻收到「已收到您的預約申請」。
+          <strong>推給心理師的兩封卡片</strong>：個案在線上指名某位心理師時送的
+          「<strong>新的預約申請</strong>」，以及約真的排進去時送的「<strong>新排入的晤談</strong>」。<br>
+          由櫃檯統一派案的所方不要用第一個選項：申請都還沒確認就先通知，個案以為約已經談定、
+          心理師也等於先接了這個案，櫃檯要改派就變成人情問題。
+          心理師若本來就會自己看系統裡的行程，選「兩種都不送」最清靜 ——
+          每日行程推播（上面那一項）是分開的開關，關掉這個不影響它。<br>
+          三個選項都<strong>不影響個案端</strong>：個案一樣立刻收到「已收到您的預約申請」與預約成立通知。
           預約本身何時成立，是由方案的「線上預約需櫃檯確認」決定，與這個設定無關。<br>
           <strong>圖文選單要放的網址</strong>就是上面這個「線上預約表單網址」，
           在 LINE 官方帳號後台的圖文選單，把「我要預約」那一格設成「連結」再貼上即可。<br>

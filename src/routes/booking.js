@@ -649,7 +649,7 @@ router.post('/bookings/:id/confirm', requireStaff('bookings'), async (req, res) 
     to: client.line_user_id || b.line_user_id, flex: line.bookingConfirmedFlex(payload),
     kind: 'booking_confirm', client_id: client.id, appointment_id: info.lastInsertRowid, user: req.user
   });
-  if (counselor && counselor.line_user_id) {
+  if (counselor && counselor.line_user_id && line.counselorBookingNotify('confirm')) {
     await line.pushFlex({
       to: counselor.line_user_id, kind: 'booking_staff',
       flex: line.counselorBookingFlex({

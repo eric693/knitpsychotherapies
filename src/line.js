@@ -13,11 +13,26 @@ const PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 const REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
 
 function lineEnabled() { return !!getSetting('line_channel_token', '').trim(); }
-// 線上預約指名某位心理師時，要不要在「申請送出的當下」就通知他。
-// 由櫃檯統一派案的所方要關掉：預約還沒確認就先通知，個案會以為約已經談定，
-// 心理師也等於先接了案，櫃檯要改派就變成人情問題。關掉後改在櫃檯確認成立時才通知。
-function counselorBookingNotify() {
-  return getSetting('line_counselor_booking_notify', '1') === '1';
+// 預約相關要不要推給心理師，分兩個時間點：
+//   request  個案在線上指名他（申請還沒確認）→「新的預約申請」
+//   confirm  約真的排進去了 → 「新排入的晤談」
+// always     兩個都送（預設，維持舊行為）
+// on_confirm 只在成立時送 —— 由櫃檯統一派案的所方用：申請還沒確認就先通知，
+//            個案會以為約已經談定，心理師也等於先接了案，櫃檯要改派就變成人情問題
+// never      兩個都不送 —— 心理師改由系統內的行程與每日推播掌握自己的班，
+//            不要每成立一筆約就被敲一次
+// 舊值相容：'1' 等同 always，'0' 等同 on_confirm
+function counselorBookingNotifyMode() {
+  const v = String(getSetting('line_counselor_booking_notify', '1'));
+  if (v === 'never') return 'never';
+  if (v === 'on_confirm' || v === '0') return 'on_confirm';
+  return 'always';
+}
+function counselorBookingNotify(stage = 'request') {
+  const mode = counselorBookingNotifyMode();
+  if (mode === 'never') return false;
+  if (mode === 'on_confirm') return stage === 'confirm';
+  return true;
 }
 function brandColor() {
   const c = getSetting('line_flex_color', '#0e7c7b').trim();
@@ -588,7 +603,7 @@ function verifySignature(rawBody, signature) {
 }
 
 module.exports = {
-  lineEnabled, counselorBookingNotify, weekdayOf, centerInfo,
+  lineEnabled, counselorBookingNotify, counselorBookingNotifyMode, weekdayOf, centerInfo,
   card, kv, noteBox, actionButton, textMessage, msgText, TEXT_DEFAULTS,
   bookingReceivedFlex, bookingConfirmedFlex, reminderFlex, groupSessionFlex, rescheduledFlex, portalUrl,
   monthlyLimitHit, clearMonthlyLimit, recheckQuota, fetchQuota,
